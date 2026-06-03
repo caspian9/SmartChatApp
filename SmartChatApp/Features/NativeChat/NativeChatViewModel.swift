@@ -305,9 +305,10 @@ struct NativeChatViewModel {
                 }
 
             case .loadedCachedHistory(let messages):
+                let isRestoring = state.isRestoringFromCache
+                logger.log("SMAlog: loadedCachedHistory - \(messages.count) messages, isRestoringFromCache: \(isRestoring)")
                 state.messages = messages
                 // Scroll to bottom after cached messages are loaded (for session switch)
-                let isRestoring = state.isRestoringFromCache
                 if isRestoring {
                     state.isRestoringFromCache = false
                     state.needsScrollToBottom = true
@@ -315,7 +316,9 @@ struct NativeChatViewModel {
                 return .none
 
             case .loadedHistory(let messages):
-                if state.needsScrollToBottom {
+                let needsScroll = state.needsScrollToBottom
+                logger.log("SMAlog: loadedHistory - \(messages.count) messages, needsScrollToBottom: \(needsScroll)")
+                if needsScroll {
                     state.needsScrollToBottom = false
                 }
                 state.messages = messages
