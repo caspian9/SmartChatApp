@@ -107,3 +107,6 @@ build/
 Build/
 build/
 Build/
+
+# Claude Code
+.claude/

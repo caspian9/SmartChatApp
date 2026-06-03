@@ -4,7 +4,7 @@ final class WebSocketManager: @unchecked Sendable {
     private var webSocketTask: URLSessionWebSocketTask?
     private let url: URL
     private var _isConnected = false
-    private let lock = NSLock()
+    private let lock = NSRecursiveLock()
 
     var isConnected: Bool {
         lock.lock()
