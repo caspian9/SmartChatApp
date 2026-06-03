@@ -271,6 +271,7 @@ struct NativeChatViewModel {
             let startedAtMs = extractDouble(from: data, key: "startedAt")
             let endedAtMs = extractDouble(from: data, key: "endedAt")
             let livenessState = extractString(from: data, key: "livenessState")
+            let seq = extractInt(from: data, key: "seq")
 
             if phase == "start" {
                 // Start of a new run
@@ -281,7 +282,7 @@ struct NativeChatViewModel {
                     role: "assistant",
                     state: "streaming",
                     runId: runId,
-                    seq: nil,
+                    seq: seq,
                     startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : timestamp,
                     endedAt: nil,
                     livenessState: livenessState,
@@ -290,9 +291,9 @@ struct NativeChatViewModel {
                     stopReason: nil
                 )
                 await send(.receiveMessage(message))
-                logger.log("SMAlog: agent start - runId: \(runId), startedAt: \(startedAtMs)")
+                logger.log("SMAlog: agent start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)")
             } else if phase == "end" {
-                // End of run - update existing message or create final message
+                // End of run
                 let message = ChatMessage(
                     id: runId,
                     text: "",
@@ -300,7 +301,7 @@ struct NativeChatViewModel {
                     role: "assistant",
                     state: "final",
                     runId: runId,
-                    seq: nil,
+                    seq: seq,
                     startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : nil,
                     endedAt: endedAtMs > 0 ? Date(timeIntervalSince1970: endedAtMs / 1000) : timestamp,
                     livenessState: livenessState,
@@ -309,13 +310,12 @@ struct NativeChatViewModel {
                     stopReason: nil
                 )
                 await send(.receiveMessage(message))
-                logger.log("SMAlog: agent end - runId: \(runId), endedAt: \(endedAtMs)")
+                logger.log("SMAlog: agent end - runId: \(runId), seq: \(seq ?? -1), endedAt: \(endedAtMs)")
                 // Reset sending state when run ends
                 await send(.setSending(false))
             } else {
                 // Assistant stream - update text with delta
                 let text = extractString(from: data, key: "text") ?? ""
-                let _ = extractString(from: data, key: "delta")
 
                 if !text.isEmpty {
                     let message = ChatMessage(
@@ -325,7 +325,7 @@ struct NativeChatViewModel {
                         role: "assistant",
                         state: "streaming",
                         runId: runId,
-                        seq: nil,
+                        seq: seq,
                         startedAt: nil,
                         endedAt: nil,
                         livenessState: livenessState,
@@ -334,49 +334,13 @@ struct NativeChatViewModel {
                         stopReason: nil
                     )
                     await send(.receiveMessage(message))
-                    logger.log("SMAlog: agent text - runId: \(runId), text length: \(text.count)")
+                    logger.log("SMAlog: agent text - runId: \(runId), seq: \(seq ?? -1), text length: \(text.count)")
                 }
             }
 
-        case .chat(let payload):
-            logger.log("SMAlog: chat event - state: \(payload.state ?? "nil")")
-            if let msgAny = payload.message {
-                guard let data = try? JSONEncoder().encode(msgAny),
-                      let chatMsg = try? JSONDecoder().decode(OpenClawChatMessage.self, from: data) else {
-                    logger.log("SMAlog: failed to decode chat message")
-                    return
-                }
-                var text = ""
-                for contentItem in chatMsg.content {
-                    if let t = contentItem.text, !t.isEmpty {
-                        text = t
-                        break
-                    }
-                }
-                let message = ChatMessage(
-                    id: chatMsg.id.uuidString,
-                    text: text,
-                    timestamp: Date(timeIntervalSince1970: (chatMsg.timestamp ?? 0) / 1000),
-                    role: chatMsg.role,
-                    state: payload.state ?? "final",
-                    runId: payload.runId,
-                    seq: nil,
-                    startedAt: nil,
-                    endedAt: nil,
-                    livenessState: nil,
-                    toolCallId: chatMsg.toolCallId,
-                    toolName: chatMsg.toolName,
-                    stopReason: chatMsg.stopReason
-                )
-                await send(.receiveMessage(message))
-            }
-
-        case .sessionMessage, .tick, .seqGap:
-            // Ignored
+        case .chat, .sessionMessage, .tick, .seqGap, .health:
+            // Ignored - only agent events are used for messages
             break
-
-        case .health(let ok):
-            logger.log("SMAlog: health check: \(ok)")
         }
     }
 
@@ -399,5 +363,14 @@ struct NativeChatViewModel {
             }
         }
         return 0
+    }
+
+    private func extractInt(from data: [String: AnyCodable], key: String) -> Int? {
+        if let value = data[key] {
+            if let i = value.value as? Int {
+                return i
+            }
+        }
+        return nil
     }
 }
