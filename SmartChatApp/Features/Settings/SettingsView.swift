@@ -2,19 +2,21 @@ import SwiftUI
 import ComposableArchitecture
 
 struct SettingsView: View {
-    let store: StoreOf<SettingsFeature>
+    @State private var serverURL: String = ""
+    @State private var authToken: String = ""
+    @State private var isDarkMode: Bool = true
 
     var body: some View {
         Form {
             Section("Server") {
-                TextField("Gateway URL", text: binding(for: \.serverURL))
+                TextField("Gateway URL", text: $serverURL)
                     .textContentType(.URL)
 
-                SecureField("Auth Token", text: binding(for: \.authToken))
+                SecureField("Auth Token", text: $authToken)
             }
 
             Section("Appearance") {
-                Toggle("Dark Mode", isOn: binding(for: \.isDarkMode))
+                Toggle("Dark Mode", isOn: $isDarkMode)
             }
 
             Section("About") {
@@ -27,20 +29,5 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
-    }
-
-    private func binding<T>(for keyPath: WritableKeyPath<SettingsFeature.State, T>) -> Binding<T> {
-        Binding(
-            get: { store[keyPath: keyPath] },
-            set: { newValue in
-                if keyPath == \.serverURL {
-                    store.send(.serverURLChanged(newValue as! String))
-                } else if keyPath == \.authToken {
-                    store.send(.authTokenChanged(newValue as! String))
-                } else if keyPath == \.isDarkMode {
-                    store.send(.darkModeToggled(newValue as! Bool))
-                }
-            }
-        )
     }
 }
