@@ -5,7 +5,7 @@ struct SmartChatAppApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationStack {
-                ChatListView()
+                HomeView()
             }
             .preferredColorScheme(.dark)
         }
