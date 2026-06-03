@@ -24,16 +24,17 @@ struct MessageBubbleView: View {
                             .padding(.vertical, 8)
                     }
                 } else {
-                    Text(message.text)
-                        .font(.body)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
-                        .cornerRadius(12)
-                        .onLongPressGesture {
-                            UIPasteboard.general.string = message.text
-                        }
+                    ZStack {
+                        Text(message.text)
+                            .font(.body)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
+                            .cornerRadius(12)
+
+                        CopyButton(text: message.text)
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -71,6 +72,28 @@ struct MessageBubbleView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: timestamp)
+    }
+}
+
+struct CopyButton: View {
+    let text: String
+    @State private var isCopied = false
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = text
+            isCopied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                isCopied = false
+            }
+        } label: {
+            Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
+                .padding(8)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(8)
+        }
     }
 }
 
