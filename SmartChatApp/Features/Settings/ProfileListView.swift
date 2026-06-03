@@ -93,6 +93,7 @@ struct ProfileListView: View {
                                     isConnected = await SessionManager.shared.connectionStatus
                                 } catch {
                                     failedProfileId = profile.id
+                                    isConnected = false
                                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                                     failedProfileId = nil
                                 }
@@ -106,6 +107,7 @@ struct ProfileListView: View {
                                 isConnected = await SessionManager.shared.connectionStatus
                             } catch {
                                 failedProfileId = profile.id
+                                isConnected = false
                                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                                 failedProfileId = nil
                             }
