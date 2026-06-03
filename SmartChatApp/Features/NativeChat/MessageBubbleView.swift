@@ -18,9 +18,59 @@ struct MessageBubbleView: View {
     @State private var isExpanded: Bool = false
     @State private var measuredHeight: CGFloat = 0
     @State private var isMarkdownCollapsed: Bool = false
+    @State private var cachedShouldCollapse: Bool = false
+    @State private var cachedLineCount: Int = 0
+    @State private var lastTextForCollapse: String = ""
+    @State private var cachedShouldRenderMarkdown: Bool = false
+    @State private var lastTextForMarkdown: String = ""
 
     private let maxCollapsedLines: Int = 8
     private let maxCollapsedHeight: CGFloat = 150
+
+    private func updateCollapseCache() {
+        if lastTextForCollapse != message.text {
+            lastTextForCollapse = message.text
+            cachedLineCount = computeLineCount()
+            cachedShouldCollapse = computeShouldCollapse()
+        }
+        if lastTextForMarkdown != message.text {
+            lastTextForMarkdown = message.text
+            cachedShouldRenderMarkdown = computeShouldRenderMarkdown()
+        }
+    }
+
+    private func computeShouldRenderMarkdown() -> Bool {
+        guard !message.isOutgoing && !message.text.isEmpty else { return false }
+        return CardRegistry.containsMarkdown(content: message.text)
+    }
+
+    private func computeLineCount() -> Int {
+        let textHeight = message.text.boundingRect(
+            with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        ).height
+        let lineHeight: CGFloat = 20
+        return Int(ceil(textHeight / lineHeight))
+    }
+
+    private func computeShouldCollapse() -> Bool {
+        if message.seq != nil {
+            return false
+        }
+        let textHeight = message.text.boundingRect(
+            with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        ).height
+        if cachedLineCount < 4 {
+            return false
+        }
+        if textHeight <= maxCollapsedHeight + 20 && cachedLineCount <= 8 {
+            return false
+        }
+        return textHeight > maxCollapsedHeight
+    }
 
     var body: some View {
         HStack {
@@ -220,43 +270,24 @@ struct MessageBubbleView: View {
     }
 
     private var shouldRenderMarkdown: Bool {
-        guard !message.isOutgoing && !message.text.isEmpty else { return false }
-        return CardRegistry.containsMarkdown(content: message.text)
+        updateCollapseCache()
+        return cachedShouldRenderMarkdown
     }
 
     private var shouldShowExpandButton: Bool {
+        updateCollapseCache()
         guard message.isOutgoing == false && !message.text.isEmpty else { return false }
-        return shouldCollapse && !isExpanded
+        return cachedShouldCollapse && !isExpanded
     }
 
     private var shouldCollapse: Bool {
-        if message.seq != nil {
-            return false
-        }
-        let textHeight = message.text.boundingRect(
-            with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            context: nil
-        ).height
-        // If less than 4 lines, never collapse - it's just normal wrapping
-        if lineCount < 4 {
-            return false
-        }
-        // If only slightly over threshold (within 20pt), don't collapse to avoid measurement variance
-        if textHeight <= maxCollapsedHeight + 20 && lineCount <= 8 {
-            return false
-        }
-        return textHeight > maxCollapsedHeight
+        updateCollapseCache()
+        return cachedShouldCollapse
     }
 
     private var lineCount: Int {
-        let textHeight = message.text.boundingRect(
-            with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            context: nil
-        ).height
-        let lineHeight: CGFloat = 20
-        return Int(ceil(textHeight / lineHeight))
+        updateCollapseCache()
+        return cachedLineCount
     }
 
     private func formatTime(_ timestamp: Date) -> String {
