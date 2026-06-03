@@ -61,14 +61,27 @@ struct NativeChatViewModel {
                 return .run { send in
                     Task {
                         do {
+                            // Ensure connected first, with retry
                             try await SessionManager.shared.ensureConnected()
+                            // Small delay to ensure connection is stable
+                            try await Task.sleep(for: .milliseconds(100))
                             let transport = await SessionManager.shared.makeTransport(sessionKey: "")
                             let response = try await transport.listSessions(limit: 50)
                             logger.log("SMAlog: Loaded \(response.sessions.count) sessions")
                             await send(.loadedSessions(response.sessions))
                         } catch {
                             logger.log("SMAlog: Load sessions error: \(error.localizedDescription)")
-                            await send(.loadedSessions([]))
+                            // Retry once after a short delay
+                            try? await Task.sleep(for: .milliseconds(500))
+                            do {
+                                try await SessionManager.shared.ensureConnected()
+                                let transport = await SessionManager.shared.makeTransport(sessionKey: "")
+                                let response = try await transport.listSessions(limit: 50)
+                                await send(.loadedSessions(response.sessions))
+                            } catch {
+                                logger.log("SMAlog: Load sessions retry failed: \(error.localizedDescription)")
+                                await send(.loadedSessions([]))
+                            }
                         }
                     }
                 }
