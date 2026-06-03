@@ -17,7 +17,7 @@ actor GatewayClient {
 
         let connectOptions = GatewayConnectOptions(
             role: "node",
-            scopes: ["chat"],
+            scopes: [],
             caps: ["sessions", "chat"],
             commands: [],
             permissions: [:],
