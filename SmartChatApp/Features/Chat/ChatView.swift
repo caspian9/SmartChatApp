@@ -5,7 +5,7 @@ import OpenClawKit
 struct ChatView: View {
     let sessionKey: String
     let sessionEntry: OpenClawChatSessionEntry?
-    @State private var viewModel: ChatViewModel
+    @State private var viewModel: OpenClawChatViewModel
     private let transport: any OpenClawChatTransport
     private let onAppear: () -> Void
 
@@ -14,7 +14,7 @@ struct ChatView: View {
         self.sessionEntry = sessionEntry
         self.transport = transport
         self.onAppear = onAppear
-        _viewModel = State(initialValue: ChatViewModel(
+        _viewModel = State(initialValue: OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
             onThinkingLevelChanged: nil
