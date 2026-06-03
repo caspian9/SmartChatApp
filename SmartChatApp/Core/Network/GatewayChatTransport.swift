@@ -68,4 +68,8 @@ public actor GatewayChatTransport: OpenClawChatTransport {
             }
         }
     }
+
+    public func disconnect() async {
+        await nodeSession.disconnect()
+    }
 }
