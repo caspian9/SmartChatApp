@@ -42,7 +42,7 @@ struct NativeChatView: View {
                 }
                 .onChange(of: isInputFocused) { focused in
                     // Delay scroll to ensure keyboard animation completes
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         scrollToBottom(proxy: proxy)
                     }
                 }
