@@ -1,4 +1,7 @@
 import SwiftUI
+import OSLog
+
+private let bubbleLog = OSLog(subsystem: "SmartChatApp.MessageBubble", category: "debug")
 
 struct ViewHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -29,14 +32,12 @@ struct MessageBubbleView: View {
                 bubbleContent
 
                 HStack(spacing: 8) {
-                    // Seq badge for AI messages
                     if !message.isOutgoing, let seq = message.seq {
                         Text("#\(seq)")
                             .font(.caption2)
                             .foregroundColor(theme.textSecondary)
                     }
 
-                    // ToolResult badge
                     if message.role == "toolResult" {
                         Text("ToolResult")
                             .font(.caption2)
@@ -47,7 +48,6 @@ struct MessageBubbleView: View {
                             .cornerRadius(4)
                     }
 
-                    // Thinking badge
                     if message.role == "thinking" {
                         Text("Thinking")
                             .font(.caption2)
@@ -58,7 +58,6 @@ struct MessageBubbleView: View {
                             .cornerRadius(4)
                     }
 
-                    // ToolCall badge
                     if message.role == "toolCall" {
                         Text("ToolCall")
                             .font(.caption2)
@@ -79,7 +78,6 @@ struct MessageBubbleView: View {
                             .font(.caption2)
                             .foregroundColor(theme.textSecondary)
                     }
-                    // Token usage display
                     if let input = message.inputTokens, let output = message.outputTokens {
                         Text("↑\(input) ↓\(output)")
                             .font(.caption2)
@@ -102,7 +100,6 @@ struct MessageBubbleView: View {
                     }
                 }
 
-                // Action bar
                 HStack(spacing: 16) {
                     Button {
                         UIPasteboard.general.string = message.text
@@ -113,7 +110,6 @@ struct MessageBubbleView: View {
                     }
 
                     Button {
-                        // Forward action - TODO
                     } label: {
                         Image(systemName: "arrowshape.turn.up.right")
                             .font(.caption)
@@ -121,7 +117,6 @@ struct MessageBubbleView: View {
                     }
 
                     Button {
-                        // Favorite action - TODO
                     } label: {
                         Image(systemName: "star")
                             .font(.caption)
@@ -157,7 +152,6 @@ struct MessageBubbleView: View {
             VStack(alignment: .leading, spacing: 6) {
                 messageText
 
-                // Streaming indicator inside bubble
                 if message.state == "streaming" && !message.isOutgoing {
                     TypingIndicatorView()
                         .padding(.top, 4)
@@ -188,6 +182,8 @@ struct MessageBubbleView: View {
                     .clipped()
             } else if message.role == "thinking" {
                 ThinkingCardView(content: message.text)
+                    .frame(maxWidth: .infinity, maxHeight: isExpanded ? nil : maxCollapsedHeight, alignment: .topLeading)
+                    .clipped()
             } else if message.role == "toolResult" {
                 Text(formatJsonText(message.text))
                     .font(.system(.caption, design: .monospaced))
@@ -230,21 +226,37 @@ struct MessageBubbleView: View {
 
     private var shouldShowExpandButton: Bool {
         guard message.isOutgoing == false && !message.text.isEmpty else { return false }
-        return (shouldCollapse || isMarkdownCollapsed) && !isExpanded
+        return shouldCollapse && !isExpanded
     }
 
     private var shouldCollapse: Bool {
-        // If message has seq, it's from streaming - never collapse
         if message.seq != nil {
             return false
         }
-        // Check if text exceeds roughly the line limit
         let textHeight = message.text.boundingRect(
             with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             context: nil
         ).height
+        // If less than 4 lines, never collapse - it's just normal wrapping
+        if lineCount < 4 {
+            return false
+        }
+        // If only slightly over threshold (within 20pt), don't collapse to avoid measurement variance
+        if textHeight <= maxCollapsedHeight + 20 && lineCount <= 8 {
+            return false
+        }
         return textHeight > maxCollapsedHeight
+    }
+
+    private var lineCount: Int {
+        let textHeight = message.text.boundingRect(
+            with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        ).height
+        let lineHeight: CGFloat = 20
+        return Int(ceil(textHeight / lineHeight))
     }
 
     private func formatTime(_ timestamp: Date) -> String {
@@ -296,7 +308,7 @@ struct ChatMessage: Identifiable, Equatable {
     var text: String
     let timestamp: Date
     let role: String
-    var state: String  // "streaming", "final"
+    var state: String
     let runId: String?
     var seq: Int?
     var startedAt: Date?
@@ -315,7 +327,6 @@ struct ChatMessage: Identifiable, Equatable {
     }
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
-        // Compare all fields to ensure proper view updates
         lhs.id == rhs.id &&
         lhs.text == rhs.text &&
         lhs.timestamp == rhs.timestamp &&
