@@ -22,6 +22,7 @@ struct MessageBubbleView: View {
     @State private var cachedLineCount: Int = 0
     @State private var lastTextForCollapse: String = ""
     @State private var lastTextForMarkdown: String = ""
+    @State private var lastMarkdownState: Bool = false
 
     private let maxCollapsedLines: Int = 8
     private let maxCollapsedHeight: CGFloat = 150
@@ -31,18 +32,14 @@ struct MessageBubbleView: View {
             lastTextForCollapse = message.text
             cachedLineCount = computeLineCount()
             cachedShouldCollapse = computeShouldCollapse()
-        }
-        if lastTextForMarkdown != message.text {
-            lastTextForMarkdown = message.text
+            os_log("SMAlog: [collapse] id=%{public}s text_len=%{public}d lines=%{public}d height=%{public}.1f collapse=%{public}03d", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.text.count, cachedLineCount, message.text.boundingRect(with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height, cachedShouldCollapse ? 1 : 0)
         }
     }
 
     private var shouldRenderMarkdown: Bool {
         guard !message.isOutgoing && !message.text.isEmpty else { return false }
         guard message.role != "toolResult" && message.role != "thinking" else { return false }
-        return MainActor.assumeIsolated {
-            MarkdownCache.shared.needsMarkdown(for: message.id)
-        }
+        return MarkdownCache.shared.needsMarkdown(for: message.id)
     }
 
     private func computeLineCount() -> Int {
@@ -52,11 +49,14 @@ struct MessageBubbleView: View {
             context: nil
         ).height
         let lineHeight: CGFloat = 20
-        return Int(ceil(textHeight / lineHeight))
+        let count = Int(ceil(textHeight / lineHeight))
+        os_log("SMAlog: [computeLineCount] id=%{public}s text_len=%{public}d height=%{public}.1f count=%{public}d", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.text.count, textHeight, count)
+        return count
     }
 
     private func computeShouldCollapse() -> Bool {
         if message.seq != nil {
+            os_log("SMAlog: [computeShouldCollapse] id=%{public}s result=000 reason=seq", log: bubbleLog, type: .debug, String(message.id.prefix(8)))
             return false
         }
         let textHeight = message.text.boundingRect(
@@ -64,13 +64,18 @@ struct MessageBubbleView: View {
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             context: nil
         ).height
+        os_log("SMAlog: [computeShouldCollapse] id=%{public}s seq=nil lines=%{public}d height=%{public}.1f threshold=%{public}.1f", log: bubbleLog, type: .debug, String(message.id.prefix(8)), cachedLineCount, textHeight, maxCollapsedHeight + 10)
         if cachedLineCount < 4 {
+            os_log("SMAlog: [computeShouldCollapse] id=%{public}s result=000 reason=lines<4 (count=%{public}d)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), cachedLineCount)
             return false
         }
         if textHeight <= maxCollapsedHeight + 20 && cachedLineCount <= 8 {
+            os_log("SMAlog: [computeShouldCollapse] id=%{public}s result=000 reason=within_tolerance", log: bubbleLog, type: .debug, String(message.id.prefix(8)))
             return false
         }
-        return textHeight >= maxCollapsedHeight + 10
+        let result = textHeight >= maxCollapsedHeight + 10
+        os_log("SMAlog: [computeShouldCollapse] id=%{public}s result=%{public}03d", log: bubbleLog, type: .debug, String(message.id.prefix(8)), result ? 1 : 0)
+        return result
     }
 
     var body: some View {
@@ -256,7 +261,7 @@ struct MessageBubbleView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if shouldShowExpandButton {
+            if shouldCollapse && !isExpanded {
                 Button {
                     withAnimation {
                         isExpanded = true
@@ -264,7 +269,7 @@ struct MessageBubbleView: View {
                 } label: {
                     Text("Show more...")
                         .font(.caption)
-                        .foregroundColor(message.isOutgoing ? .white.opacity(0.8) : theme.primary)
+                        .foregroundColor(message.isOutgoing ? .white : theme.primary)
                 }
                 .padding(.top, 4)
             }
@@ -272,19 +277,17 @@ struct MessageBubbleView: View {
     }
 
     private var shouldShowExpandButton: Bool {
-        updateCollapseCache()
-        guard message.isOutgoing == false && !message.text.isEmpty else { return false }
-        return cachedShouldCollapse && !isExpanded
+        let should = message.isOutgoing == false && !message.text.isEmpty && shouldCollapse && !isExpanded
+        os_log("SMAlog: [shouldShowExpandButton] id=%{public}s should=%{public}03d", log: bubbleLog, type: .debug, String(message.id.prefix(8)), should ? 1 : 0)
+        return should
     }
 
     private var shouldCollapse: Bool {
-        updateCollapseCache()
-        return cachedShouldCollapse
+        CollapseStateCache.shared.shouldCollapse(for: message)
     }
 
     private var lineCount: Int {
-        updateCollapseCache()
-        return cachedLineCount
+        cachedLineCount
     }
 
     private func formatTime(_ timestamp: Date) -> String {
