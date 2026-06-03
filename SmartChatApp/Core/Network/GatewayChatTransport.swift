@@ -184,25 +184,28 @@ public actor GatewayChatTransport: OpenClawChatTransport {
             return .tick
         case "seqGap":
             return .seqGap
-        case "chat.event":
-            if let payload = frame.payload,
-               let data = try? JSONEncoder().encode(payload),
-               let payloadObj = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: data) {
-                return .chat(payloadObj)
+        case "chat", "chat.event":
+            if let payload = frame.payload {
+                let decoded = try? GatewayPayloadDecoding.decode(payload, as: OpenClawChatEventPayload.self)
+                if let payloadObj = decoded {
+                    return .chat(payloadObj)
+                }
             }
             return nil
         case "chat.sessionMessage":
-            if let payload = frame.payload,
-               let data = try? JSONEncoder().encode(payload),
-               let payloadObj = try? JSONDecoder().decode(OpenClawSessionMessageEventPayload.self, from: data) {
-                return .sessionMessage(payloadObj)
+            if let payload = frame.payload {
+                let decoded = try? GatewayPayloadDecoding.decode(payload, as: OpenClawSessionMessageEventPayload.self)
+                if let payloadObj = decoded {
+                    return .sessionMessage(payloadObj)
+                }
             }
             return nil
         default:
-            if let payload = frame.payload,
-               let data = try? JSONEncoder().encode(payload),
-               let payloadObj = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: data) {
-                return .agent(payloadObj)
+            if let payload = frame.payload {
+                let decoded = try? GatewayPayloadDecoding.decode(payload, as: OpenClawAgentEventPayload.self)
+                if let payloadObj = decoded {
+                    return .agent(payloadObj)
+                }
             }
             return nil
         }
