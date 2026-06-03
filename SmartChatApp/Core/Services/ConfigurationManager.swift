@@ -1,9 +1,9 @@
 import Foundation
 
 enum AppearanceTheme: String, CaseIterable {
-    case system = "跟随系统"
-    case light = "浅色"
-    case dark = "深色"
+    case system = "System"
+    case light = "Light"
+    case dark = "Dark"
 }
 
 final class ConfigurationManager: ObservableObject {
