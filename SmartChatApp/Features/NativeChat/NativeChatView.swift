@@ -31,18 +31,6 @@ struct NativeChatView: View {
                                     isInputFocused = false
                                 }
                         }
-                        // Show streaming message
-                        if !store.streamingText.isEmpty {
-                            MessageBubbleView(
-                                message: ChatMessage(
-                                    id: "streaming",
-                                    text: store.streamingText,
-                                    isOutgoing: false,
-                                    timestamp: Date()
-                                )
-                            )
-                            .id("streaming")
-                        }
                     }
                     .padding(.vertical, 8)
                     .onChange(of: store.messages.count) { _ in
@@ -50,11 +38,6 @@ struct NativeChatView: View {
                             withAnimation {
                                 proxy.scrollTo(lastMessage.id, anchor: .bottom)
                             }
-                        }
-                    }
-                    .onChange(of: store.streamingText) { _ in
-                        withAnimation {
-                            proxy.scrollTo("streaming", anchor: .bottom)
                         }
                     }
                 }

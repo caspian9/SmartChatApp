@@ -37,6 +37,7 @@ struct NativeChatViewModel {
         case updateStreamingText(String)
         case clearStreamingText
         case setStreamingMessageId(String?)
+        case startStreamingMessage(id: String, text: String)
     }
 
     @Dependency(\.continuousClock) var clock
@@ -115,6 +116,8 @@ struct NativeChatViewModel {
                     return .none
                 }
                 state.isSending = true
+                state.streamingMessageId = nil
+                state.streamingText = ""
                 let text = state.inputText
                 let sessionKey = session.key
                 let messageId = UUID().uuidString
@@ -126,10 +129,8 @@ struct NativeChatViewModel {
                 )
                 state.messages.append(message)
                 state.inputText = ""
-                state.streamingMessageId = nil
-                state.streamingText = ""
                 // Start listening for events before sending
-                return .run { send in
+                return .run { [self] send in
                     Task {
                         do {
                             try await SessionManager.shared.ensureConnected()
@@ -219,6 +220,11 @@ struct NativeChatViewModel {
                 if !state.messages.contains(where: { $0.id == message.id }) {
                     state.messages.append(message)
                 }
+                // If this message completes a streaming message, clear streaming state
+                if state.streamingMessageId == message.id {
+                    state.streamingMessageId = nil
+                    state.streamingText = ""
+                }
                 return .none
 
             case .setError(let error):
@@ -232,8 +238,30 @@ struct NativeChatViewModel {
                 return .none
 
             case .updateStreamingText(let text):
+                // If we have a streaming message ID, update it; otherwise create one
+                if let streamingId = state.streamingMessageId {
+                    // Update existing streaming message
+                    if let index = state.messages.firstIndex(where: { $0.id == streamingId }) {
+                        state.messages[index] = ChatMessage(
+                            id: streamingId,
+                            text: text,
+                            isOutgoing: false,
+                            timestamp: state.messages[index].timestamp
+                        )
+                    }
+                } else {
+                    // Create new streaming message
+                    let streamingId = UUID().uuidString
+                    let message = ChatMessage(
+                        id: streamingId,
+                        text: text,
+                        isOutgoing: false,
+                        timestamp: Date()
+                    )
+                    state.messages.append(message)
+                    state.streamingMessageId = streamingId
+                }
                 state.streamingText = text
-                // When we get streaming text, update the last assistant message or create one
                 return .none
 
             case .clearStreamingText:
@@ -242,6 +270,18 @@ struct NativeChatViewModel {
 
             case .setStreamingMessageId(let id):
                 state.streamingMessageId = id
+                return .none
+
+            case .startStreamingMessage(let id, let text):
+                state.streamingMessageId = id
+                state.streamingText = text
+                let message = ChatMessage(
+                    id: id,
+                    text: text,
+                    isOutgoing: false,
+                    timestamp: Date()
+                )
+                state.messages.append(message)
                 return .none
             }
         }
@@ -298,8 +338,9 @@ struct NativeChatViewModel {
             }
         case .agent(let payload):
             logger.log("SMAlog: agent event - stream: \(payload.stream)")
-            // Handle streaming text from agent events - append to streamingText
+            // Handle streaming text from agent events - send to reducer
             if payload.stream == "assistant", let text = payload.data["text"]?.value as? String {
+                // Forward streaming text to reducer - reducer manages streaming state
                 await send(.updateStreamingText(text))
             }
         case .tick:
