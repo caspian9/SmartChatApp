@@ -763,13 +763,16 @@ struct NativeChatViewModel {
                 }
                 // When state is final, message reception is complete - reset sending state
                 if message.state == "final" {
-                    // Cache the final message
-                    if let sessionKey = state.selectedSession?.key,
-                       let openClawMsg = createOpenClawChatMessage(from: message) {
-                        Task {
-                            await MessageCache.shared.appendMessages([openClawMsg], for: sessionKey)
-                        }
-                    }
+                    // Intentionally do NOT write the streaming copy to the
+                    // cache here. The agent-end event payload does not carry
+                    // usage tokens, so the streaming copy's dedup key
+                    // (`role|text|bucket|usage`) differs from the network's
+                    // server-stored message (which has the full usage).
+                    // Writing the streaming copy would cause both versions
+                    // to land in the cache — and on re-entry, both would
+                    // display, with the streaming copy missing the 4 token
+                    // values. loadHistory's network fetch is the
+                    // authoritative cache writer and runs on every entry.
                     return .send(.setSending(false))
                 }
                 return .none
