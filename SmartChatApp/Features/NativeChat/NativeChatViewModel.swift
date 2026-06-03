@@ -44,6 +44,14 @@ struct NativeChatViewModel {
         case sendMessage
         case loadHistory
         case loadedCachedHistory([ChatMessage], isRestoring: Bool)
+        /// Network-fetched history with the session key it was fetched for.
+        /// The reducer verifies `state.selectedSession?.key` still matches
+        /// before applying — this replaces the previous
+        /// `SessionManager.getCurrentSessionKey()` guard, which was racy
+        /// because `makeTransport("")` from `loadSessions` overwrites that
+        /// field on a sibling task and caused cache-cleared re-entries to
+        /// silently drop the history result.
+        case loadedNetworkHistory(sessionKey: String, messages: [ChatMessage])
         case receiveMessage(ChatMessage)
         case setError(String?)
         case setSending(Bool)
@@ -453,12 +461,17 @@ struct NativeChatViewModel {
                             let transport = await SessionManager.shared.makeTransport(sessionKey: cachedSessionKey)
                             let history = try await transport.requestHistory(sessionKey: cachedSessionKey)
 
-                            // Check if this is still the current session before updating UI
-                            guard let currentSession = await SessionManager.shared.getCurrentSessionKey(),
-                                  currentSession == cachedSessionKey else {
-                                logger.log("SMAlog: Session changed, discarding history for: \(cachedSessionKeyPreview)")
-                                return
-                            }
+                            // Staleness check moved to the reducer: this run
+                            // dispatches `.loadedNetworkHistory` carrying the
+                            // session key, and the reducer verifies
+                            // `state.selectedSession?.key` still matches
+                            // before applying. The old check used
+                            // `SessionManager.getCurrentSessionKey()`, which
+                            // is overwritten by `loadSessions`'s concurrent
+                            // `makeTransport("")` and caused the history to
+                            // be silently dropped when the message cache was
+                            // empty (so this is the only path that can
+                            // repopulate the UI).
 
                             let messageCount = history.messages?.count ?? 0
                             logger.log("SMAlog: Loaded \(messageCount) history messages for session: \(cachedSessionKeyPreview)")
@@ -609,13 +622,16 @@ struct NativeChatViewModel {
                             logger.log("SMAlog: [\(taskIdStr)] finalCachedMessages from cache: \(finalChatMessages.count)")
 
                             // Only update UI if we didn't already show cache, or if there are new messages
-                            // This prevents flickering when cache and network return the same data
+                            // This prevents flickering when cache and network return the same data.
+                            // The reducer-side check in `loadedNetworkHistory` handles the
+                            // "user switched sessions" case so we don't need a
+                            // `getCurrentSessionKey()` guard here.
                             if cachedMessages.isEmpty {
                                 // No cache was shown, this is first data load
-                                await send(.loadedCachedHistory(finalChatMessages, isRestoring: false))
+                                await send(.loadedNetworkHistory(sessionKey: cachedSessionKey, messages: finalChatMessages))
                             } else if finalChatMessages.count > cachedMessages.count {
                                 // New messages were added
-                                await send(.loadedCachedHistory(finalChatMessages, isRestoring: false))
+                                await send(.loadedNetworkHistory(sessionKey: cachedSessionKey, messages: finalChatMessages))
                             } else {
                                 logger.log("SMAlog: [\(taskIdStr)] Network returned same messages as cache, skipping UI update")
                             }
@@ -638,6 +654,34 @@ struct NativeChatViewModel {
                             CollapseStateCache.shared.precompute(for: messages)
                         }
                         // Force view refresh after cache is populated
+                        await send(.incrementCacheCounter)
+                    }
+                }
+
+            case .loadedNetworkHistory(let sessionKey, let messages):
+                // Drop the result if the user has switched to a different
+                // session since this fetch started. Comparing against
+                // `state.selectedSession?.key` (the only source of truth
+                // for what the user is looking at) avoids the race the
+                // old `SessionManager.getCurrentSessionKey()` guard had
+                // with the concurrent `makeTransport("")` from
+                // `loadSessions`.
+                let currentKey = state.selectedSession?.key
+                if currentKey != sessionKey {
+                    let currentKeyLog = currentKey ?? "nil"
+                    logger.log("SMAlog: loadedNetworkHistory dropped: session \(String(sessionKey.prefix(8))) is no longer selected (current: \(String(currentKeyLog.prefix(8))))")
+                    return .none
+                }
+                logger.log("SMAlog: loadedNetworkHistory applying \(messages.count) messages for session: \(String(sessionKey.prefix(8)))")
+                state.messages = messages
+                state.scrollTrigger += 1
+                state.cacheLoadCounter += 1
+                return .run { [messages] send in
+                    Task {
+                        await MainActor.run {
+                            MarkdownCache.shared.precomputeForMessages(messages)
+                            CollapseStateCache.shared.precompute(for: messages)
+                        }
                         await send(.incrementCacheCounter)
                     }
                 }
