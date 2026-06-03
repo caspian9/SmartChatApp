@@ -34,15 +34,17 @@ struct NativeChatView: View {
                     }
                     .padding(.vertical, 8)
                     .onChange(of: store.messages.count) { _ in
-                        if let lastMessage = store.messages.last {
-                            withAnimation {
-                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                            }
-                        }
+                        scrollToBottom(proxy: proxy)
                     }
                 }
                 .onTapGesture {
                     isInputFocused = false
+                }
+                .onChange(of: isInputFocused) { focused in
+                    if focused {
+                        // Keyboard appeared - scroll to bottom
+                        scrollToBottom(proxy: proxy)
+                    }
                 }
             }
 
@@ -73,6 +75,14 @@ struct NativeChatView: View {
         }
         .onAppear {
             store.send(.loadSessions)
+        }
+    }
+
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        if let lastMessage = store.messages.last {
+            withAnimation(.easeOut(duration: 0.25)) {
+                proxy.scrollTo(lastMessage.id, anchor: .bottom)
+            }
         }
     }
 }
