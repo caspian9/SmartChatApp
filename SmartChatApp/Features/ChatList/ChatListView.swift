@@ -54,8 +54,11 @@ struct ChatListView: View {
 
     @ViewBuilder
     private func sessionView(for session: OpenClawChatSessionEntry) -> some View {
-        Text("Chat View for: \(session.key)")
-            .foregroundColor(.white)
+        let transport = GatewayChatTransport(
+            nodeSession: GatewayNodeSession(),
+            sessionKey: session.key
+        )
+        ChatView(sessionKey: session.key, transport: transport)
     }
 
     private func loadSessions() {
