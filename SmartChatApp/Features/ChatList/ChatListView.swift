@@ -69,6 +69,7 @@ struct ChatListView: View {
         let transport = SessionManager.shared.makeTransport(sessionKey: session.key)
         ChatView(
             sessionKey: session.key,
+            sessionEntry: session,
             transport: transport,
             onAppear: {
                 Task {

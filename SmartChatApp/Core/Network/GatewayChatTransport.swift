@@ -166,6 +166,7 @@ public actor GatewayChatTransport: OpenClawChatTransport {
             let task = Task {
                 let events = await nodeSession.subscribeServerEvents()
                 for await frame in events {
+                    print("[GatewayChatTransport] frame received: event=\(frame.event)")
                     if let event = mapToTransportEventStatic(frame) {
                         continuation.yield(event)
                     }
@@ -204,6 +205,9 @@ public actor GatewayChatTransport: OpenClawChatTransport {
             if let payload = frame.payload {
                 let decoded = try? GatewayPayloadDecoding.decode(payload, as: OpenClawAgentEventPayload.self)
                 if let payloadObj = decoded {
+                    print("[GatewayChatTransport] agent event: stream=\(payloadObj.stream), runId=\(payloadObj.runId ?? "nil")")
+                    print("[GatewayChatTransport] agent data: \(String(describing: payloadObj.data))")
+                    print("[GatewayChatTransport] agent ts: \(String(describing: payloadObj.ts))")
                     return .agent(payloadObj)
                 }
             }
