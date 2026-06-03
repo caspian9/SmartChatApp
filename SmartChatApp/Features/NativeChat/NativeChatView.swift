@@ -1,5 +1,8 @@
 import SwiftUI
 import ComposableArchitecture
+import OSLog
+
+private let logger = Logger(subsystem: "SmartChatApp", category: "NativeChatView")
 
 struct NativeChatView: View {
     @Environment(\.theme) private var theme
@@ -8,10 +11,14 @@ struct NativeChatView: View {
     }
     @FocusState private var isInputFocused: Bool
 
+    init() {
+        logger.log("SMAlog: NativeChatView init")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            if let session = store.selectedSession {
-                SessionTabBar(
+            if !store.sessions.isEmpty {
+                SessionPickerView(
                     sessions: store.sessions,
                     selectedSession: Binding(
                         get: { store.selectedSession },
@@ -52,6 +59,18 @@ struct NativeChatView: View {
                         scrollToBottom(proxy: proxy)
                     }
                 }
+                .onChange(of: store.messages.count) { _ in
+                    // Scroll to bottom when messages change (new messages loaded or session switched)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        scrollToBottom(proxy: proxy)
+                    }
+                }
+                .onChange(of: store.selectedSession) { _ in
+                    // Scroll to bottom when session changes
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        scrollToBottom(proxy: proxy)
+                    }
+                }
             }
 
             ChatInputView(
@@ -80,6 +99,7 @@ struct NativeChatView: View {
             }
         }
         .onAppear {
+            logger.log("SMAlog: NativeChatView onAppear called")
             store.send(.loadSessions)
         }
     }
