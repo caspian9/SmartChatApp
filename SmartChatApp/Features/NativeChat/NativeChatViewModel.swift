@@ -203,7 +203,7 @@ struct NativeChatViewModel {
                                 var text = ""
                                 for contentItem in msg.content {
                                     if let t = contentItem.text, !t.isEmpty {
-                                        text = t
+                                        text = t.trimmingCharacters(in: .whitespacesAndNewlines)
                                         break
                                     }
                                 }
@@ -251,7 +251,7 @@ struct NativeChatViewModel {
                                 var text = ""
                                 for contentItem in msg.content {
                                     if let t = contentItem.text, !t.isEmpty {
-                                        text = t
+                                        text = t.trimmingCharacters(in: .whitespacesAndNewlines)
                                         break
                                     }
                                 }
