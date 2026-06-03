@@ -924,144 +924,42 @@ struct NativeChatViewModel {
     private func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
         switch event {
         case .agent(let payload):
-            logger.log("SMAlog: agent event - stream: \(payload.stream), runId: \(payload.runId)")
+            logger.log("SMAlog: agent event - stream: \(payload.stream), runId: \(payload.runId), data keys: \(payload.data.keys.map { $0 })")
             let runId = payload.runId
             let ts = payload.ts ?? 0
             let timestamp = Date(timeIntervalSince1970: Double(ts) / 1000)
             let data = payload.data
-
-            // Extract seq from payload (not from data)
             let seq = payload.seq
-
-            // Extract phase
             let phase = extractString(from: data, key: "phase")
             let startedAtMs = extractDouble(from: data, key: "startedAt")
             let endedAtMs = extractDouble(from: data, key: "endedAt")
             let livenessState = extractString(from: data, key: "livenessState")
 
-            if phase == "start" {
-                // Start of a new run
-                logger.log("SMAlog: agent start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs), data keys: \(data.keys.map { $0 })")
-                // Pre-register stream holder so the view can begin streaming as text arrives
-                await MainActor.run {
-                    MarkdownStreamManager.shared.holder(for: runId)
-                    MarkdownCache.shared.setNeedsMarkdown(runId, value: true)
-                }
-                let message = ChatMessage(
-                    id: runId,
-                    text: "",
-                    timestamp: timestamp,
-                    role: "assistant",
-                    state: "streaming",
-                    runId: runId,
-                    seq: seq,
-                    startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : timestamp,
-                    endedAt: nil,
-                    livenessState: livenessState,
-                    toolCallId: nil,
-                    toolName: nil,
-                    stopReason: nil,
-                    isFresh: true
-                )
-                await send(.receiveMessage(message))
-                logger.log("SMAlog: agent start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs), data keys: \(data.keys.map { $0 })")
-            } else if phase == "end" {
-                // End of run - preserve existing text, just update state and endedAt
-                logger.log("SMAlog: agent end - processing data, keys: \(data.keys.map { $0 })")
-                for (key, value) in data {
-                    logger.log("SMAlog: data key: \(key), value: \(String(describing: value.value))")
-                }
-                logger.log("SMAlog: ⚠️ phase=end received, will set state=final for runId: \(runId)")
-                // Extract tokens from nested usage structure
-                var inputTokens: Int?
-                var outputTokens: Int?
-                var cacheRead: Int?
-                var cacheWrite: Int?
-                // Check for usage dictionary
-                if let usage = data["usage"]?.value as? [String: Any] {
-                    logger.log("SMAlog: found usage dict: \(String(describing: usage))")
-                    if let input = usage["input"] as? Int { inputTokens = input }
-                    if let output = usage["output"] as? Int { outputTokens = output }
-                    if let cr = usage["cacheRead"] as? Int { cacheRead = cr }
-                    if let cw = usage["cacheWrite"] as? Int { cacheWrite = cw }
-                } else if let usage = data["usage"] {
-                    logger.log("SMAlog: usage found but not dict: \(String(describing: usage.value))")
-                } else {
-                    logger.log("SMAlog: no usage key found in data")
-                }
-                // Also check for top-level token fields
-                if inputTokens == nil, let input = data["inputTokens"]?.value as? Int { inputTokens = input }
-                if outputTokens == nil, let output = data["outputTokens"]?.value as? Int { outputTokens = output }
-                if cacheRead == nil, let cr = data["cacheRead"]?.value as? Int { cacheRead = cr }
-                if cacheWrite == nil, let cw = data["cacheWrite"]?.value as? Int { cacheWrite = cw }
-                logger.log("SMAlog: agent end - tokens: input: \(inputTokens ?? -1), output: \(outputTokens ?? -1), cacheRead: \(cacheRead ?? -1), cacheWrite: \(cacheWrite ?? -1)")
-                // Finalize the streaming buffer first, then read the full accumulated
-                // text so we can persist it. Deltas only carry per-chunk text, so the
-                // cumulative copy lives inside MarkdownViewTextKit until end() flushes
-                // it. Without this, the cache write below gets an empty body and the
-                // assistant reply is lost on re-entry.
-                let fullText: String = await MainActor.run {
-                    MarkdownStreamManager.shared.end(messageId: runId)
-                    return MarkdownStreamManager.shared.currentText(for: runId) ?? ""
-                }
-                logger.log("SMAlog: agent end - fullText len: \(fullText.count) for runId: \(runId)")
-                let message = ChatMessage(
-                    id: runId,
-                    text: fullText,
-                    timestamp: timestamp,
-                    role: "assistant",
-                    state: "final",
-                    runId: runId,
-                    seq: seq,
-                    startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : nil,
-                    endedAt: endedAtMs > 0 ? Date(timeIntervalSince1970: endedAtMs / 1000) : timestamp,
-                    livenessState: livenessState,
-                    inputTokens: inputTokens,
-                    outputTokens: outputTokens,
-                    cacheRead: cacheRead,
-                    cacheWrite: cacheWrite,
-                    toolCallId: nil,
-                    toolName: nil,
-                    stopReason: nil,
-                    isFresh: true
-                )
-                await send(.receiveMessage(message))
-                logger.log("SMAlog: agent end - runId: \(runId), seq: \(seq ?? -1), endedAt: \(endedAtMs)")
-                // Holder no longer needed — SwiftUI flips to the static MarkdownCardView
-                // once state becomes "final", so the streaming view is dismantled.
-                // Release the holder to bound memory across many turns.
-                await MainActor.run {
-                    MarkdownStreamManager.shared.release(messageId: runId)
-                }
-                // Reset sending state when run ends
-                await send(.setSending(false))
-            } else {
-                // Assistant stream - server sends the FULL cumulative text on
-                // every chunk (see OpenClawChatUI/ChatViewModel.handleAgentEvent
-                // for the reference behavior). Hand the cumulative string to
-                // the holder; it computes the actual incremental suffix and
-                // feeds only that to appendStreamData. Without this we render
-                // `ABC` + `ABCDE` + `ABCDEF` as `ABCABCDEABCDEF`.
-                let text = extractString(from: data, key: "text") ?? ""
-
-                logger.log("SMAlog: agent delta - text len: \(text.count), phase: \(phase ?? "nil"), data keys: \(data.keys.map { $0 })")
-                if !text.isEmpty {
+            switch payload.stream {
+            case "lifecycle":
+                if phase == "start" {
+                    // Start of a new run. The lifecycle signal alone doesn't know
+                    // what content is coming — it could be assistant text, thinking,
+                    // or tool calls. Create a generic placeholder (id=runId) so the
+                    // UI has a 3-dot indicator immediately. First real content
+                    // (assistant/thinking/tool) creates its own sibling message with
+                    // a typed id; assistant deltas also land on this placeholder
+                    // since they share id=runId, so it doubles as the assistant
+                    // bubble when text arrives.
+                    logger.log("SMAlog: agent lifecycle start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)")
                     await MainActor.run {
-                        MarkdownStreamManager.shared.appendCumulative(messageId: runId, cumulative: text)
+                        MarkdownStreamManager.shared.holder(for: runId)
+                        MarkdownCache.shared.setNeedsMarkdown(runId, value: true)
                     }
-                    // Carry the cumulative text on the in-memory message too,
-                    // so anything that reads `message.text` (collapse logic,
-                    // copy button, fallback rendering) sees the full reply
-                    // instead of just the latest chunk.
                     let message = ChatMessage(
                         id: runId,
-                        text: text,
+                        text: "",
                         timestamp: timestamp,
                         role: "assistant",
                         state: "streaming",
                         runId: runId,
                         seq: seq,
-                        startedAt: nil,
+                        startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : timestamp,
                         endedAt: nil,
                         livenessState: livenessState,
                         toolCallId: nil,
@@ -1070,8 +968,331 @@ struct NativeChatViewModel {
                         isFresh: true
                     )
                     await send(.receiveMessage(message))
-                    logger.log("SMAlog: agent text - runId: \(runId), seq: \(seq ?? -1), text length: \(text.count)")
+                } else if phase == "end" {
+                    // End of run. The previous implementation keyed off phase=end
+                    // for every event, which caused tool end phases to prematurely
+                    // finalize the run and reset sending. With stream-based dispatch,
+                    // only the actual lifecycle end reaches here, so the run-level
+                    // state (tokens, endedAt, setSending(false)) is correctly tied
+                    // to the real terminal signal.
+                    logger.log("SMAlog: agent lifecycle end - runId: \(runId), data keys: \(data.keys.map { $0 })")
+                    var inputTokens: Int?
+                    var outputTokens: Int?
+                    var cacheRead: Int?
+                    var cacheWrite: Int?
+                    if let usage = data["usage"]?.value as? [String: Any] {
+                        logger.log("SMAlog: found usage dict: \(String(describing: usage))")
+                        if let input = usage["input"] as? Int { inputTokens = input }
+                        if let output = usage["output"] as? Int { outputTokens = output }
+                        if let cr = usage["cacheRead"] as? Int { cacheRead = cr }
+                        if let cw = usage["cacheWrite"] as? Int { cacheWrite = cw }
+                    }
+                    if inputTokens == nil, let input = data["inputTokens"]?.value as? Int { inputTokens = input }
+                    if outputTokens == nil, let output = data["outputTokens"]?.value as? Int { outputTokens = output }
+                    if cacheRead == nil, let cr = data["cacheRead"]?.value as? Int { cacheRead = cr }
+                    if cacheWrite == nil, let cw = data["cacheWrite"]?.value as? Int { cacheWrite = cw }
+                    logger.log("SMAlog: agent lifecycle end - tokens: input: \(inputTokens ?? -1), output: \(outputTokens ?? -1), cacheRead: \(cacheRead ?? -1), cacheWrite: \(cacheWrite ?? -1)")
+                    // Flush the markdown stream buffer and read the full accumulated
+                    // text so it can be persisted. Deltas carry the full cumulative
+                    // string per chunk; MarkdownViewTextKit holds the real body until
+                    // end() releases it. Without this flush, the cache write below
+                    // captures an empty body and the assistant reply is lost.
+                    let fullText: String = await MainActor.run {
+                        MarkdownStreamManager.shared.end(messageId: runId)
+                        return MarkdownStreamManager.shared.currentText(for: runId) ?? ""
+                    }
+                    logger.log("SMAlog: agent lifecycle end - fullText len: \(fullText.count) for runId: \(runId)")
+                    let message = ChatMessage(
+                        id: runId,
+                        text: fullText,
+                        timestamp: timestamp,
+                        role: "assistant",
+                        state: "final",
+                        runId: runId,
+                        seq: seq,
+                        startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : nil,
+                        endedAt: endedAtMs > 0 ? Date(timeIntervalSince1970: endedAtMs / 1000) : timestamp,
+                        livenessState: livenessState,
+                        inputTokens: inputTokens,
+                        outputTokens: outputTokens,
+                        cacheRead: cacheRead,
+                        cacheWrite: cacheWrite,
+                        toolCallId: nil,
+                        toolName: nil,
+                        stopReason: nil,
+                        isFresh: true
+                    )
+                    await send(.receiveMessage(message))
+                    // Holder no longer needed — SwiftUI flips to the static
+                    // MarkdownCardView once state becomes "final", so the streaming
+                    // view is dismantled. Release to bound memory across many turns.
+                    await MainActor.run {
+                        MarkdownStreamManager.shared.release(messageId: runId)
+                    }
+                    // Only the real terminal signal resets the sending flag.
+                    await send(.setSending(false))
                 }
+            case "assistant":
+                // Server sends the FULL cumulative text on every chunk (see
+                // OpenClawChatUI/ChatViewModel.handleAgentEvent for the reference
+                // behavior). Hand the cumulative string to the holder; it computes
+                // the actual incremental suffix and feeds only that to the stream.
+                // Without this we render `ABC` + `ABCDE` + `ABCDEF` as
+                // `ABCABCDEABCDEF`. The placeholder at id=runId absorbs this update.
+                let text = extractString(from: data, key: "text") ?? ""
+                logger.log("SMAlog: agent assistant delta - text len: \(text.count)")
+                guard !text.isEmpty else { return }
+                await MainActor.run {
+                    MarkdownStreamManager.shared.appendCumulative(messageId: runId, cumulative: text)
+                }
+                let message = ChatMessage(
+                    id: runId,
+                    text: text,
+                    timestamp: timestamp,
+                    role: "assistant",
+                    state: "streaming",
+                    runId: runId,
+                    seq: seq,
+                    startedAt: nil,
+                    endedAt: nil,
+                    livenessState: livenessState,
+                    toolCallId: nil,
+                    toolName: nil,
+                    stopReason: nil,
+                    isFresh: true
+                )
+                await send(.receiveMessage(message))
+            case "thinking":
+                // Thinking deltas are emitted as a separate stream from the
+                // assistant text — they don't share an id with the assistant
+                // placeholder. Use a synthetic id so the message dedups against
+                // itself across deltas and renders as a thinking bubble.
+                let text = extractString(from: data, key: "text") ?? ""
+                logger.log("SMAlog: agent thinking delta - text len: \(text.count)")
+                guard !text.isEmpty else { return }
+                let message = ChatMessage(
+                    id: "\(runId):thinking",
+                    text: text,
+                    timestamp: timestamp,
+                    role: "thinking",
+                    state: "final",
+                    runId: runId,
+                    seq: nil,
+                    startedAt: nil,
+                    endedAt: nil,
+                    livenessState: nil,
+                    toolCallId: nil,
+                    toolName: nil,
+                    stopReason: nil,
+                    isFresh: true
+                )
+                await send(.receiveMessage(message))
+            case "tool":
+                // Tool events share stream="tool" and discriminate via phase.
+                // - start: tool begins (name + args)
+                // - update: tool sends an intermediate state (progress, partial
+                //   result). Many tools skip this; bash/web_search do not.
+                // - result: tool finished (result or error)
+                // Each toolCallId gets its own synthetic id so concurrent tools
+                // (or the same tool called twice in one run) don't collide.
+                // This branch is only hit when verbose level is on (the modern
+                // path goes through `stream: "item"` and `stream: "command_output"`
+                // below).
+                guard let toolCallId = extractString(from: data, key: "toolCallId") else {
+                    logger.log("SMAlog: agent tool event missing toolCallId, skipping. data keys: \(data.keys.map { $0 })")
+                    return
+                }
+                let toolName = extractString(from: data, key: "name") ?? ""
+                if phase == "start" {
+                    let text = formatToolCallText(name: toolName, args: data["args"]?.value)
+                    logger.log("SMAlog: agent tool start - tool: \(toolName), callId: \(toolCallId)")
+                    let message = ChatMessage(
+                        id: "\(runId):tool:\(toolCallId)",
+                        text: text,
+                        timestamp: timestamp,
+                        role: "toolCall",
+                        state: "final",
+                        runId: runId,
+                        seq: nil,
+                        startedAt: timestamp,
+                        endedAt: nil,
+                        livenessState: nil,
+                        toolCallId: toolCallId,
+                        toolName: toolName,
+                        stopReason: nil,
+                        isFresh: true
+                    )
+                    await send(.receiveMessage(message))
+                } else if phase == "update" {
+                    // Intermediate state. Refresh the toolCall bubble with the
+                    // latest args/progress so the user sees the tool is alive.
+                    let text = formatToolCallText(name: toolName, args: data["args"]?.value)
+                    logger.log("SMAlog: agent tool update - tool: \(toolName), callId: \(toolCallId), text len: \(text.count)")
+                    let message = ChatMessage(
+                        id: "\(runId):tool:\(toolCallId)",
+                        text: text,
+                        timestamp: timestamp,
+                        role: "toolCall",
+                        state: "final",
+                        runId: runId,
+                        seq: nil,
+                        startedAt: nil,
+                        endedAt: nil,
+                        livenessState: nil,
+                        toolCallId: toolCallId,
+                        toolName: toolName,
+                        stopReason: nil,
+                        isFresh: true
+                    )
+                    await send(.receiveMessage(message))
+                } else if phase == "result" {
+                    let resultValue = data["result"]?.value
+                    let text = formatToolResultText(result: resultValue)
+                    let isError = (data["isError"]?.value as? Bool) ?? false
+                    logger.log("SMAlog: agent tool result - tool: \(toolName), callId: \(toolCallId), isError: \(isError), text len: \(text.count)")
+                    let message = ChatMessage(
+                        id: "\(runId):toolResult:\(toolCallId)",
+                        text: text,
+                        timestamp: timestamp,
+                        role: "toolResult",
+                        state: "final",
+                        runId: runId,
+                        seq: nil,
+                        startedAt: nil,
+                        endedAt: timestamp,
+                        livenessState: nil,
+                        toolCallId: toolCallId,
+                        toolName: toolName,
+                        stopReason: isError ? "error" : nil,
+                        isFresh: true
+                    )
+                    await send(.receiveMessage(message))
+                }
+            case "item":
+                // Modern tool/command/patch lifecycle events. Each toolCallId
+                // emits one `item` event per kind: tool, command (bash/exec),
+                // patch, search, analysis. We map them all to a toolCall
+                // bubble keyed by itemId so concurrent tools don't collide.
+                // For non-command kinds, the actual result content is in the
+                // `stream: "tool"` event which is only emitted when verbose
+                // level is on; without it the toolResult bubble only has
+                // metadata (status/error). For command kind, the output
+                // arrives via `stream: "command_output"` events.
+                guard let itemId = extractString(from: data, key: "itemId") else {
+                    logger.log("SMAlog: agent item event missing itemId, skipping. keys: \(data.keys.map { $0 })")
+                    return
+                }
+                let itemPhase = extractString(from: data, key: "phase")
+                let kind = extractString(from: data, key: "kind") ?? "tool"
+                let name = extractString(from: data, key: "name") ?? ""
+                let title = extractString(from: data, key: "title") ?? name
+                let status = extractString(from: data, key: "status")
+                let progressText = extractString(from: data, key: "progressText")
+                let summary = extractString(from: data, key: "summary")
+                let errorText = extractString(from: data, key: "error")
+                let toolCallId = extractString(from: data, key: "toolCallId")
+                logger.log("SMAlog: agent item - kind: \(kind), phase: \(itemPhase ?? "nil"), itemId: \(itemId), status: \(status ?? "?")")
+                // Build text representation for the toolCall bubble. Title
+                // carries the human-readable action; progressText is appended
+                // during running state so the user sees the tool is alive.
+                var callText = title
+                if let progressText, !progressText.isEmpty {
+                    callText += "\n" + progressText
+                }
+                if itemPhase == "end" {
+                    // End phase. If there's a summary (e.g., command output
+                    // captured at end), fold it into a toolResult bubble so
+                    // the user can read what the tool produced. Otherwise just
+                    // mark the toolCall as ended.
+                    let resultText = summary ?? errorText ?? ""
+                    if !resultText.isEmpty {
+                        let message = ChatMessage(
+                            id: "\(runId):itemResult:\(itemId)",
+                            text: resultText,
+                            timestamp: timestamp,
+                            role: "toolResult",
+                            state: "final",
+                            runId: runId,
+                            seq: nil,
+                            startedAt: nil,
+                            endedAt: timestamp,
+                            livenessState: nil,
+                            toolCallId: toolCallId,
+                            toolName: name,
+                            stopReason: (errorText != nil) ? "error" : nil,
+                            isFresh: true
+                        )
+                        await send(.receiveMessage(message))
+                    }
+                }
+                // Always update the toolCall bubble so start/update/end phases
+                // surface a running indicator. In-place update by id matches
+                // the same item across phases.
+                let message = ChatMessage(
+                    id: "\(runId):item:\(itemId)",
+                    text: callText,
+                    timestamp: timestamp,
+                    role: "toolCall",
+                    state: itemPhase == "end" ? "final" : "streaming",
+                    runId: runId,
+                    seq: nil,
+                    startedAt: nil,
+                    endedAt: itemPhase == "end" ? timestamp : nil,
+                    livenessState: nil,
+                    toolCallId: toolCallId,
+                    toolName: name,
+                    stopReason: nil,
+                    isFresh: true
+                )
+                await send(.receiveMessage(message))
+            case "command_output":
+                // Per-item command output stream. For exec/bash tools the
+                // result body arrives here in `output` (incremental on
+                // `phase: "delta"`, final on `phase: "end"`). Accumulate into
+                // a toolResult bubble keyed by itemId.
+                guard let itemId = extractString(from: data, key: "itemId") else {
+                    logger.log("SMAlog: agent command_output missing itemId, skipping. keys: \(data.keys.map { $0 })")
+                    return
+                }
+                let outputPhase = extractString(from: data, key: "phase")
+                let output = extractString(from: data, key: "output") ?? ""
+                let toolName = extractString(from: data, key: "name") ?? ""
+                let exitCode = extractInt(from: data, key: "exitCode")
+                let durationMs = extractInt(from: data, key: "durationMs")
+                logger.log("SMAlog: agent command_output - phase: \(outputPhase ?? "nil"), itemId: \(itemId), output len: \(output.count), exitCode: \(exitCode.map(String.init) ?? "nil")")
+                var resultText = output
+                if outputPhase == "end" {
+                    // Append exit info so the bubble shows the command's
+                    // disposition even if `output` is empty.
+                    var trailer: [String] = []
+                    if let exitCode { trailer.append("exit=\(exitCode)") }
+                    if let durationMs { trailer.append("duration=\(durationMs)ms") }
+                    if !trailer.isEmpty {
+                        if !resultText.isEmpty { resultText += "\n" }
+                        resultText += trailer.joined(separator: " ")
+                    }
+                }
+                guard !resultText.isEmpty else { return }
+                let message = ChatMessage(
+                    id: "\(runId):itemResult:\(itemId)",
+                    text: resultText,
+                    timestamp: timestamp,
+                    role: "toolResult",
+                    state: outputPhase == "end" ? "final" : "streaming",
+                    runId: runId,
+                    seq: nil,
+                    startedAt: nil,
+                    endedAt: outputPhase == "end" ? timestamp : nil,
+                    livenessState: nil,
+                    toolCallId: nil,
+                    toolName: toolName,
+                    stopReason: exitCode.map { $0 != 0 ? "error" : nil } ?? nil,
+                    isFresh: true
+                )
+                await send(.receiveMessage(message))
+            default:
+                // plan, approval, patch, compaction, error — not yet surfaced.
+                logger.log("SMAlog: agent unhandled stream: \(payload.stream), data keys: \(data.keys.map { $0 })")
             }
 
         case .chat, .sessionMessage, .tick, .seqGap, .health:
@@ -1153,5 +1374,42 @@ struct NativeChatViewModel {
             }
         }
         return ""
+    }
+
+    /// Builds a short human-readable label for a tool call: "name: args".
+    /// Falls back to a one-line JSON dump of args so the bubble has something
+    /// to show even when no friendly field is present.
+    private func formatToolCallText(name: String, args: Any?) -> String {
+        if name.isEmpty { return "" }
+        guard let args else { return name }
+        if let str = args as? String, !str.isEmpty {
+            return "\(name): \(str)"
+        }
+        if let dict = args as? [String: Any] {
+            if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.fragmentsAllowed, .sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                return "\(name): \(json)"
+            }
+        }
+        if let arr = args as? [Any] {
+            if let data = try? JSONSerialization.data(withJSONObject: arr, options: [.fragmentsAllowed, .sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                return "\(name): \(json)"
+            }
+        }
+        return name
+    }
+
+    /// Pretty-prints a tool result payload. JSON values get indented; raw
+    /// strings pass through. The MessageBubbleView will further pretty-print
+    /// anything it sees for `role == "toolResult"`, so this stays minimal.
+    private func formatToolResultText(result: Any?) -> String {
+        guard let result else { return "" }
+        if let str = result as? String { return str }
+        if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .fragmentsAllowed, .sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            return json
+        }
+        return String(describing: result)
     }
 }
