@@ -46,6 +46,8 @@ targets:
         product: OpenClawKit
       - package: OpenClawKit
         product: OpenClawProtocol
+      - package: OpenClawKit
+        product: OpenClawChatUI
     info:
       path: SmartChatApp/Info.plist
       properties:
