@@ -24,13 +24,7 @@ struct MessageBubbleView: View {
                             .padding(.vertical, 8)
                     }
                 } else {
-                    Text(message.text)
-                        .font(.body)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
-                        .cornerRadius(12)
+                    MarkdownText(text: message.text, isOutgoing: message.isOutgoing)
                 }
 
                 HStack(spacing: 8) {
@@ -68,6 +62,34 @@ struct MessageBubbleView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: timestamp)
+    }
+}
+
+struct MarkdownText: View {
+    let text: String
+    let isOutgoing: Bool
+
+    var body: some View {
+        if let attributedString = try? AttributedString(markdown: text, options: AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )) {
+            Text(attributedString)
+                .font(.body)
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
+                .cornerRadius(12)
+        } else {
+            // Fallback to plain text if markdown parsing fails
+            Text(text)
+                .font(.body)
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
+                .cornerRadius(12)
+        }
     }
 }
 
