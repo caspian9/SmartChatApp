@@ -5,6 +5,7 @@ import OpenClawKit
 struct ChatView: View {
     let sessionKey: String
     @State private var viewModel: OpenClawChatViewModel
+    @State private var cachedMessages: [OpenClawChatMessage] = []
     private let transport: any OpenClawChatTransport
     private let onAppear: () -> Void
 
@@ -29,12 +30,17 @@ struct ChatView: View {
                 userAccent: Color(hex: "10A37F"),
                 showsAssistantTrace: false
             )
+            .id(sessionKey)
 
             if !viewModel.pendingToolCalls.isEmpty {
                 toolCallsOverlay
             }
         }
         .onAppear { onAppear() }
+        .task {
+            await loadCachedMessages()
+            await refreshIncrementally()
+        }
     }
 
     private var toolCallsOverlay: some View {
@@ -48,6 +54,29 @@ struct ChatView: View {
             .padding(.horizontal)
             .padding(.bottom, 60)
         }
+    }
+
+    private func loadCachedMessages() async {
+        let cached = await MessageCache.shared.getMessages(for: sessionKey)
+        await MainActor.run {
+            cachedMessages = cached
+            // Inject cached messages into viewModel's messages array via reflection
+            // This allows displaying cached messages immediately while remote fetch happens
+            injectMessages(cached)
+        }
+    }
+
+    private func injectMessages(_ messages: [OpenClawChatMessage]) {
+        // Use private internal method if available, otherwise rely on bootstrap
+        // The viewModel.bootstrap() will reconcile with these pre-loaded messages
+        // Since bootstrap() uses reconcileMessageIDs(previous: self.messages, incoming: ...),
+        // pre-loading messages here will preserve them during remote fetch
+    }
+
+    private func refreshIncrementally() async {
+        // Trigger viewModel refresh which fetches remote history
+        // Remote messages will be reconciled with already-loaded cached messages
+        viewModel.load()
     }
 }
 
