@@ -1,11 +1,20 @@
 import SwiftUI
 
+struct ViewHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct MessageBubbleView: View {
     @Environment(\.theme) private var theme
     let message: ChatMessage
 
     @State private var animationOffset: CGFloat = 0
     @State private var isExpanded: Bool = false
+    @State private var measuredHeight: CGFloat = 0
+    @State private var isMarkdownCollapsed: Bool = false
 
     private let maxCollapsedLines: Int = 8
     private let maxCollapsedHeight: CGFloat = 150
@@ -35,6 +44,17 @@ struct MessageBubbleView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.purple)
+                            .cornerRadius(4)
+                    }
+
+                    // Thinking badge
+                    if message.role == "thinking" {
+                        Text("Thinking")
+                            .font(.caption2)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue)
                             .cornerRadius(4)
                     }
 
@@ -144,13 +164,25 @@ struct MessageBubbleView: View {
         VStack(alignment: .leading, spacing: 4) {
             if shouldRenderMarkdown && message.role != "toolResult" {
                 MarkdownCardView(content: message.text)
-                    .frame(minHeight: 30)
+                    .frame(minHeight: 30, alignment: .topLeading)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.onAppear {
+                                measuredHeight = geo.size.height
+                                isMarkdownCollapsed = geo.size.height > maxCollapsedHeight && !isExpanded
+                            }
+                        }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: isExpanded ? nil : maxCollapsedHeight, alignment: .topLeading)
+                    .clipped()
             } else if message.role == "toolResult" {
                 Text(formatJsonText(message.text))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
                     .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if message.role == "thinking" {
+                ThinkingCardView(content: message.text)
             } else {
                 Text(message.text)
                     .font(.body)
@@ -159,7 +191,7 @@ struct MessageBubbleView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if shouldShowExpandButton && !shouldRenderMarkdown {
+            if shouldShowExpandButton {
                 Button {
                     withAnimation {
                         isExpanded = true
@@ -181,7 +213,7 @@ struct MessageBubbleView: View {
 
     private var shouldShowExpandButton: Bool {
         guard message.isOutgoing == false && !message.text.isEmpty else { return false }
-        return shouldCollapse && !isExpanded
+        return (shouldCollapse || isMarkdownCollapsed) && !isExpanded
     }
 
     private var shouldCollapse: Bool {
