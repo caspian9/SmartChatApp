@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The project's project.yml points at /Users/hai/Code/openclaw/...
+      # which is the user's local sibling checkout. For CI we check out
+      # the openclaw fork into ../openclaw and rewrite the path to be
+      # relative so xcodegen can resolve the OpenClawKit package.
+      - name: Checkout OpenClaw sibling
+        uses: actions/checkout@v4
+        with:
+          repository: caspian9/openclaw
+          path: ../openclaw
+
+      - name: Patch project.yml path
+        run: |
+          sed -i '' 's|/Users/hai/Code/openclaw|../openclaw|' project.yml
+          cat project.yml | grep -E "^\s+path:" || true
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Cache DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-deriveddata-${{ hashFiles('project.yml', 'Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-deriveddata-
+
+      - name: Build (iOS Simulator)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -scheme SmartChatApp \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Test (iOS Simulator)
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme SmartChatApp \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO
