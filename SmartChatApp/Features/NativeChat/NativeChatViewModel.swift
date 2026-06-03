@@ -859,9 +859,19 @@ struct NativeChatViewModel {
                 if cacheRead == nil, let cr = data["cacheRead"]?.value as? Int { cacheRead = cr }
                 if cacheWrite == nil, let cw = data["cacheWrite"]?.value as? Int { cacheWrite = cw }
                 logger.log("SMAlog: agent end - tokens: input: \(inputTokens ?? -1), output: \(outputTokens ?? -1), cacheRead: \(cacheRead ?? -1), cacheWrite: \(cacheWrite ?? -1)")
+                // Finalize the streaming buffer first, then read the full accumulated
+                // text so we can persist it. Deltas only carry per-chunk text, so the
+                // cumulative copy lives inside MarkdownViewTextKit until end() flushes
+                // it. Without this, the cache write below gets an empty body and the
+                // assistant reply is lost on re-entry.
+                let fullText: String = await MainActor.run {
+                    MarkdownStreamManager.shared.end(messageId: runId)
+                    return MarkdownStreamManager.shared.currentText(for: runId) ?? ""
+                }
+                logger.log("SMAlog: agent end - fullText len: \(fullText.count) for runId: \(runId)")
                 let message = ChatMessage(
                     id: runId,
-                    text: "",  // Will be ignored in receiveMessage - preserve existing
+                    text: fullText,
                     timestamp: timestamp,
                     role: "assistant",
                     state: "final",
@@ -881,21 +891,32 @@ struct NativeChatViewModel {
                 )
                 await send(.receiveMessage(message))
                 logger.log("SMAlog: agent end - runId: \(runId), seq: \(seq ?? -1), endedAt: \(endedAtMs)")
-                // Finalize the markdown stream so the buffered content is rendered
+                // Holder no longer needed — SwiftUI flips to the static MarkdownCardView
+                // once state becomes "final", so the streaming view is dismantled.
+                // Release the holder to bound memory across many turns.
                 await MainActor.run {
-                    MarkdownStreamManager.shared.end(messageId: runId)
+                    MarkdownStreamManager.shared.release(messageId: runId)
                 }
                 // Reset sending state when run ends
                 await send(.setSending(false))
             } else {
-                // Assistant stream - update text with delta
+                // Assistant stream - server sends the FULL cumulative text on
+                // every chunk (see OpenClawChatUI/ChatViewModel.handleAgentEvent
+                // for the reference behavior). Hand the cumulative string to
+                // the holder; it computes the actual incremental suffix and
+                // feeds only that to appendStreamData. Without this we render
+                // `ABC` + `ABCDE` + `ABCDEF` as `ABCABCDEABCDEF`.
                 let text = extractString(from: data, key: "text") ?? ""
 
                 logger.log("SMAlog: agent delta - text len: \(text.count), phase: \(phase ?? "nil"), data keys: \(data.keys.map { $0 })")
                 if !text.isEmpty {
                     await MainActor.run {
-                        MarkdownStreamManager.shared.append(messageId: runId, chunk: text)
+                        MarkdownStreamManager.shared.appendCumulative(messageId: runId, cumulative: text)
                     }
+                    // Carry the cumulative text on the in-memory message too,
+                    // so anything that reads `message.text` (collapse logic,
+                    // copy button, fallback rendering) sees the full reply
+                    // instead of just the latest chunk.
                     let message = ChatMessage(
                         id: runId,
                         text: text,
