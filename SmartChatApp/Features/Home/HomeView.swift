@@ -127,9 +127,9 @@ struct HomeView: View {
                     isConnected = true
                     isConnecting = false
                     connectedDeviceName = deviceName
-                } else {
+                } else if !isConnecting {
+                    // Only update if not in connecting state
                     isConnected = false
-                    isConnecting = false
                     connectedDeviceName = ""
                 }
                 // Use active profile host, or legacy config if no profile
