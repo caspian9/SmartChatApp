@@ -41,10 +41,8 @@ struct NativeChatView: View {
                     isInputFocused = false
                 }
                 .onChange(of: isInputFocused) { focused in
-                    if focused {
-                        // Keyboard appeared - scroll to bottom
-                        scrollToBottom(proxy: proxy)
-                    }
+                    // Scroll to bottom whether keyboard appears or disappears
+                    scrollToBottom(proxy: proxy)
                 }
             }
 
