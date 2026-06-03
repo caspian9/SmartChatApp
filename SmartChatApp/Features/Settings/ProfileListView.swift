@@ -37,16 +37,6 @@ struct ProfileListView: View {
         editToken = profile.token
         editTlsEnabled = profile.tlsEnabled
         isEditing = true
-        checkConnectionStatus()
-    }
-
-    private func checkConnectionStatus() {
-        Task {
-            let connected = await SessionManager.shared.connectionStatus
-            await MainActor.run {
-                isConnected = connected
-            }
-        }
     }
 
     private func saveEdit() {
@@ -148,7 +138,7 @@ struct ProfileListView: View {
                                 HStack {
                                     Spacer()
                                     if isTesting {
- ProgressView()
+                                        ProgressView()
                                             .progressViewStyle(CircularProgressViewStyle())
                                         Text("Connecting...")
                                     } else if isConnected {
