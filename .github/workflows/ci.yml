@@ -16,20 +16,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The project's project.yml points at /Users/hai/Code/openclaw/...
-      # which is the user's local sibling checkout. For CI we check out
-      # the openclaw fork into ../openclaw and rewrite the path to be
-      # relative so xcodegen can resolve the OpenClawKit package.
+      # project.yml references OpenClawKit as a path-linked package
+      # (../openclaw/apps/shared/OpenClawKit). Check out the openclaw
+      # fork as a sibling so the relative path resolves.
       - name: Checkout OpenClaw sibling
         uses: actions/checkout@v4
         with:
           repository: caspian9/openclaw
           path: ../openclaw
-
-      - name: Patch project.yml path
-        run: |
-          sed -i '' 's|/Users/hai/Code/openclaw|../openclaw|' project.yml
-          cat project.yml | grep -E "^\s+path:" || true
 
       - name: Install XcodeGen
         run: brew install xcodegen
