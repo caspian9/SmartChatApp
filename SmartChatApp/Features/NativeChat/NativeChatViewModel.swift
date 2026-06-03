@@ -8,18 +8,22 @@ import os
 private let logger = Logger(subsystem: "SmartChatApp", category: "NativeChatViewModel")
 private let osLog = OSLog(subsystem: "SmartChatApp.NativeChatViewModel", category: "debug")
 
-private let lastSelectedSessionKey = "lastSelectedSessionKey"
+private func lastSelectedSessionKey(for profileId: UUID) -> String {
+    "lastSelectedSession_\(profileId.uuidString)"
+}
 
 @Reducer
 struct NativeChatViewModel {
     @ObservableState
     struct State: Equatable {
+        var selectedProfileId: UUID? = nil
         var sessions: [OpenClawChatSessionEntry] = []
         var selectedSession: OpenClawChatSessionEntry?
         var messages: [ChatMessage] = []
         var inputText: String = ""
         var isLoading: Bool = false
         var isSending: Bool = false
+        var isSwitchingGateway: Bool = false
         var error: String?
         var isRestoringFromCache: Bool = false
         var needsScrollToBottom: Bool = false
@@ -33,6 +37,9 @@ struct NativeChatViewModel {
         case selectSession(OpenClawChatSessionEntry)
         case createSession
         case sessionCreated(String)
+        case setSelectedProfile(UUID?)
+        case switchProfile(UUID)
+        case profileSwitched(UUID)
         case updateInputText(String)
         case sendMessage
         case loadHistory
@@ -58,16 +65,27 @@ struct NativeChatViewModel {
     var body: some Reducer<State, Action> {
         Reduce { state, action in
             switch action {
+            case .setSelectedProfile(let profileId):
+                if state.selectedProfileId != profileId {
+                    state.selectedProfileId = profileId
+                }
+                return .none
+
             case .loadSessions:
                 logger.log("SMAlog: loadSessions called")
+                guard let profileId = state.selectedProfileId else {
+                    logger.log("SMAlog: loadSessions skipped - no selected profile")
+                    return .none
+                }
+                let profileIdCapture = profileId
                 // First load from cache for fast display
-                if let cached = SessionCache.load(), !cached.isEmpty {
-                    logger.log("SMAlog: Loaded \(cached.count) cached sessions")
+                if let cached = SessionCache.load(for: profileId), !cached.isEmpty {
+                    logger.log("SMAlog: Loaded \(cached.count) cached sessions for profile \(profileIdCapture.uuidString.prefix(8))")
                     state.sessions = cached
                     state.isRestoringFromCache = true
 
                     // Try to restore last selected session first
-                    let lastKey = UserDefaults.standard.string(forKey: lastSelectedSessionKey)
+                    let lastKey = UserDefaults.standard.string(forKey: lastSelectedSessionKey(for: profileIdCapture))
                     if let key = lastKey, let lastSession = cached.first(where: { $0.key == key }) {
                         state.selectedSession = lastSession
                         logger.log("SMAlog: restored last selected session: \(String(lastSession.key.prefix(12)))")
@@ -82,7 +100,7 @@ struct NativeChatViewModel {
                     }
                     state.isRestoringFromCache = false
                 } else {
-                    logger.log("SMAlog: No cached sessions found")
+                    logger.log("SMAlog: No cached sessions found for profile \(profileIdCapture.uuidString.prefix(8))")
                 }
                 // Then fetch from network
                 state.isLoading = true
@@ -115,11 +133,14 @@ struct NativeChatViewModel {
             case .loadedSessions(let sessions):
                 state.sessions = sessions
                 state.isLoading = false
-                SessionCache.save(sessions)
+                if let profileId = state.selectedProfileId {
+                    SessionCache.save(sessions, for: profileId)
+                }
 
                 // Try to restore last selected session and update with latest data from network
-                let lastKey = UserDefaults.standard.string(forKey: lastSelectedSessionKey)
-                if let key = lastKey, let updatedSession = sessions.first(where: { $0.key == key }) {
+                if let profileId = state.selectedProfileId,
+                   let key = UserDefaults.standard.string(forKey: lastSelectedSessionKey(for: profileId)),
+                   let updatedSession = sessions.first(where: { $0.key == key }) {
                     state.selectedSession = updatedSession
                     logger.log("SMAlog: restored and updated session: \(String(updatedSession.key.prefix(12))), tokens: \(updatedSession.totalTokens ?? -1)")
                     // Reload history with updated session info to refresh provider/model/tokens display
@@ -144,10 +165,47 @@ struct NativeChatViewModel {
                     state.isRestoringFromCache = true
                 }
 
-                // Save selected session key
-                UserDefaults.standard.set(session.key, forKey: lastSelectedSessionKey)
+                // Save selected session key (per profile)
+                if let profileId = state.selectedProfileId {
+                    UserDefaults.standard.set(session.key, forKey: lastSelectedSessionKey(for: profileId))
+                }
                 logger.log("SMAlog: saved selected session: \(String(session.key.prefix(12)))")
                 return .send(.loadHistory)
+
+            case .switchProfile(let newProfileId):
+                if newProfileId == state.selectedProfileId {
+                    return .none
+                }
+                let previousProfileId = state.selectedProfileId
+                state.selectedProfileId = newProfileId
+                state.sessions = []
+                state.selectedSession = nil
+                state.messages = []
+                state.isRestoringFromCache = false
+                state.isLoading = true
+                state.isSwitchingGateway = true
+                state.error = nil
+                logger.log("SMAlog: switchProfile from \(previousProfileId?.uuidString.prefix(8) ?? "nil") to \(newProfileId.uuidString.prefix(8))")
+                let profileIdCapture = newProfileId
+                return .run { send in
+                    Task {
+                        let profile = await MainActor.run {
+                            ProfileManager.shared.getProfile(id: profileIdCapture)
+                        }
+                        guard let profile = profile else {
+                            logger.log("SMAlog: switchProfile - profile not found")
+                            await send(.setError("Profile not found"))
+                            return
+                        }
+                        await ProfileManager.shared.switchToProfile(profile)
+                        logger.log("SMAlog: switchProfile - active profile switched, loading sessions")
+                        await send(.profileSwitched(profileIdCapture))
+                    }
+                }
+
+            case .profileSwitched:
+                state.isSwitchingGateway = false
+                return .send(.loadSessions)
 
             case .createSession:
                 state.isLoading = true

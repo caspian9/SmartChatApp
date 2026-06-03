@@ -8,6 +8,9 @@ struct SessionPickerView: View {
     @Environment(\.theme) private var theme
     let sessions: [OpenClawChatSessionEntry]
     @Binding var selectedSession: OpenClawChatSessionEntry?
+    let profiles: [GatewayProfile]
+    let selectedProfileId: UUID?
+    let onProfileChange: (UUID) -> Void
 
     @State private var selectedAgentId: String?
     @State private var selectedName: String?
@@ -35,9 +38,55 @@ struct SessionPickerView: View {
         return Array(uniqueNames).sorted()
     }
 
+    private var selectedProfileName: String {
+        guard let id = selectedProfileId, let profile = profiles.first(where: { $0.id == id }) else {
+            return profiles.first?.name ?? "No Gateway"
+        }
+        return profile.name
+    }
+
     var body: some View {
         VStack(spacing: 4) {
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                // Gateway picker
+                Menu {
+                    ForEach(profiles) { profile in
+                        Button(action: {
+                            if profile.id != selectedProfileId {
+                                onProfileChange(profile.id)
+                            }
+                        }) {
+                            HStack {
+                                Circle()
+                                    .fill(Color(hex: profile.colorTag))
+                                    .frame(width: 8, height: 8)
+                                Text(profile.name)
+                                if selectedProfileId == profile.id {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        if let id = selectedProfileId, let profile = profiles.first(where: { $0.id == id }) {
+                            Circle()
+                                .fill(Color(hex: profile.colorTag))
+                                .frame(width: 8, height: 8)
+                        }
+                        Text(selectedProfileName)
+                            .font(.caption)
+                            .foregroundColor(theme.textPrimary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(theme.inputBackground)
+                    .cornerRadius(8)
+                }
+                .frame(width: UIScreen.main.bounds.width * 0.25)
+
                 // Agent picker
                 Menu {
                     ForEach(agents, id: \.self) { agent in
@@ -105,11 +154,11 @@ struct SessionPickerView: View {
                         .font(.caption)
                         .foregroundColor(theme.textPrimary)
                         .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(theme.inputBackground)
-                        .cornerRadius(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(theme.inputBackground)
+                    .cornerRadius(8)
                 }
                 .frame(width: UIScreen.main.bounds.width * 0.3)
 
@@ -200,7 +249,10 @@ struct SessionPickerView: View {
 #Preview {
     SessionPickerView(
         sessions: [],
-        selectedSession: .constant(nil)
+        selectedSession: .constant(nil),
+        profiles: [],
+        selectedProfileId: nil,
+        onProfileChange: { _ in }
     )
     .background(Color.gray)
 }
