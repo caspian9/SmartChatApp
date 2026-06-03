@@ -1,20 +1,21 @@
 import ComposableArchitecture
 import SwiftUI
+import OpenClawChatUI
 
 @Reducer
 struct ChatListFeature {
     struct State: Equatable {
-        var sessions: [ChatSession] = []
+        var sessions: [OpenClawChatSessionEntry] = []
         var isLoading = false
         var error: String?
     }
 
     enum Action: Equatable {
         case loadSessions
-        case loadedSessions([ChatSession])
+        case loadedSessions([OpenClawChatSessionEntry])
         case createSession
         case deleteSession(String)
-        case selectSession(ChatSession)
+        case selectSession(OpenClawChatSessionEntry)
     }
 
     @Dependency(\.continuousClock) var clock
@@ -26,10 +27,7 @@ struct ChatListFeature {
                 state.isLoading = true
                 return .run { send in
                     try await clock.sleep(for: .milliseconds(500))
-                    let mockSessions = [
-                        ChatSession(id: "1", title: "Chat 1"),
-                        ChatSession(id: "2", title: "Chat 2"),
-                    ]
+                    let mockSessions: [OpenClawChatSessionEntry] = []
                     await send(.loadedSessions(mockSessions))
                 }
 
@@ -39,12 +37,35 @@ struct ChatListFeature {
                 return .none
 
             case .createSession:
-                let newSession = ChatSession()
+                let newSession = OpenClawChatSessionEntry(
+                    key: UUID().uuidString,
+                    kind: "chat",
+                    displayName: "New Chat",
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: Date().timeIntervalSince1970,
+                    sessionId: nil,
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: nil,
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: nil,
+                    model: nil,
+                    contextTokens: nil,
+                    thinkingLevels: nil,
+                    thinkingOptions: nil,
+                    thinkingDefault: nil
+                )
                 state.sessions.insert(newSession, at: 0)
                 return .none
 
-            case .deleteSession(let id):
-                state.sessions.removeAll { $0.id == id }
+            case .deleteSession(let key):
+                state.sessions.removeAll { $0.key == key }
                 return .none
 
             case .selectSession:
@@ -52,5 +73,4 @@ struct ChatListFeature {
             }
         }
     }
-
 }
