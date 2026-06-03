@@ -18,7 +18,6 @@ struct NativeChatViewModel {
         var isSending: Bool = false
         var error: String?
         var streamingText: String = ""
-        var receivedMessageIds: Set<String> = []
     }
 
     enum Action: Equatable {
@@ -36,12 +35,9 @@ struct NativeChatViewModel {
         case setSending(Bool)
         case updateStreamingText(String)
         case clearStreamingText
-        case clearReceivedMessageIds
     }
 
     @Dependency(\.continuousClock) var clock
-
-    private var eventTask: Task<Void, Never>?
 
     var body: some Reducer<State, Action> {
         Reduce { state, action in
@@ -80,7 +76,7 @@ struct NativeChatViewModel {
 
             case .selectSession(let session):
                 state.selectedSession = session
-                return .merge(.send(.loadHistory), .send(.clearReceivedMessageIds))
+                return .send(.loadHistory)
 
             case .createSession:
                 state.isLoading = true
@@ -121,11 +117,16 @@ struct NativeChatViewModel {
                     id: UUID().uuidString,
                     text: text,
                     isOutgoing: true,
-                    timestamp: Date()
+                    timestamp: Date(),
+                    role: "user",
+                    state: "final",
+                    runId: nil,
+                    toolCallId: nil,
+                    toolName: nil,
+                    stopReason: nil
                 )
                 state.messages.append(message)
                 state.inputText = ""
-                // Start listening for events before sending
                 return .run { send in
                     Task {
                         do {
@@ -136,7 +137,7 @@ struct NativeChatViewModel {
                                 for await evt in transport.events() {
                                     await MainActor.run {
                                         Task {
-                                            await handleEvent(evt, sessionKey: sessionKey, send: send)
+                                            await handleChatEvent(evt, sessionKey: sessionKey, send: send)
                                         }
                                     }
                                 }
@@ -150,8 +151,6 @@ struct NativeChatViewModel {
                                 attachments: []
                             )
                             logger.log("SMAlog: Message sent, waiting for response...")
-                            // Message sent successfully, reset sending state
-                            await send(.setSending(false))
                         } catch {
                             logger.log("SMAlog: Send message error: \(error.localizedDescription)")
                             await send(.setError(error.localizedDescription))
@@ -196,7 +195,13 @@ struct NativeChatViewModel {
                                     id: msgId,
                                     text: text,
                                     isOutgoing: isOutgoing,
-                                    timestamp: Date(timeIntervalSince1970: ts / 1000)
+                                    timestamp: Date(timeIntervalSince1970: ts / 1000),
+                                    role: msg.role,
+                                    state: "final",
+                                    runId: nil,
+                                    toolCallId: msg.toolCallId,
+                                    toolName: msg.toolName,
+                                    stopReason: msg.stopReason
                                 )
                             }
                             logger.log("SMAlog: chatMessages count: \(chatMessages.count)")
@@ -214,13 +219,23 @@ struct NativeChatViewModel {
                 return .none
 
             case .receiveMessage(let message):
-                // Skip duplicate messages
-                if state.receivedMessageIds.contains(message.id) {
-                    logger.log("SMAlog: duplicate message skipped: \(message.id)")
-                    return .none
+                // Check if this is an update to existing message or new message
+                if let existingIndex = state.messages.firstIndex(where: { $0.id == message.id }) {
+                    // Update existing message
+                    var existingMessage = state.messages[existingIndex]
+                    existingMessage.text = message.text
+                    existingMessage.state = message.state
+                    state.messages[existingIndex] = existingMessage
+                    logger.log("SMAlog: updated existing message: \(message.id), state: \(message.state)")
+                } else {
+                    // New message
+                    state.messages.append(message)
+                    logger.log("SMAlog: added new message: \(message.id), state: \(message.state)")
                 }
-                state.messages.append(message)
-                state.receivedMessageIds.insert(message.id)
+                // When state is final, message reception is complete - reset sending state
+                if message.state == "final" {
+                    return .send(.setSending(false))
+                }
                 return .none
 
             case .setError(let error):
@@ -235,26 +250,20 @@ struct NativeChatViewModel {
 
             case .updateStreamingText(let text):
                 state.streamingText = text
-                // When we get streaming text, update the last assistant message or create one
                 return .none
 
             case .clearStreamingText:
                 state.streamingText = ""
                 return .none
-
-            case .clearReceivedMessageIds:
-                state.receivedMessageIds.removeAll()
-                return .none
             }
         }
     }
 
-    private func handleEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
+    private func handleChatEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
         switch event {
         case .chat(let payload):
-            logger.log("SMAlog: chat event received")
+            logger.log("SMAlog: chat event - state: \(payload.state ?? "nil")")
             if let msgAny = payload.message {
-                // Decode AnyCodable to OpenClawChatMessage
                 guard let data = try? JSONEncoder().encode(msgAny),
                       let chatMsg = try? JSONDecoder().decode(OpenClawChatMessage.self, from: data) else {
                     logger.log("SMAlog: failed to decode chat message")
@@ -268,45 +277,25 @@ struct NativeChatViewModel {
                         break
                     }
                 }
-                if !text.isEmpty {
+                if !text.isEmpty || !isOutgoing {
                     let message = ChatMessage(
                         id: chatMsg.id.uuidString,
                         text: text,
                         isOutgoing: isOutgoing,
-                        timestamp: Date(timeIntervalSince1970: (chatMsg.timestamp ?? 0) / 1000)
+                        timestamp: Date(timeIntervalSince1970: (chatMsg.timestamp ?? 0) / 1000),
+                        role: chatMsg.role,
+                        state: payload.state ?? "in_progress",
+                        runId: payload.runId,
+                        toolCallId: chatMsg.toolCallId,
+                        toolName: chatMsg.toolName,
+                        stopReason: chatMsg.stopReason
                     )
                     await send(.receiveMessage(message))
                 }
             }
-        case .sessionMessage(let payload):
-            logger.log("SMAlog: sessionMessage event received")
-            if let msg = payload.message {
-                let isOutgoing = msg.role.lowercased() == "user"
-                var text = ""
-                for contentItem in msg.content {
-                    if let t = contentItem.text, !t.isEmpty {
-                        text = t
-                        break
-                    }
-                }
-                if !text.isEmpty {
-                    let message = ChatMessage(
-                        id: msg.id.uuidString,
-                        text: text,
-                        isOutgoing: isOutgoing,
-                        timestamp: Date(timeIntervalSince1970: (msg.timestamp ?? 0) / 1000)
-                    )
-                    await send(.receiveMessage(message))
-                }
-            }
-        case .agent(let payload):
-            logger.log("SMAlog: agent event - stream: \(payload.stream)")
-        case .tick:
+        case .sessionMessage, .agent, .tick, .health, .seqGap:
+            // Ignored - only handle .chat events
             break
-        case .health(let ok):
-            logger.log("SMAlog: health check: \(ok)")
-        case .seqGap:
-            logger.log("SMAlog: seqGap event")
         }
     }
 }
