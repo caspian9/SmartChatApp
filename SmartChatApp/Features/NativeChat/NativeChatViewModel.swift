@@ -19,17 +19,6 @@ struct NativeChatViewModel {
         var error: String?
         var isRestoringFromCache: Bool = false
         var needsScrollToBottom: Bool = false
-
-        init() {
-            // Pre-load from cache on init
-            if let cached = SessionCache.load(), !cached.isEmpty {
-                self.sessions = cached
-                if let first = cached.first {
-                    self.selectedSession = first
-                    self.isRestoringFromCache = true
-                }
-            }
-        }
     }
 
     enum Action: Equatable {
@@ -56,25 +45,20 @@ struct NativeChatViewModel {
             switch action {
             case .loadSessions:
                 let sessionKeyPreview = state.selectedSession != nil ? String(state.selectedSession!.key.prefix(8)) : "nil"
-                logger.log("SMAlog: loadSessions called, current selectedSession: \(sessionKeyPreview)")
                 // Check if we need to load from cache first
                 if state.selectedSession == nil {
                     // First load from cache
                     if let cached = SessionCache.load(), !cached.isEmpty {
-                        logger.log("SMAlog: Loaded \(cached.count) cached sessions")
                         state.sessions = cached
                         state.isRestoringFromCache = true
                         if let first = cached.first {
                             state.selectedSession = first
-                            logger.log("SMAlog: Auto-selected first session: \(String(first.key.prefix(12)))")
                             return .send(.loadHistory)
                         }
                         state.isRestoringFromCache = false
                     } else {
-                        logger.log("SMAlog: No cached sessions found")
                     }
                 } else {
-                    logger.log("SMAlog: selectedSession already set, will load history")
                     return .send(.loadHistory)
                 }
                 // Always fetch from network to get latest sessions
@@ -89,10 +73,8 @@ struct NativeChatViewModel {
                             try await Task.sleep(for: .milliseconds(100))
                             let transport = await SessionManager.shared.makeTransport(sessionKey: "")
                             let response = try await transport.listSessions(limit: 50)
-                            logger.log("SMAlog: Loaded \(response.sessions.count) sessions")
                             await send(.loadedSessions(response.sessions))
                         } catch {
-                            logger.log("SMAlog: Load sessions error: \(error.localizedDescription)")
                             // Retry once after a short delay
                             try? await Task.sleep(for: .milliseconds(500))
                             do {
@@ -101,7 +83,6 @@ struct NativeChatViewModel {
                                 let response = try await transport.listSessions(limit: 50)
                                 await send(.loadedSessions(response.sessions))
                             } catch {
-                                logger.log("SMAlog: Load sessions retry failed: \(error.localizedDescription)")
                                 await send(.loadedSessions([]))
                             }
                         }
@@ -114,11 +95,9 @@ struct NativeChatViewModel {
                 SessionCache.save(sessions)
                 if let first = sessions.first {
                     let firstKeyPreview = String(first.key.prefix(12))
-                    logger.log("SMAlog: first session key: \(firstKeyPreview), surface: \(first.surface ?? "nil")")
                 }
                 if state.selectedSession == nil, let first = sessions.first {
                     state.selectedSession = first
-                    logger.log("SMAlog: auto-selected session: \(String(first.key.prefix(12)))")
                     return .send(.loadHistory)
                 }
                 return .none
@@ -135,18 +114,15 @@ struct NativeChatViewModel {
                         do {
                             try await SessionManager.shared.ensureConnected()
                             let sessionKey = try await SessionManager.shared.createSession()
-                            logger.log("SMAlog: Created session: \(String(sessionKey))")
                             await send(.sessionCreated(sessionKey))
                             await send(.loadSessions)
                         } catch {
-                            logger.log("SMAlog: Create session error: \(error.localizedDescription)")
                             await send(.setError(error.localizedDescription))
                         }
                     }
                 }
 
             case .sessionCreated(let sessionKey):
-                logger.log("SMAlog: Session created callback: \(sessionKey)")
                 return .none
 
             case .updateInputText(let text):
@@ -214,9 +190,7 @@ struct NativeChatViewModel {
                                 idempotencyKey: UUID().uuidString,
                                 attachments: []
                             )
-                            logger.log("SMAlog: Message sent, waiting for response...")
                         } catch {
-                            logger.log("SMAlog: Send message error: \(error.localizedDescription)")
                             await send(.setError(error.localizedDescription))
                             await send(.setSending(false))
                         }
@@ -259,7 +233,6 @@ struct NativeChatViewModel {
                                     stopReason: msg.stopReason
                                 )
                             }
-                            logger.log("SMAlog: Loaded \(chatMessages.count) cached messages for session: \(sessionKeyPreview)")
                             await send(.loadedCachedHistory(chatMessages))
                         }
 
@@ -272,15 +245,12 @@ struct NativeChatViewModel {
                             // Check if this is still the current session before updating UI
                             guard let currentSession = await SessionManager.shared.getCurrentSessionKey(),
                                   currentSession == sessionKey else {
-                                logger.log("SMAlog: Session changed, discarding history for: \(sessionKeyPreview)")
                                 return
                             }
 
                             let messageCount = history.messages?.count ?? 0
-                            logger.log("SMAlog: Loaded \(messageCount) history messages for session: \(sessionKeyPreview)")
                             let chatMessages: [ChatMessage] = (history.messages ?? []).enumerated().compactMap { index, anyCodable -> ChatMessage? in
                                 guard let msg = try? JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(anyCodable)) else {
-                                    logger.log("SMAlog: message[\(index)] failed to decode as OpenClawChatMessage")
                                     return nil
                                 }
                                 var text = ""
@@ -311,31 +281,26 @@ struct NativeChatViewModel {
                                     stopReason: msg.stopReason
                                 )
                             }
-                            logger.log("SMAlog: chatMessages count: \(chatMessages.count)")
                             // Cache the fetched messages
                             let openClawMessages = chatMessages.compactMap { createOpenClawChatMessage(from: $0) }
                             await MessageCache.shared.setMessages(openClawMessages, for: sessionKey)
                             await send(.loadedHistory(chatMessages))
                         } catch {
-                            logger.log("SMAlog: Load history error: \(error.localizedDescription)")
                         }
                     }
                 }
 
             case .loadedCachedHistory(let messages):
                 let isRestoring = state.isRestoringFromCache
-                logger.log("SMAlog: loadedCachedHistory - \(messages.count) messages, isRestoringFromCache: \(isRestoring)")
+                let msgCount = messages.count
                 state.messages = messages
-                // Scroll to bottom after cached messages are loaded (for session switch)
-                if isRestoring {
-                    state.isRestoringFromCache = false
-                    state.needsScrollToBottom = true
-                }
+                state.isRestoringFromCache = false
+                state.needsScrollToBottom = true
+                let currentCount = state.messages.count
                 return .none
 
             case .loadedHistory(let messages):
                 let needsScroll = state.needsScrollToBottom
-                logger.log("SMAlog: loadedHistory - \(messages.count) messages, needsScrollToBottom: \(needsScroll)")
                 if needsScroll {
                     state.needsScrollToBottom = false
                 }
@@ -358,11 +323,9 @@ struct NativeChatViewModel {
                     if message.livenessState != nil { existingMessage.livenessState = message.livenessState }
                     if message.seq != nil { existingMessage.seq = message.seq }
                     state.messages[existingIndex] = existingMessage
-                    logger.log("SMAlog: updated message: \(message.id), text length: \(existingMessage.text.count), state: \(message.state)")
                 } else {
                     // New message
                     state.messages.append(message)
-                    logger.log("SMAlog: added new message: \(message.id), state: \(message.state)")
                 }
                 // When state is final, message reception is complete - reset sending state
                 if message.state == "final" {
@@ -411,7 +374,6 @@ struct NativeChatViewModel {
     private func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
         switch event {
         case .agent(let payload):
-            logger.log("SMAlog: agent event - stream: \(payload.stream), runId: \(payload.runId)")
             let runId = payload.runId
             let ts = payload.ts ?? 0
             let timestamp = Date(timeIntervalSince1970: Double(ts) / 1000)
@@ -442,7 +404,6 @@ struct NativeChatViewModel {
                     stopReason: nil
                 )
                 await send(.receiveMessage(message))
-                logger.log("SMAlog: agent start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)")
             } else if phase == "end" {
                 // End of run
                 let message = ChatMessage(
@@ -461,7 +422,6 @@ struct NativeChatViewModel {
                     stopReason: nil
                 )
                 await send(.receiveMessage(message))
-                logger.log("SMAlog: agent end - runId: \(runId), seq: \(seq ?? -1), endedAt: \(endedAtMs)")
                 // Reset sending state when run ends
                 await send(.setSending(false))
             } else {
@@ -485,7 +445,6 @@ struct NativeChatViewModel {
                         stopReason: nil
                     )
                     await send(.receiveMessage(message))
-                    logger.log("SMAlog: agent text - runId: \(runId), seq: \(seq ?? -1), text length: \(text.count)")
                 }
             }
 

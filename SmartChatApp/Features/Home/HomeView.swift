@@ -100,11 +100,7 @@ struct HomeView: View {
             ChatListView()
         }
         .navigationDestination(isPresented: $showNativeChat) {
-            NativeChatView(
-                store: StoreOf<NativeChatViewModel>(initialState: NativeChatViewModel.State()) {
-                    NativeChatViewModel()
-                }
-            )
+            NativeChatView()
         }
         .navigationDestination(isPresented: $showSettings) {
             SettingsView()
