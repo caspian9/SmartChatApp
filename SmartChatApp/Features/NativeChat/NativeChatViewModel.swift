@@ -18,6 +18,7 @@ struct NativeChatViewModel {
         var isSending: Bool = false
         var error: String?
         var streamingText: String = ""
+        var streamingMessageId: String?
     }
 
     enum Action: Equatable {
@@ -35,6 +36,7 @@ struct NativeChatViewModel {
         case setSending(Bool)
         case updateStreamingText(String)
         case clearStreamingText
+        case setStreamingMessageId(String?)
     }
 
     @Dependency(\.continuousClock) var clock
@@ -115,14 +117,17 @@ struct NativeChatViewModel {
                 state.isSending = true
                 let text = state.inputText
                 let sessionKey = session.key
+                let messageId = UUID().uuidString
                 let message = ChatMessage(
-                    id: UUID().uuidString,
+                    id: messageId,
                     text: text,
                     isOutgoing: true,
                     timestamp: Date()
                 )
                 state.messages.append(message)
                 state.inputText = ""
+                state.streamingMessageId = nil
+                state.streamingText = ""
                 // Start listening for events before sending
                 return .run { send in
                     Task {
@@ -234,6 +239,10 @@ struct NativeChatViewModel {
             case .clearStreamingText:
                 state.streamingText = ""
                 return .none
+
+            case .setStreamingMessageId(let id):
+                state.streamingMessageId = id
+                return .none
             }
         }
     }
@@ -243,7 +252,6 @@ struct NativeChatViewModel {
         case .chat(let payload):
             logger.log("SMAlog: chat event received")
             if let msgAny = payload.message {
-                // Decode AnyCodable to OpenClawChatMessage
                 guard let data = try? JSONEncoder().encode(msgAny),
                       let chatMsg = try? JSONDecoder().decode(OpenClawChatMessage.self, from: data) else {
                     logger.log("SMAlog: failed to decode chat message")
@@ -290,6 +298,10 @@ struct NativeChatViewModel {
             }
         case .agent(let payload):
             logger.log("SMAlog: agent event - stream: \(payload.stream)")
+            // Handle streaming text from agent events - append to streamingText
+            if payload.stream == "assistant", let text = payload.data["text"]?.value as? String {
+                await send(.updateStreamingText(text))
+            }
         case .tick:
             break
         case .health(let ok):
