@@ -27,6 +27,17 @@ struct MessageBubbleView: View {
                             .foregroundColor(theme.textSecondary)
                     }
 
+                    // ToolResult badge
+                    if message.role == "toolResult" {
+                        Text("ToolResult")
+                            .font(.caption2)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.purple)
+                            .cornerRadius(4)
+                    }
+
                     if let startedAt = message.startedAt {
                         Text(formatTime(startedAt))
                             .font(.caption2)
@@ -131,9 +142,15 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var messageText: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if shouldRenderMarkdown {
+            if shouldRenderMarkdown && message.role != "toolResult" {
                 MarkdownCardView(content: message.text)
                     .frame(minHeight: 30)
+            } else if message.role == "toolResult" {
+                Text(formatJsonText(message.text))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+                    .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(message.text)
                     .font(.body)
@@ -185,6 +202,16 @@ struct MessageBubbleView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: timestamp)
+    }
+
+    private func formatJsonText(_ text: String) -> String {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data),
+              let prettyData = try? JSONSerialization.data(withJSONObject: json, options: .prettyPrinted),
+              let prettyString = String(data: prettyData, encoding: .utf8) else {
+            return text
+        }
+        return prettyString
     }
 }
 

@@ -3,8 +3,10 @@ import Foundation
 import OpenClawChatUI
 import OSLog
 import OpenClawKit
+import os
 
 private let logger = Logger(subsystem: "SmartChatApp", category: "NativeChatViewModel")
+private let osLog = OSLog(subsystem: "SmartChatApp.NativeChatViewModel", category: "debug")
 
 private let lastSelectedSessionKey = "lastSelectedSessionKey"
 
@@ -174,6 +176,8 @@ struct NativeChatViewModel {
                 state.isSending = true
                 let text = state.inputText
                 let sessionKey = session.key
+                let textPreview = String(text.prefix(100))
+                print("SMAlog: sendMessage role=user text_len=\(text.count) text_preview=\(textPreview)")
                 let message = ChatMessage(
                     id: UUID().uuidString,
                     text: text,
@@ -301,7 +305,7 @@ struct NativeChatViewModel {
                             logger.log("SMAlog: Loaded \(messageCount) history messages for session: \(sessionKeyPreview)")
                             let chatMessages: [ChatMessage] = (history.messages ?? []).enumerated().compactMap { index, anyCodable -> ChatMessage? in
                                 guard let msg = try? JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(anyCodable)) else {
-                                    logger.log("SMAlog: message[\(index)] failed to decode as OpenClawChatMessage")
+                                    print("SMAlog: message[\(index)] failed to decode as OpenClawChatMessage, raw: \(String(describing: anyCodable))")
                                     return nil
                                 }
                                 var text = ""
@@ -311,11 +315,15 @@ struct NativeChatViewModel {
                                         break
                                     }
                                 }
+                                os_log("SMAlog: history msg[%{public}d] contentItems=%{public}d text_len=%{private}d", log: osLog, type: .debug, index, msg.content.count, text.count)
                                 if text.isEmpty {
+                                    os_log("SMAlog: history msg[%{public}d] skipped - empty text, content: %{public}s", log: osLog, type: .debug, index, String(describing: msg.content))
                                     return nil
                                 }
                                 let ts = msg.timestamp ?? 0
                                 let msgId = msg.id.uuidString
+                                let textPreview = String(text.prefix(100))
+                                os_log("SMAlog: history msg[%{public}d] role=%{public}s toolName=%{public}s toolCallId=%{public}s text_len=%{public}s text_preview=%{public}s", log: osLog, type: .debug, index, msg.role, msg.toolName ?? "nil", msg.toolCallId ?? "nil", "\(text.count)", textPreview)
                                 return ChatMessage(
                                     id: msgId,
                                     text: text,
