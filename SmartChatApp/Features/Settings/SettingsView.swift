@@ -31,7 +31,7 @@ struct SettingsView: View {
 
     private func binding<T>(for keyPath: WritableKeyPath<SettingsFeature.State, T>) -> Binding<T> {
         Binding(
-            get: { store.state[keyPath: keyPath] },
+            get: { store[keyPath: keyPath] },
             set: { newValue in
                 if keyPath == \.serverURL {
                     store.send(.serverURLChanged(newValue as! String))
