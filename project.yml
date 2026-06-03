@@ -22,7 +22,8 @@ packages:
     from: "1.9.3"
   OpenClawKit:
     url: https://github.com/caspian9/openclaw
-    from: "1.0.0"
+    branch: main
+    subpath: apps/shared/OpenClawKit
 
 targets:
   SmartChatApp:
