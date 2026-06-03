@@ -24,8 +24,16 @@ struct MessageBubbleView: View {
     @State private var lastTextForMarkdown: String = ""
     @State private var lastMarkdownState: Bool = false
 
-    private let maxCollapsedLines: Int = 4
+    private let maxCollapsedLines: Int = 8
     private let maxCollapsedHeight: CGFloat = 150
+
+    private func truncateToLines(_ text: String, maxLines: Int) -> String {
+        let lines = text.components(separatedBy: "\n")
+        if lines.count <= maxLines {
+            return text
+        }
+        return lines.prefix(maxLines).joined(separator: "\n")
+    }
 
     private func updateCollapseCache() {
         if lastTextForCollapse != message.text {
@@ -226,8 +234,6 @@ struct MessageBubbleView: View {
             let shouldMd = shouldRenderMarkdown
             if shouldMd {
                 MarkdownCardView(content: message.text)
-                    .frame(maxWidth: .infinity, maxHeight: shouldCollapse && !isExpanded ? CGFloat(maxCollapsedLines * 55) : .infinity, alignment: .topLeading)
-                    .clipped()
             } else if message.role == "thinking" {
                 ThinkingCardView(content: message.text)
                     .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
@@ -268,7 +274,11 @@ struct MessageBubbleView: View {
     }
 
     private var shouldCollapse: Bool {
-        CollapseStateCache.shared.shouldCollapse(for: message)
+        // Assistant + Markdown messages don't collapse, show fully
+        if message.role == "assistant" && shouldRenderMarkdown {
+            return false
+        }
+        return CollapseStateCache.shared.shouldCollapse(for: message)
     }
 
     private var safeHeight: CGFloat {
