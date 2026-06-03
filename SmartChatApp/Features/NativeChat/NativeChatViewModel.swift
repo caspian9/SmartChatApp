@@ -160,7 +160,8 @@ struct NativeChatViewModel {
                 state.selectedSession = session
 
                 // Only clear messages if switching to a different session
-                if previousKey != session.key {
+                let didSwitch = previousKey != session.key
+                if didSwitch {
                     state.messages = []
                     state.isRestoringFromCache = true
                 }
@@ -170,6 +171,14 @@ struct NativeChatViewModel {
                     UserDefaults.standard.set(session.key, forKey: lastSelectedSessionKey(for: profileId))
                 }
                 logger.log("SMAlog: saved selected session: \(String(session.key.prefix(12)))")
+                if didSwitch {
+                    return .run { _ in
+                        await MainActor.run {
+                            MarkdownStreamManager.shared.releaseAll()
+                        }
+                    }
+                    .merge(with: .send(.loadHistory))
+                }
                 return .send(.loadHistory)
 
             case .switchProfile(let newProfileId):
@@ -207,6 +216,10 @@ struct NativeChatViewModel {
                 let hadCache = hasCache
                 return .run { send in
                     Task {
+                        // Release any active stream holders from the previous profile/session
+                        await MainActor.run {
+                            MarkdownStreamManager.shared.releaseAll()
+                        }
                         // If we have a cached session selected, kick off history load
                         // so the chat panel isn't empty while we wait for the network switch
                         if hadCache {
@@ -751,6 +764,11 @@ struct NativeChatViewModel {
             if phase == "start" {
                 // Start of a new run
                 logger.log("SMAlog: agent start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs), data keys: \(data.keys.map { $0 })")
+                // Pre-register stream holder so the view can begin streaming as text arrives
+                await MainActor.run {
+                    MarkdownStreamManager.shared.holder(for: runId)
+                    MarkdownCache.shared.setNeedsMarkdown(runId, value: true)
+                }
                 let message = ChatMessage(
                     id: runId,
                     text: "",
@@ -819,6 +837,10 @@ struct NativeChatViewModel {
                 )
                 await send(.receiveMessage(message))
                 logger.log("SMAlog: agent end - runId: \(runId), seq: \(seq ?? -1), endedAt: \(endedAtMs)")
+                // Finalize the markdown stream so the buffered content is rendered
+                await MainActor.run {
+                    MarkdownStreamManager.shared.end(messageId: runId)
+                }
                 // Reset sending state when run ends
                 await send(.setSending(false))
             } else {
@@ -827,6 +849,9 @@ struct NativeChatViewModel {
 
                 logger.log("SMAlog: agent delta - text len: \(text.count), phase: \(phase ?? "nil"), data keys: \(data.keys.map { $0 })")
                 if !text.isEmpty {
+                    await MainActor.run {
+                        MarkdownStreamManager.shared.append(messageId: runId, chunk: text)
+                    }
                     let message = ChatMessage(
                         id: runId,
                         text: text,

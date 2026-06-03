@@ -231,27 +231,37 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var messageText: some View {
         VStack(alignment: .leading, spacing: 4) {
-            let shouldMd = shouldRenderMarkdown
-            if shouldMd {
-                MarkdownCardView(content: message.text)
-            } else if message.role == "thinking" {
-                ThinkingCardView(content: message.text)
-                    .lineLimit(collapseLineLimit)
-            } else if message.role == "toolResult" {
-                Text(formatJsonText(message.text))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                    .lineLimit(collapseLineLimit)
-            } else if message.role == "toolCall" {
-                Text(message.text)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                    .lineLimit(collapseLineLimit)
+            if isAssistantStreaming {
+                if #available(iOS 15.0, *) {
+                    StreamingMarkdownCardView(messageId: message.id, content: message.text)
+                } else {
+                    Text(message.text)
+                        .font(.body)
+                        .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+                }
             } else {
-                Text(message.text)
-                    .font(.body)
-                    .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                    .lineLimit(collapseLineLimit)
+                let shouldMd = shouldRenderMarkdown
+                if shouldMd {
+                    MarkdownCardView(content: message.text)
+                } else if message.role == "thinking" {
+                    ThinkingCardView(content: message.text)
+                        .lineLimit(collapseLineLimit)
+                } else if message.role == "toolResult" {
+                    Text(formatJsonText(message.text))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+                        .lineLimit(collapseLineLimit)
+                } else if message.role == "toolCall" {
+                    Text(message.text)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+                        .lineLimit(collapseLineLimit)
+                } else {
+                    Text(message.text)
+                        .font(.body)
+                        .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+                        .lineLimit(collapseLineLimit)
+                }
             }
 
             if shouldCollapse && !isExpanded && message.state != "streaming" {
@@ -265,6 +275,12 @@ struct MessageBubbleView: View {
                 .padding(.top, 4)
             }
         }
+    }
+
+    /// Streaming assistant message: route to real streaming markdown view.
+    /// Markdown plain text is also fine here (MarkdownViewTextKit renders plain text).
+    private var isAssistantStreaming: Bool {
+        message.state == "streaming" && !message.isOutgoing && message.role == "assistant"
     }
 
     private var collapseLineLimit: Int? {

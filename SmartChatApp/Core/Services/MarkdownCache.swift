@@ -28,6 +28,11 @@ final class MarkdownCache: @unchecked Sendable {
     }
 
     @MainActor
+    func setNeedsMarkdown(_ messageId: String, value: Bool = true) {
+        cache[messageId] = value
+    }
+
+    @MainActor
     func clear() {
         cache.removeAll()
     }
