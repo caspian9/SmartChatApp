@@ -16,6 +16,17 @@ struct ProfileEditSheet: View {
 
     private let colorOptions = ["#10A37F", "#3B82F6", "#F97316", "#EF4444", "#8B5CF6"]
 
+    private func colorName(for hex: String) -> String {
+        switch hex {
+        case "#10A37F": return "green"
+        case "#3B82F6": return "blue"
+        case "#F97316": return "orange"
+        case "#EF4444": return "red"
+        case "#8B5CF6": return "purple"
+        default: return "custom"
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -34,6 +45,7 @@ struct ProfileEditSheet: View {
                                     Circle()
                                         .stroke(colorTag == color ? Color.primary : Color.clear, lineWidth: 2)
                                 )
+                                .accessibilityLabel(colorName(for: color))
                                 .onTapGesture {
                                     colorTag = color
                                 }
@@ -45,6 +57,7 @@ struct ProfileEditSheet: View {
                     TextField("Host", text: $host)
                         .foregroundColor(theme.textPrimary)
                         .keyboardType(.URL)
+                        .textContentType(.URL)
                         .autocapitalization(.none)
 
                     TextField("Port", text: $port)
@@ -87,6 +100,7 @@ struct ProfileEditSheet: View {
                     tlsEnabled = profile.tlsEnabled
                 }
             }
+            .scrollDismissesKeyboard(.immediately)
         }
     }
 }
