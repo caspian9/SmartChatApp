@@ -69,19 +69,42 @@ struct MarkdownText: View {
     let text: String
     let isOutgoing: Bool
 
+    private var isLikelyMarkdown: Bool {
+        // Check for common markdown patterns
+        let patterns = ["# ", "## ", "### ", "```", "**", "__", "* ", "- ", "| ", "```"]
+        for pattern in patterns {
+            if text.contains(pattern) {
+                return true
+            }
+        }
+        return false
+    }
+
     var body: some View {
-        if let attributedString = try? AttributedString(markdown: text, options: AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )) {
-            Text(attributedString)
-                .font(.body)
-                .foregroundColor(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
-                .cornerRadius(12)
+        if isLikelyMarkdown {
+            // Try full markdown parsing for block-level elements
+            if let attributedString = try? AttributedString(markdown: text, options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .full
+            )) {
+                Text(attributedString)
+                    .font(.body)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
+                    .cornerRadius(12)
+            } else {
+                // Fallback to plain text
+                Text(text)
+                    .font(.body)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
+                    .cornerRadius(12)
+            }
         } else {
-            // Fallback to plain text if markdown parsing fails
+            // Plain text - no markdown parsing needed
             Text(text)
                 .font(.body)
                 .foregroundColor(.white)
