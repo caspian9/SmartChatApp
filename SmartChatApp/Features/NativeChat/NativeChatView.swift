@@ -11,21 +11,22 @@ struct NativeChatView: View {
                     sessions: store.sessions,
                     selectedSession: Binding(
                         get: { store.selectedSession },
-                        set: { if let s = $0 { store.send(.selectSession(s)) } }
+                        set: { newValue in
+                            if let s = newValue {
+                                store.send(.selectSession(s))
+                            }
+                        }
                     )
                 )
             }
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(store.messages) { message in
-                            MessageBubbleView(message: message)
-                                .id(message.id)
-                        }
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(store.messages) { message in
+                        MessageBubbleView(message: message)
                     }
-                    .padding(.vertical, 8)
                 }
+                .padding(.vertical, 8)
             }
 
             ChatInputView(
