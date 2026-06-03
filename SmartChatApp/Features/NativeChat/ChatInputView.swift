@@ -7,14 +7,23 @@ struct ChatInputView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            TextField("输入消息...", text: $inputText)
-                .textFieldStyle(PlainTextFieldStyle())
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(hex: "2A2A2A"))
-                .cornerRadius(20)
-                .foregroundColor(.white)
-                .disabled(isSending)
+            ZStack(alignment: .leading) {
+                if inputText.isEmpty {
+                    Text("输入消息...")
+                        .foregroundColor(.gray)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                }
+                TextEditor(text: $inputText)
+                    .scrollContentBackground(.hidden)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .foregroundColor(.white)
+                    .frame(minHeight: 36, maxHeight: 100)
+                    .disabled(isSending)
+            }
+            .background(Color(hex: "2A2A2A"))
+            .cornerRadius(20)
 
             if isSending {
                 ProgressView()
