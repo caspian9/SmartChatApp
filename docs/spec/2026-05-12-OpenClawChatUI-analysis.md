@@ -143,101 +143,49 @@ extension OpenClawChatMessage {
 ## Sealed Components (Cannot Extend)
 
 | Component | Reason |
-|-----------|--------|
-| `OpenClawChatViewModel` | `open class` (can inherit) |
-| `handleAgentEvent(_:)` | `open func` (can override) |
-| `streamingAssistantText` | `public` (can write) |
+|-----------|-------|
+| `OpenClawChatViewModel` | `final class` — cannot subclass |
+| `OpenClawChatView` | `struct` — not inheritable |
+| `handleAgentEvent(_:)` | `private` — cannot override |
+| `streamingAssistantText` | `private(set)` — cannot write externally |
 | `pendingToolCallsById` | `private` |
 | All View structs | `struct` (not inheritable) |
 | `ChatComposerNSTextView` | `private final` |
 | `ChatMarkdownStyle` | `private` |
 
-## Streaming Implementation Issue
+**Workaround:** Copy `ChatViewModel.swift` locally and modify directly (see Streaming Implementation section).
+
+## Streaming Implementation
 
 ### Problem
 
-The `handleAgentEvent` method ignores the `delta` field, causing streaming text to appear all at once:
+The `handleAgentEvent` method in `OpenClawChatViewModel` only uses `text` field (full content), ignoring `delta` field. This causes streaming text to appear all at once instead of incrementally.
 
-```swift
-// Current implementation (line ~1194)
-case "assistant":
-    if let text = evt.data["text"]?.value as? String {
-        self.streamingAssistantText = text  // Uses full text, ignores delta
-    }
-```
-
-### Server sends both `text` (full) and `delta` (incremental)
+### Server sends both fields
 
 ```
 agent data: {
-    "text": "完整的累积内容...",
+    "text": "完整累积内容...",
     "delta": "本次新增的增量内容..."
 }
 ```
 
-### Fix Required
+### Solution: Local Copy of ChatViewModel
 
-Change to use `delta` for incremental updates:
+**Status: On Hold (暂存)**
 
-```swift
-case "assistant":
-    if let delta = evt.data["delta"]?.value as? String {
-        self.streamingAssistantText = (self.streamingAssistantText ?? "") + delta
-    } else if let text = evt.data["text"]?.value as? String {
-        self.streamingAssistantText = text
-    }
-```
+The attempt to copy `ChatViewModel.swift` locally and modify `handleAgentEvent` was unsuccessful. The following issues were encountered:
 
-## OpenClawKit Modifications Log
+1. **ChatViewModel.swift alone is insufficient** - It depends on OpenClawKit types (`OpenClawChatMessage`, `OpenClawChatTransport`, etc.) that are imported from OpenClawKit
+2. **ChatView.swift cannot be copied locally** - It depends on `internal` components (`OpenClawChatTheme`, `OpenClawChatComposer`, etc.) that are not accessible outside OpenClawKit
+3. **Struct inheritance is not possible** - `OpenClawChatView` is a `struct`, cannot be subclassed
 
-### 2026-05-12
+**Current Status:**
+- SmartChatApp uses standard OpenClawKit directly (standard mode)
+- OpenClawKit is NOT modified
+- Delta streaming issue is **on hold**
 
-**File:** `OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift`
-
-**Changes (Minimal - Only what's necessary):**
-
-1. **Removed `final` and added `open`** (line ~18)
-   - Before: `public final class OpenClawChatViewModel`
-   - After: `open class OpenClawChatViewModel`
-   - Reason: Allow subclassing for custom streaming behavior
-
-2. **Made `streamingAssistantText` writable** (line ~37)
-   - Before: `public private(set) var streamingAssistantText: String?`
-   - After: `public var streamingAssistantText: String?`
-   - Reason: Allow subclass to update streaming text for delta-based streaming
-
-3. **Changed `handleAgentEvent` to `open func`** (line ~1187)
-   - Before: `private func handleAgentEvent(_ evt: OpenClawAgentEventPayload)`
-   - After: `open func handleAgentEvent(_ evt: OpenClawAgentEventPayload)`
-   - Reason: Allow subclass to override and handle delta-based streaming
-
-**Files modified:**
-- `/Users/hai/Code/openclaw/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift`
-
-**Build status:** BUILD SUCCEEDED
-
-**Delta-based streaming implementation:**
-
-Streaming fix is implemented in local `ChatViewModel.swift` (SmartChatApp), NOT in OpenClawKit base class:
-
-```swift
-// SmartChatApp/SmartChatApp/Features/Chat/ChatViewModel.swift
-public class ChatViewModel: OpenClawChatViewModel {
-    open override func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
-        if evt.stream == "assistant" {
-            if let delta = evt.data["delta"]?.value as? String {
-                self.streamingAssistantText = (self.streamingAssistantText ?? "") + delta
-            } else if let text = evt.data["text"]?.value as? String {
-                self.streamingAssistantText = text
-            }
-        } else {
-            super.handleAgentEvent(evt)
-        }
-    }
-}
-```
-
-This approach:
-- Keeps OpenClawKit base class minimal (only `open` modifiers and writable `streamingAssistantText`)
-- Allows SmartChatApp to use delta-based streaming
-- Other apps using OpenClawKit can still use the base class behavior
+**Future Options:**
+1. Modify `handleAgentEvent` directly in OpenClawKit (minimal change)
+2. Wait for upstream OpenClawKit to add delta support
+3. Explore alternative architecture if needed
