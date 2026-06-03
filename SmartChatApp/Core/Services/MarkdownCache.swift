@@ -11,11 +11,14 @@ final class MarkdownCache: @unchecked Sendable {
 
     @MainActor
     func precomputeForMessages(_ messages: [ChatMessage]) {
-        cache.removeAll()
+        // Incrementally update cache instead of clearing
         for msg in messages {
-            let isMarkdown = CardRegistry.containsMarkdown(content: msg.text)
-            let needsMarkdown = !msg.isOutgoing && !msg.text.isEmpty && isMarkdown
-            cache[msg.id] = needsMarkdown
+            if cache[msg.id] == nil {
+                // Only compute for messages not yet cached
+                let isMarkdown = CardRegistry.containsMarkdown(content: msg.text)
+                let needsMarkdown = !msg.isOutgoing && !msg.text.isEmpty && isMarkdown
+                cache[msg.id] = needsMarkdown
+            }
         }
     }
 
