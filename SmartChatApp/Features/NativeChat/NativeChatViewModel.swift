@@ -274,12 +274,12 @@ struct NativeChatViewModel {
 
             case .loadedCachedHistory(let messages):
                 state.messages = messages
-                state.isRestoringFromCache = false
+                // Don't reset isRestoringFromCache here - let network response handle it
                 return .none
 
             case .loadedHistory(let messages):
                 if state.isRestoringFromCache {
-                    // Don't scroll - user is already viewing cached messages
+                    // Merging network messages with cached - don't replace if same
                     state.isRestoringFromCache = false
                 }
                 state.messages = messages

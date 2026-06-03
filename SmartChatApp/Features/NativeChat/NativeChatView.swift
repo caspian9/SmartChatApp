@@ -33,8 +33,15 @@ struct NativeChatView: View {
                         }
                     }
                     .padding(.vertical, 8)
-                    .onChange(of: store.messages.count) { _ in
-                        if !store.isRestoringFromCache {
+                    .onChange(of: store.messages.count) { oldCount, newCount in
+                        // Only scroll when new messages are added, not when replacing cached with network data
+                        if !store.isRestoringFromCache && newCount > oldCount {
+                            scrollToBottom(proxy: proxy)
+                        }
+                    }
+                    .onChange(of: store.isRestoringFromCache) { wasRestoring, isRestoring in
+                        // When done restoring from cache, immediately scroll to bottom
+                        if wasRestoring && !isRestoring {
                             scrollToBottom(proxy: proxy)
                         }
                     }
