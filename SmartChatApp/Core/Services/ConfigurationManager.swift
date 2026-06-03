@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import OpenClawKit
 
 enum AppearanceTheme: String, CaseIterable {
     case system = "System"
@@ -29,6 +30,10 @@ final class ConfigurationManager: ObservableObject {
         static let deviceDisplayName = "openclaw_device_name"
         static let gatewayDebugLogs = "openclaw_gateway_debug"
         static let discoveryDebugLogs = "openclaw_discovery_debug"
+        static let cameraEnabled = "openclaw_camera_enabled"
+        static let locationEnabled = "openclaw_location_enabled"
+        static let voiceWakeEnabled = "openclaw_voice_wake_enabled"
+        static let locationMode = "openclaw_location_mode"
     }
 
     @Published var gatewayHost: String {
@@ -91,6 +96,30 @@ final class ConfigurationManager: ObservableObject {
         }
     }
 
+    @Published var cameraEnabled: Bool {
+        didSet {
+            defaults.set(cameraEnabled, forKey: Keys.cameraEnabled)
+        }
+    }
+
+    @Published var locationEnabled: Bool {
+        didSet {
+            defaults.set(locationEnabled, forKey: Keys.locationEnabled)
+        }
+    }
+
+    @Published var voiceWakeEnabled: Bool {
+        didSet {
+            defaults.set(voiceWakeEnabled, forKey: Keys.voiceWakeEnabled)
+        }
+    }
+
+    @Published var locationMode: OpenClawLocationMode {
+        didSet {
+            defaults.set(locationMode.rawValue, forKey: Keys.locationMode)
+        }
+    }
+
     private init() {
         self.gatewayHost = defaults.string(forKey: Keys.gatewayHost) ?? ""
 
@@ -121,6 +150,16 @@ final class ConfigurationManager: ObservableObject {
         self.deviceDisplayName = defaults.string(forKey: Keys.deviceDisplayName) ?? UIDevice.current.name
         self.gatewayDebugLogs = defaults.object(forKey: Keys.gatewayDebugLogs) as? Bool ?? false
         self.discoveryDebugLogs = defaults.object(forKey: Keys.discoveryDebugLogs) as? Bool ?? false
+        self.cameraEnabled = defaults.object(forKey: Keys.cameraEnabled) as? Bool ?? true
+        self.locationEnabled = defaults.object(forKey: Keys.locationEnabled) as? Bool ?? false
+        self.voiceWakeEnabled = defaults.object(forKey: Keys.voiceWakeEnabled) as? Bool ?? false
+
+        if let modeRaw = defaults.string(forKey: Keys.locationMode),
+           let mode = OpenClawLocationMode(rawValue: modeRaw) {
+            self.locationMode = mode
+        } else {
+            self.locationMode = .whileUsing
+        }
     }
 
     func clear() {
