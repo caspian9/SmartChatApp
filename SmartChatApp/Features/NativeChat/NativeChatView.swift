@@ -7,27 +7,14 @@ private let logger = Logger(subsystem: "SmartChatApp", category: "NativeChatView
 struct NativeChatView: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var profileManager = ProfileManager.shared
-    // Singleton store. Device logs show 5-10 NativeChatView inits and
-    // 3-5 onAppears per user entry, and the .run task's `send` closure
-    // (captured at .loadSessions dispatch time) lands on a deallocated
-    // store by the time the network returns 600ms later. With a per-view
-    // @StateObject the autoclosure fires once per view identity, so 5
-    // inits = 5 stores. By making the store static, every NativeChatView
-    // instance observes the same store, the captured `send` always
-    // targets a live store, and the .loadedSessions dispatch reliably
-    // reaches the reducer that the alive view is observing.
-    @StateObject private var store: StoreOf<NativeChatViewModel> = Self.sharedStore
+    @StateObject private var store = StoreOf<NativeChatViewModel>(initialState: NativeChatViewModel.State()) {
+        NativeChatViewModel()
+    }
     @FocusState private var isInputFocused: Bool
     @State private var isUserScrolling = false
     @State private var scrollToMessageId: String?
     @State private var triggerCount: Int = 0
     @State private var cacheLoadTriggerCount: Int = 0
-
-    private static let sharedStore = StoreOf<NativeChatViewModel>(
-        initialState: NativeChatViewModel.State()
-    ) {
-        NativeChatViewModel()
-    }
 
     init() {
         logger.log("SMAlog: NativeChatView init")
