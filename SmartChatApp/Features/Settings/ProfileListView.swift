@@ -6,21 +6,12 @@ struct ProfileListView: View {
     @State private var showDeleteAlert = false
     @State private var profileToDelete: GatewayProfile?
 
-    // Edit state
-    @State private var editingProfile: GatewayProfile?
-    @State private var isTesting = false
-    @State private var isConnected = false
-    @State private var testResult: String?
-    @State private var testStatus: TestStatus = .idle
-
-    enum TestStatus {
-        case idle, testing, success, failure
-    }
-
     @Binding var showNewProfileSheet: Bool
+    let onEditProfile: (GatewayProfile) -> Void
 
-    init(showNewProfileSheet: Binding<Bool> = .constant(false)) {
+    init(showNewProfileSheet: Binding<Bool> = .constant(false), onEditProfile: @escaping (GatewayProfile) -> Void = { _ in }) {
         _showNewProfileSheet = showNewProfileSheet
+        self.onEditProfile = onEditProfile
     }
 
     var body: some View {
@@ -29,18 +20,6 @@ struct ProfileListView: View {
                 emptyState
             } else {
                 profileList
-            }
-        }
-        .sheet(item: $editingProfile) { profile in
-            EditProfileSheet(profile: profile) { name, colorTag, host, port, token, tlsEnabled in
-                ProfileManager.shared.updateProfile(id: profile.id, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
-            } onDelete: { id in
-                ProfileManager.shared.deleteProfile(id: id)
-            }
-        }
-        .sheet(isPresented: $showNewProfileSheet) {
-            ProfileEditSheet(profile: nil) { name, colorTag, host, port, token, tlsEnabled in
-                _ = ProfileManager.shared.addProfile(name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
             }
         }
         .alert("Delete Profile", isPresented: $showDeleteAlert) {
@@ -110,7 +89,7 @@ struct ProfileListView: View {
                 .buttonStyle(.bordered)
 
                 Button {
-                    editingProfile = profile
+                    onEditProfile(profile)
                 } label: {
                     Image(systemName: "pencil")
                         .font(.caption)

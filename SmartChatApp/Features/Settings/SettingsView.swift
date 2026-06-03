@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(\.theme) private var theme
     @StateObject private var config = ConfigurationManager.shared
     @State private var showNewProfile = false
+    @State private var editingProfile: GatewayProfile?
     @State private var sessionCacheCount: Int = 0
     @State private var messageCacheStats: (sessionCount: Int, messageCount: Int) = (0, 0)
 
@@ -27,7 +28,9 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                ProfileListView(showNewProfileSheet: $showNewProfile)
+                ProfileListView(showNewProfileSheet: $showNewProfile) { profile in
+                    editingProfile = profile
+                }
 
                 DisclosureGroup("Advanced") {
                     Toggle("Gateway Debug Logs", isOn: $config.gatewayDebugLogs)
@@ -150,6 +153,18 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .sheet(isPresented: $showNewProfile) {
+            ProfileEditSheet(profile: nil) { name, colorTag, host, port, token, tlsEnabled in
+                _ = ProfileManager.shared.addProfile(name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+            }
+        }
+        .sheet(item: $editingProfile) { profile in
+            EditProfileSheet(profile: profile) { name, colorTag, host, port, token, tlsEnabled in
+                ProfileManager.shared.updateProfile(id: profile.id, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+            } onDelete: { id in
+                ProfileManager.shared.deleteProfile(id: id)
+            }
+        }
         .task {
             await SessionManager.shared.setDebugLoggingEnabled(config.gatewayDebugLogs)
             await SessionManager.shared.setDiscoveryDebugLoggingEnabled(config.discoveryDebugLogs)
