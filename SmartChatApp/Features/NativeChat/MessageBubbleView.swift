@@ -21,7 +21,6 @@ struct MessageBubbleView: View {
     @State private var cachedShouldCollapse: Bool = false
     @State private var cachedLineCount: Int = 0
     @State private var lastTextForCollapse: String = ""
-    @State private var cachedShouldRenderMarkdown: Bool = false
     @State private var lastTextForMarkdown: String = ""
 
     private let maxCollapsedLines: Int = 8
@@ -35,13 +34,15 @@ struct MessageBubbleView: View {
         }
         if lastTextForMarkdown != message.text {
             lastTextForMarkdown = message.text
-            cachedShouldRenderMarkdown = computeShouldRenderMarkdown()
         }
     }
 
-    private func computeShouldRenderMarkdown() -> Bool {
+    private var shouldRenderMarkdown: Bool {
         guard !message.isOutgoing && !message.text.isEmpty else { return false }
-        return CardRegistry.containsMarkdown(content: message.text)
+        guard message.role != "toolResult" && message.role != "thinking" else { return false }
+        return MainActor.assumeIsolated {
+            MarkdownCache.shared.needsMarkdown(for: message.id)
+        }
     }
 
     private func computeLineCount() -> Int {
@@ -217,7 +218,8 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var messageText: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if shouldRenderMarkdown && message.role != "toolResult" && message.role != "thinking" {
+            let shouldMd = shouldRenderMarkdown
+            if shouldMd {
                 MarkdownCardView(content: message.text)
                     .frame(minHeight: 30, alignment: .topLeading)
                     .background(
@@ -267,11 +269,6 @@ struct MessageBubbleView: View {
                 .padding(.top, 4)
             }
         }
-    }
-
-    private var shouldRenderMarkdown: Bool {
-        updateCollapseCache()
-        return cachedShouldRenderMarkdown
     }
 
     private var shouldShowExpandButton: Bool {
