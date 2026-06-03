@@ -1,0 +1,99 @@
+# Xcode
+build/
+*.pbxuser
+!*.pbxuser
+*.mode1v3
+!*.mode1v3
+*.mode2v3
+!*.mode2v3
+*.perspectivev3
+!*.perspectivev3
+xcuserdata
+*.xcworkspace
+!*.xcworkspace
+!default.xcworkspace
+!default.xcworkspace/
+project.xcworkspace
+!project.xcworkspace/
+*.xccheckout
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+Package.resolved
+*.xcodeproj
+!*.xcodeproj
+*.xcodeproj/
+
+# CocoaPods
+*.podspec
+Pods/
+!Pods/Podfile
+!Pods/Podfile.lock
+!Pods/*.xcodeproj
+!Pods/*.xcworkspace
+!Pods/build/
+
+# Carthage
+Carthage/Build/
+Carthage/Carthage.resolved
+
+# Arcadia
+*.xcodeproj.arcadia
+*.xcodeproj.arcadia.deprecated
+
+# Environment
+.env
+.env.local
+.env.*.local
+*.xcconfig
+!default.xcconfig
+
+# macOS
+.DS_Store
+*.pem
+!*.pem
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.~lock*
+
+# Logging
+*.log
+logs/
+*.trace
+
+# Test coverage
+coverage*.prof
+*.prof
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+
+# Snapshots
+*.xcresult
+*.xcresult Bundle
+!default.xcresult
+
+# Build results
+build/
+[Bb]uild/
+Build/
+build/
+Build/
