@@ -1,8 +1,11 @@
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @StateObject private var config = ConfigurationManager.shared
     @State private var showConnectionSheet = false
+    @State private var isConnected = false
+    @State private var connectedDeviceName = ""
 
     private var buildDateString: String {
         let formatter = DateFormatter()
@@ -24,8 +27,24 @@ struct SettingsView: View {
                 HStack {
                     Text("Status")
                     Spacer()
-                    Text(config.isConfigured ? "Configured" : "Not configured")
-                        .foregroundColor(config.isConfigured ? Color(hex: "10A37F") : .gray)
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(isConnected ? Color.green : Color.gray)
+                            .frame(width: 8, height: 8)
+                        Text(isConnected ? "Connected" : "Disconnected")
+                            .foregroundColor(isConnected ? Color(hex: "10A37F") : .gray)
+                    }
+                }
+
+                if isConnected {
+                    HStack {
+                        Text("Device ID")
+                        Spacer()
+                        Text(connectedDeviceName)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
 
                 Button("Configure Connection") {
@@ -57,7 +76,22 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .sheet(isPresented: $showConnectionSheet) {
-            ConnectionConfigSheet()
+            ConnectionConfigSheet(onStatusChange: { connected, deviceName in
+                isConnected = connected
+                connectedDeviceName = deviceName
+            })
+        }
+        .task {
+            await checkConnection()
+        }
+    }
+
+    private func checkConnection() async {
+        let connected = await SessionManager.shared.connectionStatus
+        let deviceName = await SessionManager.shared.deviceName ?? ""
+        await MainActor.run {
+            isConnected = connected
+            connectedDeviceName = deviceName
         }
     }
 }
@@ -70,8 +104,12 @@ struct ConnectionConfigSheet: View {
     @State private var useTLS: Bool = true
     @State private var authToken: String = ""
     @State private var isTesting: Bool = false
+    @State private var isConnected: Bool = false
     @State private var testResult: String?
     @State private var testStatus: TestStatus = .idle
+    @State private var connectedDeviceName: String = ""
+
+    var onStatusChange: ((Bool, String) -> Void)?
 
     enum TestStatus {
         case idle, testing, success, failure
@@ -98,20 +136,39 @@ struct ConnectionConfigSheet: View {
                 }
 
                 Section {
-                    Button(action: testConnection) {
+                    if isConnected {
                         HStack {
-                            Spacer()
-                            if isTesting {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                                Text("Testing...")
-                            } else {
-                                Text("Save & Test Connection")
-                            }
-                            Spacer()
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 8, height: 8)
+                            Text("Connected: \(connectedDeviceName)")
+                                .foregroundColor(Color(hex: "10A37F"))
                         }
+
+                        Button(action: disconnectConnection) {
+                            HStack {
+                                Spacer()
+                                Text("Disconnect")
+                                    .foregroundColor(.red)
+                                Spacer()
+                            }
+                        }
+                    } else {
+                        Button(action: testConnection) {
+                            HStack {
+                                Spacer()
+                                if isTesting {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle())
+                                    Text("Connecting...")
+                                } else {
+                                    Text("Connect")
+                                }
+                                Spacer()
+                            }
+                        }
+                        .disabled(serverHost.isEmpty || authToken.isEmpty || isTesting)
                     }
-                    .disabled(serverHost.isEmpty || authToken.isEmpty || isTesting)
 
                     if let result = testResult {
                         HStack {
@@ -125,12 +182,20 @@ struct ConnectionConfigSheet: View {
 
                 Section {
                     Button("Clear Configuration") {
-                        config.clear()
-                        serverHost = ""
-                        serverPort = ""
-                        useTLS = true
-                        authToken = ""
-                        testResult = nil
+                        Task {
+                            await SessionManager.shared.disconnect()
+                            await MainActor.run {
+                                config.clear()
+                                serverHost = ""
+                                serverPort = ""
+                                useTLS = true
+                                authToken = ""
+                                testResult = nil
+                                isConnected = false
+                                connectedDeviceName = ""
+                                onStatusChange?(false, "")
+                            }
+                        }
                     }
                     .foregroundColor(.red)
                 }
@@ -139,19 +204,15 @@ struct ConnectionConfigSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button("Done") {
+                        // Save config before dismissing
                         config.gatewayHost = serverHost
                         config.gatewayPort = Int(serverPort) ?? 443
                         config.gatewayUseTLS = useTLS
                         config.authToken = authToken
+                        onStatusChange?(isConnected, connectedDeviceName)
                         dismiss()
                     }
-                    .disabled(serverHost.isEmpty || authToken.isEmpty)
                 }
             }
             .onAppear {
@@ -159,6 +220,16 @@ struct ConnectionConfigSheet: View {
                 serverPort = config.gatewayPort > 0 ? String(config.gatewayPort) : "443"
                 useTLS = config.gatewayUseTLS
                 authToken = config.authToken
+
+                // Check current connection status
+                Task {
+                    let connected = await SessionManager.shared.connectionStatus
+                    let deviceName = await SessionManager.shared.deviceName ?? ""
+                    await MainActor.run {
+                        isConnected = connected
+                        connectedDeviceName = deviceName
+                    }
+                }
             }
         }
     }
@@ -169,6 +240,7 @@ struct ConnectionConfigSheet: View {
         isTesting = true
         testResult = nil
         testStatus = .testing
+        connectedDeviceName = ""
 
         let port = Int(serverPort) ?? 443
         let scheme = useTLS ? "wss" : "ws"
@@ -181,27 +253,47 @@ struct ConnectionConfigSheet: View {
             return
         }
 
-        print("Testing connection to: \(urlString)")
-        print("Auth token: \(authToken.prefix(10))...")
+        print("[ConnectionConfigSheet] Connecting to: \(urlString)")
 
         Task {
             do {
                 let manager = SessionManager.shared
                 try await manager.connect(gatewayURL: url, authToken: authToken)
-                try await manager.disconnect()
+                let deviceName = await manager.deviceName ?? "unknown"
 
                 await MainActor.run {
+                    connectedDeviceName = deviceName
                     isTesting = false
                     testStatus = .success
-                    testResult = "Connection successful!"
+                    testResult = "Connected successfully!"
+                    isConnected = true
                 }
+
+                print("[ConnectionConfigSheet] Connected, deviceName: \(deviceName)")
+                onStatusChange?(true, deviceName)
+
             } catch {
-                print("Connection error: \(error)")
+                print("[ConnectionConfigSheet] Connection error: \(error)")
                 await MainActor.run {
                     isTesting = false
                     testStatus = .failure
                     testResult = "Connection failed: \(error.localizedDescription)"
+                    isConnected = false
                 }
+                onStatusChange?(false, "")
+            }
+        }
+    }
+
+    private func disconnectConnection() {
+        Task {
+            await SessionManager.shared.disconnect()
+            await MainActor.run {
+                isConnected = false
+                connectedDeviceName = ""
+                testResult = "Disconnected"
+                testStatus = .idle
+                onStatusChange?(false, "")
             }
         }
     }
