@@ -49,20 +49,36 @@ struct MarkdownViewRepresentable: UIViewRepresentable {
 struct StreamingMarkdownCardView: View {
     let messageId: String
     let content: String
+    @State private var height: CGFloat = 0
 
     var body: some View {
-        StreamingMarkdownRepresentable(messageId: messageId)
-            .frame(minHeight: 1)
+        StreamingMarkdownRepresentable(messageId: messageId, height: $height)
+            // Give the view an explicit width so it can compute a non-zero height.
+            // MarkdownViewTextKit's intrinsicContentSize is 0 when content is empty,
+            // which traps it at 0x0 inside SwiftUI's layout.
+            .frame(width: UIScreen.main.bounds.width * 0.7,
+                   height: max(height, 1),
+                   alignment: .topLeading)
     }
 }
 
 @available(iOS 15.0, *)
 struct StreamingMarkdownRepresentable: UIViewRepresentable {
     let messageId: String
+    @Binding var height: CGFloat
 
     func makeUIView(context: Context) -> MarkdownViewTextKit {
         let holder = MarkdownStreamManager.shared.holder(for: messageId)
         holder.begin()
+        // The view doesn't notify SwiftUI when its height changes via appendStreamData;
+        // wire onHeightChange to push the new height into the SwiftUI @Binding.
+        holder.view.onHeightChange = { [weak holder] newHeight in
+            guard holder != nil, newHeight > 0 else { return }
+            // onHeightChange is already invoked on the main thread.
+            if abs(self.height - newHeight) > 0.5 {
+                self.height = newHeight
+            }
+        }
         return holder.view
     }
 
