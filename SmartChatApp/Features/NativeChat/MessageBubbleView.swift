@@ -201,15 +201,32 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var bubbleContent: some View {
         if message.text.isEmpty {
-            // Hide the standalone "3 dots" waiting bubble while streaming has not yet produced text.
-            Text("")
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+            // Show 3 dots while waiting for the first streaming delta. Once
+            // `message.text` becomes non-empty, the outer `if` falls through
+            // to the text branch and this indicator is no longer rendered,
+            // so the dots naturally disappear the moment content arrives.
+            if message.state == "streaming" {
+                TypingIndicatorView(color: message.isOutgoing ? .white : theme.textSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(message.isOutgoing ? theme.primary : theme.cardBackground)
+                    .cornerRadius(12)
+            } else {
+                Text("")
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+            }
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 messageText
-                // Hide the per-bubble "3 dots" indicator that previously sat under
-                // the streaming response.
+                // Skip the trailing 3 dots for assistant streaming markdown —
+                // the `StreamingMarkdownCardView` already signals activity via
+                // its in-place text updates, so the extra dots are redundant.
+                // Keep them for other streaming roles (thinking, toolCall, etc.).
+                if message.state == "streaming" && !message.isOutgoing && message.role != "assistant" {
+                    TypingIndicatorView()
+                        .padding(.top, 4)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
