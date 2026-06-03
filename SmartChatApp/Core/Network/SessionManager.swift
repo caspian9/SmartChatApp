@@ -365,24 +365,6 @@ actor SessionManager {
         currentSessionKey
     }
 
-    struct GatewayConfig {
-        let host: String
-        let port: Int
-        let useTLS: Bool
-        let authToken: String
-    }
-
-    func getGatewayConfig() -> GatewayConfig? {
-        let config = ConfigurationManager.shared
-        guard !config.gatewayHost.isEmpty, !config.authToken.isEmpty else { return nil }
-        return GatewayConfig(
-            host: config.gatewayHost,
-            port: config.gatewayPort,
-            useTLS: config.gatewayUseTLS,
-            authToken: config.authToken
-        )
-    }
-
     func ensureConnected() async throws {
         let role = ConfigurationManager.shared.gatewayRole
         if role == .operatorOnly && operatorConnected {
@@ -398,47 +380,33 @@ actor SessionManager {
             return
         }
 
-        // Try active profile first, then fall back to legacy config
-        var host: String
-        var port: Int
-        var useTLS: Bool
-        var authToken: String
-
+        // Use active profile
         let activeProfile = await MainActor.run { ProfileManager.shared.activeProfile }
-        if let profile = activeProfile {
-            host = profile.host
-            port = profile.port
-            useTLS = profile.tlsEnabled
-            authToken = profile.token
-        } else if let config = getGatewayConfig() {
-            host = config.host
-            port = config.port
-            useTLS = config.useTLS
-            authToken = config.authToken
-        } else {
-            logger.log("log: No gateway config available")
-            appendDebugLog("gateway: No config available", category: "gateway")
-            throw SessionManagerError.notConnected
+        guard let profile = activeProfile else {
+            logger.log("log: No active profile available")
+            appendDebugLog("gateway: No active profile", category: "gateway")
+            return
         }
 
-        let scheme = useTLS ? "wss" : "ws"
-        let urlString = "\(scheme)://\(host):\(port)/gateway"
+        let scheme = profile.tlsEnabled ? "wss" : "ws"
+        let urlString = "\(scheme)://\(profile.host):\(profile.port)/gateway"
         guard let url = URL(string: urlString) else {
-            throw SessionManagerError.notConnected
+            logger.log("log: Invalid profile URL")
+            return
         }
         logger.log("log: Attempting to connect to: \(urlString)")
         appendDebugLog("gateway: Connecting to \(urlString)", category: "gateway")
 
         switch role {
         case .operatorOnly:
-            try await connect(gatewayURL: url, authToken: authToken)
+            try await connect(gatewayURL: url, authToken: profile.token)
         case .nodeOnly:
-            try await connectNodeRole(gatewayURL: url, authToken: authToken)
+            try await connectNodeRole(gatewayURL: url, authToken: profile.token)
         case .operatorAndNode:
-            try await connect(gatewayURL: url, authToken: authToken)
+            try await connect(gatewayURL: url, authToken: profile.token)
             if !nodeConnected {
                 do {
-                    try await connectNodeRole(gatewayURL: url, authToken: authToken)
+                    try await connectNodeRole(gatewayURL: url, authToken: profile.token)
                 } catch {
                     logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
                 }
@@ -452,22 +420,26 @@ actor SessionManager {
         operatorConnected = false
         nodeConnected = false
 
-        guard let config = getGatewayConfig() else {
-            throw SessionManagerError.notConnected
+        let activeProfile = await MainActor.run { ProfileManager.shared.activeProfile }
+        guard let profile = activeProfile else {
+            logger.log("log: No active profile for reconnect")
+            return
         }
-        let scheme = config.useTLS ? "wss" : "ws"
-        let urlString = "\(scheme)://\(config.host):\(config.port)/gateway"
+
+        let scheme = profile.tlsEnabled ? "wss" : "ws"
+        let urlString = "\(scheme)://\(profile.host):\(profile.port)/gateway"
         guard let url = URL(string: urlString) else {
-            throw SessionManagerError.notConnected
+            logger.log("log: Invalid profile URL for reconnect")
+            return
         }
 
         // Connect operator
-        try await connect(gatewayURL: url, authToken: config.authToken)
+        try await connect(gatewayURL: url, authToken: profile.token)
 
         // Connect node
         if !nodeConnected {
             do {
-                try await connectNodeRole(gatewayURL: url, authToken: config.authToken)
+                try await connectNodeRole(gatewayURL: url, authToken: profile.token)
             } catch {
                 logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
             }

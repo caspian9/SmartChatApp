@@ -6,24 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SmartChatApp is an iOS AI chat application that connects to OpenClaw Gateway, supporting streaming message output and interactive content cards (music, video, buttons, images).
 
-**Tech Stack:** SwiftUI, The Composable Architecture (TCA) 2.0+, SwiftData, XcodeGen, Swift Package Manager
+**Tech Stack:** SwiftUI, The Composable Architecture (TCA) 2.0+, XcodeGen, Swift Package Manager
 
 ## Build Commands
 
 ```bash
-# Generate Xcode project (run from SmartChatApp root)
+# Generate Xcode project
 xcodegen generate
 
-# Build for iOS Simulator
-xcodebuild build -scheme SmartChatApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -quiet
+# Build and install for iPhone (auto-detect device via Makefile)
+make install
 
-# Build for iPhone device
-xcodebuild build -scheme SmartChatApp -destination "platform=iOS,id=F3F7FE5F-4CBE-581B-BD90-A0E7A3CBA1A1" -allowProvisioningUpdates build
-
-# Install to iPhone (via xcrun devicectl)
-xcrun devicectl device install app --device F3F7FE5F-4CBE-581B-BD90-A0E7A3CBA1A1 ~/Library/Developer/Xcode/DerivedData/SmartChatApp-*/Build/Products/Debug-iphoneos/SmartChatApp.app
+# Or build only
+make build
 
 # List connected devices
+make list-devices
 xcrun devicectl list devices
 
 # Test
@@ -57,12 +55,14 @@ Each feature follows TCA pattern:
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| `SessionManager` | `SmartChatApp/Core/Network/` | Gateway connection management (operator/node roles) |
+| `SessionManager` | `SmartChatApp/Core/Network/` | Gateway connection management (actor, operator/node roles) |
+| `ProfileManager` | `SmartChatApp/Core/Services/` | Gateway profile storage and switching (MainActor) |
+| `GatewayProfile` | `SmartChatApp/Core/Models/` | Codable profile model (UserDefaults + JSON) |
+| `ConfigurationManager` | `SmartChatApp/Core/Services/` | App settings (appearance, capabilities, debug flags) |
 | `StreamingManager` | `SmartChatApp/Core/Network/` | SSE event parsing |
 | `WebSocketManager` | `SmartChatApp/Core/Network/` | Raw WebSocket transport |
 | `CardRegistry` | `SmartChatApp/Core/Services/` | Interactive card rendering |
 | `MessageParser` | `SmartChatApp/Core/Services/` | Message parsing and validation |
-| `ConfigurationManager` | `SmartChatApp/Core/Services/` | App settings and configuration |
 | `CollapseStateCache` | `SmartChatApp/Core/Services/` | Message collapse state caching |
 | `MarkdownCache` | `SmartChatApp/Core/Services/` | Markdown rendering decision cache |
 | `HomeView` | `SmartChatApp/Features/Home/` | Home screen with navigation entries |
@@ -144,6 +144,7 @@ App supports three appearance modes: `.system`, `.light`, `.dark`
 
 ```
 SmartChatApp/
+├── Makefile                # Build automation (make build, make install)
 ├── project.yml              # XcodeGen configuration
 ├── Package.swift            # SPM dependencies
 ├── SmartChatApp.xcodeproj/  # Generated Xcode project
@@ -151,17 +152,16 @@ SmartChatApp/
 │   ├── App/
 │   │   └── SmartChatAppApp.swift
 │   ├── Core/
-│   │   ├── Models/         # DomainModels, GatewayModels
-│   │   ├── Network/        # SessionManager, StreamingManager, WebSocketManager
+│   │   ├── Models/         # DomainModels, GatewayModels, GatewayProfile
+│   │   ├── Network/        # SessionManager, StreamingManager, WebSocketManager, GatewayClient
 │   │   ├── NodeHandlers/   # NodeCommandRouter, LocationService, DeviceService
-│   │   └── Services/       # CardRegistry, MessageParser, ConfigurationManager
+│   │   └── Services/       # CardRegistry, MessageParser, ConfigurationManager, ProfileManager, SessionCache, MessageCache
 │   ├── Features/
 │   │   ├── Chat/           # ChatFeature, ChatView, MessageRowView
 │   │   ├── ChatList/       # ChatListFeature, ChatListView
-│   │   ├── Connection/     # ConnectionFeature, ConnectionView
-│   │   ├── Home/           # HomeView with entry cards
+│   │   ├── Home/           # HomeView, DeviceInfoView with entry cards
 │   │   ├── NativeChat/     # NativeChatViewModel, NativeChatView, MessageBubbleView
-│   │   └── Settings/       # SettingsFeature, SettingsView
+│   │   └── Settings/       # SettingsView, ProfileListView, EditProfileSheet, DiscoveryLogsView
 │   ├── Cards/              # MusicCard, VideoCard, ButtonCard, ImageCard, MarkdownCardView
 │   ├── Design/             # Theme, Typography
 │   └── Resources/          # Assets.xcassets
@@ -169,6 +169,22 @@ SmartChatApp/
 ├── docs/                   # Specification and plans
 └── CLAUDE.md
 ```
+
+## Gateway Profile Configuration
+
+All gateway connections use `ProfileManager` and `GatewayProfile`:
+- **ProfileManager** (`Core/Services/`) — Manages profiles with UserDefaults + JSON storage
+- **GatewayProfile** (`Core/Models/`) — Codable struct with: id, name, colorTag, host, port, token, tlsEnabled, isActive
+
+| Connection Entry | Method Used |
+|-----------------|-------------|
+| App launch auto-connect | `SessionManager.ensureConnected()` → uses `activeProfile` |
+| ProfileListView Connect/Reconnect | `ProfileManager.switchToProfile()` → `SessionManager.connectWithProfile()` |
+| EditProfileSheet Connect button | `SessionManager.connectWithRole()` with manual URL |
+| ChatListView / NativeChatViewModel | `SessionManager.ensureConnected()` |
+| HomeView connection banner | `refreshConnectionStatus()` — reads connectionStatus, deviceName, activeProfile.host |
+
+**Legacy ConfigurationManager** — No longer used for gateway connection. Only stores appearance, capability, and debug settings.
 
 ## Documentation
 
