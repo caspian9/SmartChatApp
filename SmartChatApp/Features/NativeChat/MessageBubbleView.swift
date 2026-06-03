@@ -10,13 +10,28 @@ struct MessageBubbleView: View {
             }
 
             VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 4) {
-                Text(message.text)
-                    .font(.body)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
-                    .cornerRadius(12)
+                // Show text or placeholder for streaming
+                if message.text.isEmpty {
+                    if message.state == "streaming" {
+                        Text("...")
+                            .font(.body)
+                            .foregroundColor(.gray)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                    } else {
+                        Text("")
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                    }
+                } else {
+                    Text(message.text)
+                        .font(.body)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
+                        .cornerRadius(12)
+                }
 
                 HStack(spacing: 8) {
                     if let startedAt = message.startedAt {
@@ -33,6 +48,10 @@ struct MessageBubbleView: View {
                         Text("●")
                             .font(.caption2)
                             .foregroundColor(.green)
+                    } else if message.state == "streaming" && message.text.isEmpty {
+                        Text("接收中...")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
                     }
                 }
             }
@@ -72,6 +91,11 @@ struct ChatMessage: Identifiable, Equatable {
     }
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
-        lhs.id == rhs.id
+        lhs.id == rhs.id &&
+        lhs.text == rhs.text &&
+        lhs.state == rhs.state &&
+        lhs.startedAt == rhs.startedAt &&
+        lhs.endedAt == rhs.endedAt &&
+        lhs.livenessState == rhs.livenessState
     }
 }
