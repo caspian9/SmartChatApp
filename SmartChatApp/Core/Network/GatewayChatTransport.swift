@@ -161,47 +161,48 @@ public actor GatewayChatTransport: OpenClawChatTransport {
     }
 
     public nonisolated func events() -> AsyncStream<OpenClawChatTransportEvent> {
-        AsyncStream { continuation in
-            Task {
-                let events = await self.nodeSession.subscribeServerEvents()
+        let nodeSession = nodeSession
+        return AsyncStream { continuation in
+            let task = Task {
+                let events = await nodeSession.subscribeServerEvents()
                 for await frame in events {
-                    if let event = self.mapToTransportEvent(frame) {
+                    if let event = mapToTransportEventStatic(frame) {
                         continuation.yield(event)
                     }
                 }
                 continuation.finish()
             }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
         }
     }
 
-    private nonisolated func mapToTransportEvent(_ frame: EventFrame) -> OpenClawChatTransportEvent? {
+    private nonisolated func mapToTransportEventStatic(_ frame: EventFrame) -> OpenClawChatTransportEvent? {
         switch frame.event {
         case "tick":
             return .tick
         case "seqGap":
             return .seqGap
         case "chat.event":
-            if let payload = frame.payload {
-                let data = try? JSONEncoder().encode(payload)
-                if let data, let payloadObj = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: data) {
-                    return .chat(payloadObj)
-                }
+            if let payload = frame.payload,
+               let data = try? JSONEncoder().encode(payload),
+               let payloadObj = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: data) {
+                return .chat(payloadObj)
             }
             return nil
         case "chat.sessionMessage":
-            if let payload = frame.payload {
-                let data = try? JSONEncoder().encode(payload)
-                if let data, let payloadObj = try? JSONDecoder().decode(OpenClawSessionMessageEventPayload.self, from: data) {
-                    return .sessionMessage(payloadObj)
-                }
+            if let payload = frame.payload,
+               let data = try? JSONEncoder().encode(payload),
+               let payloadObj = try? JSONDecoder().decode(OpenClawSessionMessageEventPayload.self, from: data) {
+                return .sessionMessage(payloadObj)
             }
             return nil
         default:
-            if let payload = frame.payload {
-                let data = try? JSONEncoder().encode(payload)
-                if let data, let payloadObj = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: data) {
-                    return .agent(payloadObj)
-                }
+            if let payload = frame.payload,
+               let data = try? JSONEncoder().encode(payload),
+               let payloadObj = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: data) {
+                return .agent(payloadObj)
             }
             return nil
         }
