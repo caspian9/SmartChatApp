@@ -33,11 +33,12 @@ struct NativeChatViewModel {
         case sendMessage
         case loadHistory
         case loadedHistory([ChatMessage])
-        case loadedCachedHistory([ChatMessage])
+        case loadedCachedHistory([ChatMessage], isRestoring: Bool)
         case receiveMessage(ChatMessage)
         case setError(String?)
         case setSending(Bool)
         case scrollToBottom
+        case setNeedsScrollToBottom(Bool)
     }
 
     @Dependency(\.continuousClock) var clock
@@ -239,13 +240,16 @@ struct NativeChatViewModel {
                 }
                 let sessionKey = session.key
                 let sessionKeyPreview = String(sessionKey.prefix(8))
+                // Capture isRestoring BEFORE resetting
                 let isRestoring = state.isRestoringFromCache
                 state.isRestoringFromCache = false
 
                 return .run { send in
                     Task {
+                        logger.log("SMAlog: loadHistory Task started for session: \(sessionKeyPreview)")
                         // Always load cache first (messages already cleared in selectSession when switching)
                         let cachedMessages = await MessageCache.shared.getMessages(for: sessionKey)
+                        logger.log("SMAlog: cache returned \(cachedMessages.count) messages for session: \(sessionKeyPreview)")
                         if !cachedMessages.isEmpty {
                             let chatMessages = cachedMessages.compactMap { msg -> ChatMessage? in
                                 var text = ""
@@ -273,7 +277,7 @@ struct NativeChatViewModel {
                                 )
                             }
                             logger.log("SMAlog: Loaded \(chatMessages.count) cached messages for session: \(sessionKeyPreview), isRestoring: \(isRestoring)")
-                            await send(.loadedCachedHistory(chatMessages))
+                            await send(.loadedCachedHistory(chatMessages, isRestoring: isRestoring))
                         }
 
                         // Then fetch from network
@@ -335,25 +339,20 @@ struct NativeChatViewModel {
                     }
                 }
 
-            case .loadedCachedHistory(let messages):
+            case .loadedCachedHistory(let messages, let isRestoring):
+                logger.log("SMAlog: loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)")
                 state.messages = messages
-                // Scroll to bottom after cached messages are loaded (for session switch)
-                let isRestoring = state.isRestoringFromCache
-                if isRestoring {
-                    state.isRestoringFromCache = false
-                    state.needsScrollToBottom = true
-                }
+                // Force state change notification by setting a marker
+                state.needsScrollToBottom = true
+                logger.log("SMAlog: loadedCachedHistory set needsScrollToBottom=true, messages should update")
                 return .none
 
             case .loadedHistory(let messages):
-                if state.needsScrollToBottom {
-                    state.needsScrollToBottom = false
-                }
-                // Only update messages from network if there are messages,
-                // otherwise keep existing (cached) messages
-                if !messages.isEmpty {
-                    state.messages = messages
-                }
+                // Always update messages - the comparison logic was causing issues
+                // where UI didn't update when counts matched
+                logger.log("SMAlog: loadedHistory updating messages, count: \(messages.count)")
+                state.messages = messages
+                state.needsScrollToBottom = false
                 state.isSending = false
                 return .none
 
@@ -403,6 +402,10 @@ struct NativeChatViewModel {
 
             case .scrollToBottom:
                 state.needsScrollToBottom = true
+                return .none
+
+            case .setNeedsScrollToBottom(let needsScroll):
+                state.needsScrollToBottom = needsScroll
                 return .none
             }
         }
