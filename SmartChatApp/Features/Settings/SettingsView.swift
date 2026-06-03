@@ -4,6 +4,12 @@ struct SettingsView: View {
     @StateObject private var config = ConfigurationManager.shared
     @State private var showConnectionSheet = false
 
+    private var buildDateString: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: Date())
+    }
+
     var body: some View {
         Form {
             Section("OpenClaw Gateway") {
@@ -44,7 +50,7 @@ struct SettingsView: View {
                 HStack {
                     Text("Build")
                     Spacer()
-                    Text("1")
+                    Text(buildDateString)
                         .foregroundColor(.gray)
                 }
             }
