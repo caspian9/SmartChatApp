@@ -37,6 +37,10 @@ struct ProfileListView: View {
         editToken = profile.token
         editTlsEnabled = profile.tlsEnabled
         isEditing = true
+        isTesting = false
+        isConnected = false
+        testResult = nil
+        testStatus = .idle
     }
 
     private func saveEdit() {
