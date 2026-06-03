@@ -256,14 +256,15 @@ struct NativeChatViewModel {
                 // Capture messages for deduplication before Task
                 let existingIds = Set(state.messages.map { $0.id })
 
+                let taskId = UUID().uuidString.prefix(8)
                 return .run { send in
                     Task {
-                        logger.log("SMAlog: loadHistory Task started, sessionKey: \(String(cachedSessionKeyPreview))")
+                        logger.log("SMAlog: [\(taskId)] loadHistory Task started, sessionKey: \(String(cachedSessionKeyPreview))")
                         // Always load cache first (messages already cleared in selectSession when switching)
                         let cachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
                         let cachedIds = Set(cachedMessages.map { $0.id.uuidString })
                         logger.log("SMAlog: cache returned \(cachedMessages.count) messages, sessionKey: \(String(cachedSessionKeyPreview))")
-                        logger.log("SMAlog: cachedIds count=\(cachedIds.count), ids=\(cachedIds)")
+                        logger.log("SMAlog: cachedIds count=\(cachedIds.count)")
                         if !cachedMessages.isEmpty {
                             let chatMessages = cachedMessages.compactMap { msg -> ChatMessage? in
                                 var text = ""
@@ -421,7 +422,6 @@ struct NativeChatViewModel {
                                 )
                             }
                             logger.log("SMAlog: chatMessages count=\(chatMessages.count)")
-                            logger.log("SMAlog: chatMessages ids=\(Set(chatMessages.map { $0.id }))")
                             // Cache the fetched messages
                             let openClawMessages = chatMessages.compactMap { createOpenClawChatMessage(from: $0) }
                             logger.log("SMAlog: openClawMessages count=\(openClawMessages.count)")
@@ -429,7 +429,7 @@ struct NativeChatViewModel {
                             // Find which messages are new (not in current state.messages)
                             // Note: existingIds is computed from state.messages in the reducer before Task
                             let newMessages = chatMessages.filter { !existingIds.contains($0.id) }
-                            logger.log("SMAlog: newMessages after filter count=\(newMessages.count), existingIds=\(existingIds)")
+                            logger.log("SMAlog: [\(taskId)] newMessages after filter count=\(newMessages.count), existingIds.count=\(existingIds.count)")
                             await send(.appendNewMessages(newMessages))
                         } catch {
                             logger.log("SMAlog: Load history error: \(error.localizedDescription)")
