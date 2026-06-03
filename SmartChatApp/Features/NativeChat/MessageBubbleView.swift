@@ -83,6 +83,7 @@ struct MarkdownWebView: View {
     var body: some View {
         if isLikelyMarkdown {
             MarkdownRendererView(text: text, backgroundColor: isOutgoing ? "#10A37F" : "#1E1E1E")
+                .frame(minWidth: 200, minHeight: 40)
                 .frame(maxWidth: 280)
         } else {
             Text(text)
