@@ -8,6 +8,7 @@ struct HomeView: View {
     @State private var showNativeChat = false
     @State private var showSettings = false
     @State private var isConnected = false
+    @State private var isConnecting = false
     @State private var connectedDeviceName = ""
     @State private var gatewayHost = ""
     @State private var shouldAutoConnect = false
@@ -15,6 +16,10 @@ struct HomeView: View {
 
     private var isCompact: Bool {
         horizontalSizeClass == .compact
+    }
+
+    private var hasProfile: Bool {
+        ProfileManager.shared.activeProfile != nil || ConfigurationManager.shared.isConfigured
     }
 
     var body: some View {
@@ -85,6 +90,9 @@ struct HomeView: View {
             SettingsView()
         }
         .task {
+            if ConfigurationManager.shared.autoConnectOnLaunch {
+                isConnecting = true
+            }
             await refreshConnectionStatus()
         }
         .onAppear {
@@ -117,9 +125,11 @@ struct HomeView: View {
             await MainActor.run {
                 if wasConnected {
                     isConnected = true
+                    isConnecting = false
                     connectedDeviceName = deviceName
                 } else {
                     isConnected = false
+                    isConnecting = false
                     connectedDeviceName = ""
                 }
                 // Use active profile host, or legacy config if no profile
@@ -155,8 +165,8 @@ struct HomeView: View {
             .padding(16)
             .background(theme.cardBackground)
             .cornerRadius(12)
-        } else if ConfigurationManager.shared.autoConnectOnLaunch && ConfigurationManager.shared.isConfigured {
-            // Auto-connect enabled but still connecting
+        } else if isConnecting {
+            // Still connecting
             HStack(spacing: 12) {
                 Circle()
                     .fill(Color.yellow)
@@ -177,7 +187,7 @@ struct HomeView: View {
             .padding(16)
             .background(theme.cardBackground)
             .cornerRadius(12)
-        } else if ConfigurationManager.shared.isConfigured {
+        } else if hasProfile {
             // Configured but auto-connect disabled or connection failed
             HStack(spacing: 12) {
                 Circle()
