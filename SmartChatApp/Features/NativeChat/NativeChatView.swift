@@ -59,9 +59,9 @@ struct NativeChatView: View {
                         scrollToBottom(proxy: proxy)
                     }
                 }
-                .onChange(of: store.messages.count) { _ in
-                    // Scroll to bottom when messages change (new messages loaded or session switched)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                .onChange(of: store.messages) { _ in
+                    // Scroll to bottom when messages change (including streaming updates)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         scrollToBottom(proxy: proxy)
                     }
                 }
