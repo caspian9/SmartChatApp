@@ -6,7 +6,7 @@ actor MessageCache {
     static let shared = MessageCache()
 
     private var cache: [String: [OpenClawChatMessage]] = [:]
-    private let maxLocalMessages = 100
+    private let maxLocalMessages = 200
     private let defaults = UserDefaults.standard
     private let keyPrefix = "openclaw_messages_"
 
@@ -23,12 +23,33 @@ actor MessageCache {
         return messages
     }
 
+    /// Sets messages - merges with existing cache to preserve historical messages, avoids duplicates
     func setMessages(_ messages: [OpenClawChatMessage], for sessionKey: String) {
-        let trimmed = Array(messages.suffix(maxLocalMessages))
-        cache[sessionKey] = trimmed
-        saveToDisk(trimmed, for: sessionKey)
+        let existing = loadFromDisk(for: sessionKey)
+        var merged: [OpenClawChatMessage] = []
+
+        // Deduplicate: prefer existing (cached) messages over new ones
+        // This preserves historical messages during page loads
+        for msg in messages {
+            let id = msg.id.uuidString
+            let existingHasId = existing.contains { $0.id.uuidString == id }
+            if !existingHasId {
+                merged.append(msg)
+            }
+        }
+
+        // Combine: existing + new messages, sorted by timestamp ascending, trim to maxLocalMessages (oldest)
+        var allMessages = existing + merged
+        allMessages.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
+        if allMessages.count > maxLocalMessages {
+            allMessages = Array(allMessages.suffix(maxLocalMessages))
+        }
+
+        cache[sessionKey] = allMessages
+        saveToDisk(allMessages, for: sessionKey)
     }
 
+    /// Appends new streaming messages - deduplicates by id
     func appendMessages(_ newMessages: [OpenClawChatMessage], for sessionKey: String) {
         var existing = cache[sessionKey] ?? loadFromDisk(for: sessionKey)
         for newMsg in newMessages {
@@ -51,9 +72,10 @@ actor MessageCache {
     }
 
     func messageIds(for sessionKey: String) -> Set<String> {
-        Set(getMessages(for: sessionKey).compactMap { $0.id.uuidString })
+        Set(getMessages(for: sessionKey).map { $0.id.uuidString })
     }
 
+    /// Clears all cached messages for a session and disk storage
     func clear(for sessionKey: String) {
         cache[sessionKey] = nil
         defaults.removeObject(forKey: storageKey(for: sessionKey))
