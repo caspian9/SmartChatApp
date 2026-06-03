@@ -127,6 +127,12 @@ struct NativeChatViewModel {
                 )
                 state.messages.append(message)
                 state.inputText = ""
+                // Cache user message
+                Task {
+                    if let msg = createOpenClawChatMessage(from: message) {
+                        await MessageCache.shared.appendMessages([msg], for: sessionKey)
+                    }
+                }
                 return .run { send in
                     Task {
                         do {
@@ -167,6 +173,39 @@ struct NativeChatViewModel {
                 let sessionKeyPreview = String(sessionKey.prefix(8))
                 return .run { send in
                     Task {
+                        // First load from cache
+                        let cachedMessages = await MessageCache.shared.getMessages(for: sessionKey)
+                        if !cachedMessages.isEmpty {
+                            let chatMessages = cachedMessages.compactMap { msg -> ChatMessage? in
+                                var text = ""
+                                for contentItem in msg.content {
+                                    if let t = contentItem.text, !t.isEmpty {
+                                        text = t
+                                        break
+                                    }
+                                }
+                                if text.isEmpty { return nil }
+                                return ChatMessage(
+                                    id: msg.id.uuidString,
+                                    text: text,
+                                    timestamp: Date(timeIntervalSince1970: (msg.timestamp ?? 0) / 1000),
+                                    role: msg.role,
+                                    state: "final",
+                                    runId: nil,
+                                    seq: nil,
+                                    startedAt: nil,
+                                    endedAt: nil,
+                                    livenessState: nil,
+                                    toolCallId: msg.toolCallId,
+                                    toolName: msg.toolName,
+                                    stopReason: msg.stopReason
+                                )
+                            }
+                            logger.log("SMAlog: Loaded \(chatMessages.count) cached messages for session: \(sessionKeyPreview)")
+                            await send(.loadedHistory(chatMessages))
+                        }
+
+                        // Then fetch from network
                         do {
                             try await SessionManager.shared.ensureConnected()
                             let transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
@@ -207,10 +246,12 @@ struct NativeChatViewModel {
                                 )
                             }
                             logger.log("SMAlog: chatMessages count: \(chatMessages.count)")
+                            // Cache the fetched messages
+                            let openClawMessages = chatMessages.compactMap { createOpenClawChatMessage(from: $0) }
+                            await MessageCache.shared.setMessages(openClawMessages, for: sessionKey)
                             await send(.loadedHistory(chatMessages))
                         } catch {
                             logger.log("SMAlog: Load history error: \(error.localizedDescription)")
-                            await send(.loadedHistory([]))
                         }
                     }
                 }
@@ -243,6 +284,13 @@ struct NativeChatViewModel {
                 }
                 // When state is final, message reception is complete - reset sending state
                 if message.state == "final" {
+                    // Cache the final message
+                    if let sessionKey = state.selectedSession?.key,
+                       let openClawMsg = createOpenClawChatMessage(from: message) {
+                        Task {
+                            await MessageCache.shared.appendMessages([openClawMsg], for: sessionKey)
+                        }
+                    }
                     return .send(.setSending(false))
                 }
                 return .none
@@ -258,6 +306,20 @@ struct NativeChatViewModel {
                 return .none
             }
         }
+    }
+
+    private func createOpenClawChatMessage(from chatMessage: ChatMessage) -> OpenClawChatMessage? {
+        guard let uuid = UUID(uuidString: chatMessage.id) else { return nil }
+        return OpenClawChatMessage(
+            id: uuid,
+            role: chatMessage.role,
+            content: [OpenClawChatMessageContent(type: "text", text: chatMessage.text, thinking: nil, thinkingSignature: nil, mimeType: nil, fileName: nil, content: nil, id: nil, name: nil, arguments: nil)],
+            timestamp: chatMessage.timestamp.timeIntervalSince1970 * 1000,
+            toolCallId: chatMessage.toolCallId,
+            toolName: chatMessage.toolName,
+            usage: nil,
+            stopReason: chatMessage.stopReason
+        )
     }
 
     private func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
