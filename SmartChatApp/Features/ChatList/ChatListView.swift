@@ -68,36 +68,36 @@ struct ChatListView: View {
 
     private func loadSessions() {
         isLoading = true
-        // Sessions will be loaded via transport
-        isLoading = false
+        Task {
+            do {
+                let transport = SessionManager.shared.makeTransport(sessionKey: "")
+                let response = try await transport.listSessions(limit: 50)
+                await MainActor.run {
+                    sessions = response.sessions
+                    isLoading = false
+                }
+            } catch {
+                print("Failed to load sessions: \(error)")
+                await MainActor.run {
+                    isLoading = false
+                }
+            }
+        }
     }
 
     private func createSession() {
-        let newSession = OpenClawChatSessionEntry(
-            key: UUID().uuidString,
-            kind: "chat",
-            displayName: "New Chat",
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: Date().timeIntervalSince1970,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil,
-            thinkingLevels: nil,
-            thinkingOptions: nil,
-            thinkingDefault: nil
-        )
-        sessions.insert(newSession, at: 0)
+        Task {
+            do {
+                let sessionKey = try await SessionManager.shared.createSession()
+                let transport = SessionManager.shared.makeTransport(sessionKey: sessionKey)
+                let response = try await transport.listSessions(limit: 50)
+                await MainActor.run {
+                    sessions = response.sessions
+                }
+            } catch {
+                print("Failed to create session: \(error)")
+            }
+        }
     }
 
     private func formatDate(_ timestamp: Double) -> String {
