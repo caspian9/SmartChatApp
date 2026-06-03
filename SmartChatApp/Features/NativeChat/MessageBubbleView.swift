@@ -38,6 +38,7 @@ struct MessageBubbleView: View {
                                 Label("复制", systemImage: "doc.on.doc")
                             }
                         }
+                        .id(message.id)
                 }
 
                 HStack(spacing: 8) {
