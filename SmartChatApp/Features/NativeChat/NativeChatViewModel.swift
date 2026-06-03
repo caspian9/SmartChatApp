@@ -309,13 +309,24 @@ struct NativeChatViewModel {
                                     return nil
                                 }
                                 var text = ""
+                                var role = msg.role
                                 for contentItem in msg.content {
                                     if let t = contentItem.text, !t.isEmpty {
                                         text = t.trimmingCharacters(in: .whitespacesAndNewlines)
                                         break
                                     }
                                 }
-                                os_log("SMAlog: history msg[%{public}d] contentItems=%{public}d text_len=%{private}d", log: osLog, type: .debug, index, msg.content.count, text.count)
+                                // If no text, check for thinking content
+                                if text.isEmpty {
+                                    for contentItem in msg.content {
+                                        if let thinking = contentItem.thinking, !thinking.isEmpty {
+                                            text = thinking.trimmingCharacters(in: .whitespacesAndNewlines)
+                                            role = "thinking"
+                                            break
+                                        }
+                                    }
+                                }
+                                os_log("SMAlog: history msg[%{public}d] contentItems=%{public}d text_len=%{private}d role=%{public}s", log: osLog, type: .debug, index, msg.content.count, text.count, role)
                                 if text.isEmpty {
                                     os_log("SMAlog: history msg[%{public}d] skipped - empty text, content: %{public}s", log: osLog, type: .debug, index, String(describing: msg.content))
                                     return nil
@@ -323,12 +334,12 @@ struct NativeChatViewModel {
                                 let ts = msg.timestamp ?? 0
                                 let msgId = msg.id.uuidString
                                 let textPreview = String(text.prefix(100))
-                                os_log("SMAlog: history msg[%{public}d] role=%{public}s toolName=%{public}s toolCallId=%{public}s text_len=%{public}s text_preview=%{public}s", log: osLog, type: .debug, index, msg.role, msg.toolName ?? "nil", msg.toolCallId ?? "nil", "\(text.count)", textPreview)
+                                os_log("SMAlog: history msg[%{public}d] role=%{public}s toolName=%{public}s toolCallId=%{public}s text_len=%{public}s text_preview=%{public}s", log: osLog, type: .debug, index, role, msg.toolName ?? "nil", msg.toolCallId ?? "nil", "\(text.count)", textPreview)
                                 return ChatMessage(
                                     id: msgId,
                                     text: text,
                                     timestamp: Date(timeIntervalSince1970: ts / 1000),
-                                    role: msg.role,
+                                    role: role,
                                     state: "final",
                                     runId: nil,
                                     seq: nil,

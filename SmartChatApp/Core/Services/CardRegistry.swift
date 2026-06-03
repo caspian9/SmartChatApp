@@ -56,6 +56,10 @@ public final class CardRegistry: Observable {
             if let markdownData = data as? MarkdownCardData {
                 MarkdownCardView(content: markdownData.content)
             }
+        case .thinking:
+            if let data = data as? String {
+                ThinkingCardView(content: data)
+            }
         }
     }
 }
@@ -66,6 +70,7 @@ public enum CardType: String {
     case button
     case image
     case markdown
+    case thinking
 }
 
 public extension CardRegistry {
