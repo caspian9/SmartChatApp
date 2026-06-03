@@ -39,6 +39,9 @@ struct RootView: View {
                 try? await SessionManager.shared.ensureConnected()
             }
         }
+        .task {
+            ProfileManager.shared.migrateFromLegacyConfig()
+        }
     }
 
     private var colorSchemeForTheme: ColorScheme {
