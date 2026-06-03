@@ -49,6 +49,25 @@ struct HomeView: View {
                     .padding(.horizontal, 16)
                     .background(Color(hex: "1E1E1E"))
                     .cornerRadius(8)
+                } else if ConfigurationManager.shared.isConfigured {
+                    VStack(spacing: 4) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(Color.yellow)
+                                .frame(width: 8, height: 8)
+                            Text("Connecting...")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                        }
+
+                        Text(gatewayHost)
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 16)
+                    .background(Color(hex: "1E1E1E"))
+                    .cornerRadius(8)
                 }
 
                 HStack(spacing: 20) {
@@ -96,16 +115,42 @@ struct HomeView: View {
     }
 
     private func checkConnectionStatus() async {
-        let connected = await SessionManager.shared.connectionStatus
-        let deviceName = await SessionManager.shared.deviceName ?? ""
         let config = ConfigurationManager.shared
 
+        // If not configured, just show disconnected state
+        guard config.isConfigured else {
+            await MainActor.run {
+                isConnected = false
+                connectedDeviceName = ""
+                gatewayHost = ""
+            }
+            return
+        }
+
+        // Show connecting state
         await MainActor.run {
-            isConnected = connected
-            connectedDeviceName = deviceName
+            isConnected = false
+            connectedDeviceName = ""
             gatewayHost = config.displayURL
         }
 
-        print("[HomeView] Connection check: connected=\(connected), device=\(deviceName), gateway=\(config.displayURL)")
+        // Try to connect
+        do {
+            try await SessionManager.shared.ensureConnected()
+            let connected = await SessionManager.shared.connectionStatus
+            let deviceName = await SessionManager.shared.deviceName ?? ""
+
+            await MainActor.run {
+                isConnected = connected
+                connectedDeviceName = deviceName
+                gatewayHost = config.displayURL
+            }
+        } catch {
+            await MainActor.run {
+                isConnected = false
+                connectedDeviceName = ""
+                gatewayHost = config.displayURL
+            }
+        }
     }
 }
