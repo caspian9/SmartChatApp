@@ -16,6 +16,30 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
     var createdAt: Date
     var updatedAt: Date
 
+    enum CodingKeys: String, CodingKey {
+        case id, name, colorTag, host, port, token, tlsEnabled, role
+        case cameraEnabled, locationEnabled, voiceWakeEnabled
+        case isActive, createdAt, updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        colorTag = try container.decode(String.self, forKey: .colorTag)
+        host = try container.decode(String.self, forKey: .host)
+        port = try container.decode(Int.self, forKey: .port)
+        token = try container.decode(String.self, forKey: .token)
+        tlsEnabled = try container.decode(Bool.self, forKey: .tlsEnabled)
+        role = try container.decode(GatewayConnectionRole.self, forKey: .role)
+        cameraEnabled = try container.decodeIfPresent(Bool.self, forKey: .cameraEnabled) ?? false
+        locationEnabled = try container.decodeIfPresent(Bool.self, forKey: .locationEnabled) ?? false
+        voiceWakeEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceWakeEnabled) ?? false
+        isActive = try container.decode(Bool.self, forKey: .isActive)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
     init(
         id: UUID = UUID(),
         name: String,
