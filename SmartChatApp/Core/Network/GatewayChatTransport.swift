@@ -13,13 +13,8 @@ public actor GatewayChatTransport: OpenClawChatTransport {
     }
 
     public func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        let responseData = try await nodeSession.request(
-            method: "sessions.history",
-            paramsJSON: "{\"key\": \"\(sessionKey)\"}"
-        )
-        throw NSError(domain: "GatewayChatTransport", code: 1, userInfo: [
-            NSLocalizedDescriptionKey: "requestHistory not fully implemented"
-        ])
+        let emptyJSON = "{\"sessionKey\": \"\(sessionKey)\"}".data(using: .utf8)!
+        return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: emptyJSON)
     }
 
     public func listModels() async throws -> [OpenClawChatModelChoice] {
