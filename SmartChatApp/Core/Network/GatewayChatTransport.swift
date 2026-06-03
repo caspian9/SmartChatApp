@@ -107,24 +107,27 @@ public actor GatewayChatTransport: OpenClawChatTransport {
         case "seqGap":
             return .seqGap
         case "chat.event":
-            if let payload = frame.payload,
-               let data = try? JSONSerialization.data(withJSONObject: payload),
-               let payloadObj = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: data) {
-                return .chat(payloadObj)
+            if let payload = frame.payload {
+                let data = try? JSONEncoder().encode(payload)
+                if let data, let payloadObj = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: data) {
+                    return .chat(payloadObj)
+                }
             }
             return nil
         case "chat.sessionMessage":
-            if let payload = frame.payload,
-               let data = try? JSONSerialization.data(withJSONObject: payload),
-               let payloadObj = try? JSONDecoder().decode(OpenClawSessionMessageEventPayload.self, from: data) {
-                return .sessionMessage(payloadObj)
+            if let payload = frame.payload {
+                let data = try? JSONEncoder().encode(payload)
+                if let data, let payloadObj = try? JSONDecoder().decode(OpenClawSessionMessageEventPayload.self, from: data) {
+                    return .sessionMessage(payloadObj)
+                }
             }
             return nil
         default:
-            if let payload = frame.payload,
-               let data = try? JSONSerialization.data(withJSONObject: payload),
-               let payloadObj = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: data) {
-                return .agent(payloadObj)
+            if let payload = frame.payload {
+                let data = try? JSONEncoder().encode(payload)
+                if let data, let payloadObj = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: data) {
+                    return .agent(payloadObj)
+                }
             }
             return nil
         }
