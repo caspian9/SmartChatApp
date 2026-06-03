@@ -55,7 +55,8 @@ struct NativeChatViewModel {
         Reduce { state, action in
             switch action {
             case .loadSessions:
-                logger.log("SMAlog: loadSessions called, current selectedSession: \(state.selectedSession?.key.prefix(8) as String? ?? "nil")")
+                let sessionKeyPreview = state.selectedSession != nil ? String(state.selectedSession!.key.prefix(8)) : "nil"
+                logger.log("SMAlog: loadSessions called, current selectedSession: \(sessionKeyPreview)")
                 // Check if we need to load from cache first
                 if state.selectedSession == nil {
                     // First load from cache
