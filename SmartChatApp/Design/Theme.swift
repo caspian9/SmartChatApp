@@ -26,17 +26,60 @@ extension Color {
     }
 }
 
-enum Theme {
-    static let background = Color(hex: "000000")
-    static let cardBackground = Color(hex: "1E1E1E")
-    static let userMessageBackground = Color(hex: "2E2E2E")
-    static let assistantMessageBackground = Color(hex: "343541")
-    static let primary = Color(hex: "10A37F")
-    static let inputBackground = Color(hex: "40414F")
-    static let textPrimary = Color(hex: "ECECF1")
-    static let textSecondary = Color(hex: "ACACBE")
+struct Theme {
+    let colorScheme: ColorScheme
+
+    var background: Color {
+        colorScheme == .dark ? Color(hex: "000000") : Color(hex: "F6F6F6")
+    }
+
+    var cardBackground: Color {
+        colorScheme == .dark ? Color(hex: "1E1E1E") : Color.white
+    }
+
+    var userMessageBackground: Color {
+        colorScheme == .dark ? Color(hex: "2E2E2E") : Color(hex: "E8F5E9")
+    }
+
+    var assistantMessageBackground: Color {
+        colorScheme == .dark ? Color(hex: "343541") : Color(hex: "F0F0F0")
+    }
+
+    var primary: Color {
+        Color(hex: "10A37F")
+    }
+
+    var inputBackground: Color {
+        colorScheme == .dark ? Color(hex: "40414F") : Color(hex: "EEEEEE")
+    }
+
+    var textPrimary: Color {
+        colorScheme == .dark ? Color(hex: "ECECF1") : Color(hex: "1F1F1F")
+    }
+
+    var textSecondary: Color {
+        colorScheme == .dark ? Color(hex: "ACACBE") : Color(hex: "666666")
+    }
 
     static let cornerRadius: CGFloat = 12
     static let padding: CGFloat = 16
     static let spacing: CGFloat = 12
+}
+
+struct ThemeKey: EnvironmentKey {
+    static let defaultValue: Theme = Theme(colorScheme: .dark)
+}
+
+extension EnvironmentValues {
+    var theme: Theme {
+        get { self[ThemeKey.self] }
+        set { self[ThemeKey.self] = newValue }
+    }
+}
+
+extension View {
+    func withTheme(_ colorScheme: ColorScheme) -> some View {
+        let theme = Theme(colorScheme: colorScheme)
+        return self.environment(\.theme, theme)
+    }
 }

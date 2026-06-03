@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ChatInputView: View {
+    @Environment(\.theme) private var theme
     @Binding var inputText: String
     let isSending: Bool
     let onSend: () -> Void
@@ -10,35 +11,35 @@ struct ChatInputView: View {
             ZStack(alignment: .leading) {
                 if inputText.isEmpty {
                     Text("输入消息...")
-                        .foregroundColor(.gray)
+                        .foregroundColor(theme.textSecondary)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                 }
                 TextField("", text: $inputText, axis: .vertical)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.textPrimary)
                     .lineLimit(1...5)
                     .disabled(isSending)
             }
-            .background(Color(hex: "2A2A2A"))
+            .background(theme.inputBackground)
             .cornerRadius(20)
 
             if isSending {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle())
-                    .tint(Color(hex: "10A37F"))
+                    .tint(theme.primary)
             } else {
                 Button(action: onSend) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 32))
-                        .foregroundColor(Color(hex: "10A37F"))
+                        .foregroundColor(theme.primary)
                 }
                 .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color(hex: "1E1E1E"))
+        .background(theme.cardBackground)
     }
 }

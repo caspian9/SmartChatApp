@@ -2,6 +2,7 @@ import SwiftUI
 import ComposableArchitecture
 
 struct HomeView: View {
+    @Environment(\.theme) private var theme
     @State private var showChatList = false
     @State private var showNativeChat = false
     @State private var showSettings = false
@@ -16,7 +17,7 @@ struct HomeView: View {
                 Button(action: { showSettings = true }) {
                     Image(systemName: "gear")
                         .font(.title2)
-                        .foregroundColor(Color(hex: "10A37F"))
+                        .foregroundColor(theme.primary)
                 }
             }
             .padding(.horizontal)
@@ -32,22 +33,22 @@ struct HomeView: View {
                                 .frame(width: 8, height: 8)
                             Text("Connected to OpenClaw")
                                 .font(.caption)
-                                .foregroundColor(.white)
+                                .foregroundColor(theme.textPrimary)
                         }
 
                         VStack(spacing: 2) {
                             Text(connectedDeviceName)
                                 .font(.caption2)
-                                .foregroundColor(Color(hex: "10A37F"))
+                                .foregroundColor(theme.primary)
 
                             Text(gatewayHost)
                                 .font(.caption2)
-                                .foregroundColor(.gray)
+                                .foregroundColor(theme.textSecondary)
                         }
                     }
                     .padding(.vertical, 8)
                     .padding(.horizontal, 16)
-                    .background(Color(hex: "1E1E1E"))
+                    .background(theme.cardBackground)
                     .cornerRadius(8)
                 } else if ConfigurationManager.shared.isConfigured {
                     VStack(spacing: 4) {
@@ -57,16 +58,16 @@ struct HomeView: View {
                                 .frame(width: 8, height: 8)
                             Text("Connecting...")
                                 .font(.caption)
-                                .foregroundColor(.white)
+                                .foregroundColor(theme.textPrimary)
                         }
 
                         Text(gatewayHost)
                             .font(.caption2)
-                            .foregroundColor(.gray)
+                            .foregroundColor(theme.textSecondary)
                     }
                     .padding(.vertical, 8)
                     .padding(.horizontal, 16)
-                    .background(Color(hex: "1E1E1E"))
+                    .background(theme.cardBackground)
                     .cornerRadius(8)
                 }
 
@@ -94,7 +95,7 @@ struct HomeView: View {
             DeviceInfoView()
         }
         .padding()
-        .background(Color.black)
+        .background(theme.background)
         .navigationTitle("SmartChatApp")
         .navigationDestination(isPresented: $showChatList) {
             ChatListView()

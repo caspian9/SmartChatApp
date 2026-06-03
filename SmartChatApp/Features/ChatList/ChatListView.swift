@@ -3,6 +3,7 @@ import OpenClawChatUI
 import OpenClawKit
 
 struct ChatListView: View {
+    @Environment(\.theme) private var theme
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
     @State private var showError = false
@@ -15,18 +16,18 @@ struct ChatListView: View {
                     ProgressView()
                     Spacer()
                 }
-                .listRowBackground(Color(hex: "1E1E1E"))
+                .listRowBackground(theme.cardBackground)
             }
 
             ForEach(sessions) { session in
                 NavigationLink(destination: sessionView(for: session)) {
                     SessionRowView(session: session)
                 }
-                .listRowBackground(Color(hex: "1E1E1E"))
+                .listRowBackground(theme.cardBackground)
             }
         }
         .listStyle(.plain)
-        .background(Color.black)
+        .background(theme.background)
         .refreshable {
             await refreshFromNetwork()
         }
@@ -43,7 +44,7 @@ struct ChatListView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
-                        .foregroundColor(Color(hex: "10A37F"))
+                        .foregroundColor(theme.primary)
                 }
             }
         }
@@ -118,6 +119,7 @@ struct ChatListView: View {
 }
 
 struct SessionRowView: View {
+    @Environment(\.theme) private var theme
     let session: OpenClawChatSessionEntry
 
     var body: some View {
@@ -125,7 +127,7 @@ struct SessionRowView: View {
             HStack {
                 Text(session.displayName ?? String(session.key.prefix(8)))
                     .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.textPrimary)
                     .lineLimit(1)
 
                 Spacer()
@@ -134,16 +136,16 @@ struct SessionRowView: View {
                     if let model = session.model {
                         Text(model)
                             .font(.caption2)
-                            .foregroundColor(.white)
+                            .foregroundColor(theme.textPrimary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color(hex: "10A37F").opacity(0.15))
+                            .background(theme.primary.opacity(0.15))
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
                     if let modelProvider = session.modelProvider {
                         Text(modelProvider)
                             .font(.caption2)
-                            .foregroundColor(Color(hex: "6B7280"))
+                            .foregroundColor(theme.textSecondary)
                     }
                 }
             }
@@ -152,13 +154,13 @@ struct SessionRowView: View {
                 if let updatedAt = session.updatedAt {
                     Text(formatDate(updatedAt))
                         .font(.caption)
-                        .foregroundColor(.gray)
+                        .foregroundColor(theme.textSecondary)
                 }
 
                 if let inputTokens = session.inputTokens, let outputTokens = session.outputTokens {
                     Text("\(inputTokens + outputTokens) tokens")
                         .font(.caption)
-                        .foregroundColor(.gray)
+                        .foregroundColor(theme.textSecondary)
                 }
 
                 if let thinkingLevel = session.thinkingLevel, thinkingLevel != "off" {

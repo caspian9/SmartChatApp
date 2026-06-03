@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct EntryCard: View {
+    @Environment(\.theme) private var theme
     let title: String
     let icon: String
     let action: () -> Void
@@ -10,14 +11,14 @@ struct EntryCard: View {
             VStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.system(size: 48))
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.primary)
 
                 Text(title)
                     .font(.system(size: 14))
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.textPrimary)
             }
             .frame(width: 150, height: 120)
-            .background(Color(hex: "1E1E1E"))
+            .background(theme.cardBackground)
             .cornerRadius(12)
         }
         .buttonStyle(PlainButtonStyle())

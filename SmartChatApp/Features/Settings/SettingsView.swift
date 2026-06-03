@@ -2,13 +2,13 @@ import SwiftUI
 import UIKit
 
 struct SettingsView: View {
+    @Environment(\.theme) private var theme
     @StateObject private var config = ConfigurationManager.shared
     @State private var showConnectionSheet = false
     @State private var isConnected = false
     @State private var connectedDeviceName = ""
 
     private static let buildDate: Date = {
-        // Capture build time at app launch - this becomes the static constant
         return Date()
     }()
 
@@ -25,7 +25,7 @@ struct SettingsView: View {
                     Text("Gateway")
                     Spacer()
                     Text(config.isConfigured ? config.displayURL : "Not configured")
-                        .foregroundColor(config.isConfigured ? .secondary : .gray)
+                        .foregroundColor(config.isConfigured ? theme.textSecondary : .gray)
                         .lineLimit(1)
                 }
 
@@ -37,7 +37,7 @@ struct SettingsView: View {
                             .fill(isConnected ? Color.green : Color.gray)
                             .frame(width: 8, height: 8)
                         Text(isConnected ? "Connected" : "Disconnected")
-                            .foregroundColor(isConnected ? Color(hex: "10A37F") : .gray)
+                            .foregroundColor(isConnected ? theme.primary : theme.textSecondary)
                     }
                 }
 
@@ -46,7 +46,7 @@ struct SettingsView: View {
                         Text("Device ID")
                         Spacer()
                         Text(connectedDeviceName)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(theme.textSecondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -55,12 +55,15 @@ struct SettingsView: View {
                 Button("Configure Connection") {
                     showConnectionSheet = true
                 }
-                .foregroundColor(Color(hex: "10A37F"))
+                .foregroundColor(theme.primary)
             }
 
             Section("Appearance") {
-                Toggle("Dark Mode", isOn: .constant(true))
-                    .disabled(true)
+                Picker("Theme", selection: $config.appearanceTheme) {
+                    ForEach(AppearanceTheme.allCases, id: \.self) { theme in
+                        Text(theme.rawValue).tag(theme)
+                    }
+                }
             }
 
             Section("About") {
@@ -68,14 +71,14 @@ struct SettingsView: View {
                     Text("Version")
                     Spacer()
                     Text("1.0.0")
-                        .foregroundColor(.gray)
+                        .foregroundColor(theme.textSecondary)
                 }
 
                 HStack {
                     Text("Build")
                     Spacer()
                     Text(buildDateString)
-                        .foregroundColor(.gray)
+                        .foregroundColor(theme.textSecondary)
                 }
             }
         }
@@ -103,6 +106,7 @@ struct SettingsView: View {
 
 struct ConnectionConfigSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
     @StateObject private var config = ConfigurationManager.shared
     @State private var serverHost: String = ""
     @State private var serverPort: String = ""
@@ -147,7 +151,7 @@ struct ConnectionConfigSheet: View {
                                 .fill(Color.green)
                                 .frame(width: 8, height: 8)
                             Text("Connected: \(connectedDeviceName)")
-                                .foregroundColor(Color(hex: "10A37F"))
+                                .foregroundColor(theme.primary)
                         }
 
                         Button(action: disconnectConnection) {
@@ -178,9 +182,9 @@ struct ConnectionConfigSheet: View {
                     if let result = testResult {
                         HStack {
                             Image(systemName: testStatus == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundColor(testStatus == .success ? Color(hex: "10A37F") : .red)
+                                .foregroundColor(testStatus == .success ? theme.primary : .red)
                             Text(result)
-                                .foregroundColor(testStatus == .success ? Color(hex: "10A37F") : .red)
+                                .foregroundColor(testStatus == .success ? theme.primary : .red)
                         }
                     }
                 }
@@ -210,7 +214,6 @@ struct ConnectionConfigSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
-                        // Save config before dismissing
                         config.gatewayHost = serverHost
                         config.gatewayPort = Int(serverPort) ?? 443
                         config.gatewayUseTLS = useTLS
@@ -226,7 +229,6 @@ struct ConnectionConfigSheet: View {
                 useTLS = config.gatewayUseTLS
                 authToken = config.authToken
 
-                // Check current connection status
                 Task {
                     let connected = await SessionManager.shared.connectionStatus
                     let deviceName = await SessionManager.shared.deviceName ?? ""

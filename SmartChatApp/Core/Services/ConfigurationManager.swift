@@ -1,5 +1,11 @@
 import Foundation
 
+enum AppearanceTheme: String, CaseIterable {
+    case system = "跟随系统"
+    case light = "浅色"
+    case dark = "深色"
+}
+
 final class ConfigurationManager: ObservableObject {
     static let shared = ConfigurationManager()
 
@@ -10,6 +16,7 @@ final class ConfigurationManager: ObservableObject {
         static let gatewayPort = "openclaw_gateway_port"
         static let gatewayUseTLS = "openclaw_gateway_use_tls"
         static let authToken = "openclaw_auth_token"
+        static let appearanceTheme = "openclaw_appearance_theme"
     }
 
     @Published var gatewayHost: String {
@@ -36,17 +43,30 @@ final class ConfigurationManager: ObservableObject {
         }
     }
 
+    @Published var appearanceTheme: AppearanceTheme {
+        didSet {
+            defaults.set(appearanceTheme.rawValue, forKey: Keys.appearanceTheme)
+        }
+    }
+
     private init() {
         self.gatewayHost = defaults.string(forKey: Keys.gatewayHost) ?? ""
-        
+
         var port = defaults.integer(forKey: Keys.gatewayPort)
         if port == 0 {
             port = 443
         }
         self.gatewayPort = port
-        
+
         self.gatewayUseTLS = defaults.object(forKey: Keys.gatewayUseTLS) as? Bool ?? true
         self.authToken = defaults.string(forKey: Keys.authToken) ?? ""
+
+        if let themeRaw = defaults.string(forKey: Keys.appearanceTheme),
+           let theme = AppearanceTheme(rawValue: themeRaw) {
+            self.appearanceTheme = theme
+        } else {
+            self.appearanceTheme = .system
+        }
     }
 
     func clear() {
