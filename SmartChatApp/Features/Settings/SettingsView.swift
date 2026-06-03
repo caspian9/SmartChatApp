@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var showProfileSheet = false
     @State private var sessionCacheCount: Int = 0
     @State private var messageCacheStats: (sessionCount: Int, messageCount: Int) = (0, 0)
+    @State private var profileListRefresh: Bool = false
 
     private static let buildDate: Date = {
         return Date()
@@ -30,7 +31,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                ProfileListView(showNewProfileSheet: $isCreatingNew) { profile in
+                ProfileListView(showNewProfileSheet: $isCreatingNew, refreshTrigger: profileListRefresh) { profile in
                     editingProfile = profile
                 }
 
@@ -179,6 +180,13 @@ struct SettingsView: View {
         .onChange(of: editingProfile) { _, newValue in
             if newValue != nil {
                 showProfileSheet = true
+            }
+        }
+        .onChange(of: showProfileSheet) { _, newValue in
+            if !newValue {
+                editingProfile = nil
+                isCreatingNew = false
+                profileListRefresh.toggle()
             }
         }
         .task {

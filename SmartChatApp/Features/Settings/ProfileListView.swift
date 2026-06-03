@@ -10,10 +10,13 @@ struct ProfileListView: View {
     @State private var failedProfileId: UUID?
 
     @Binding var showNewProfileSheet: Bool
+    var refreshTrigger: Bool
+
     let onEditProfile: (GatewayProfile) -> Void
 
-    init(showNewProfileSheet: Binding<Bool> = .constant(false), onEditProfile: @escaping (GatewayProfile) -> Void = { _ in }) {
+    init(showNewProfileSheet: Binding<Bool> = .constant(false), refreshTrigger: Bool = false, onEditProfile: @escaping (GatewayProfile) -> Void = { _ in }) {
         _showNewProfileSheet = showNewProfileSheet
+        self.refreshTrigger = refreshTrigger
         self.onEditProfile = onEditProfile
     }
 
@@ -25,8 +28,8 @@ struct ProfileListView: View {
                 profileList
             }
         }
-        .task {
-            isConnected = await SessionManager.shared.connectionStatus
+        .task(id: refreshTrigger) {
+            await loadConnectionStatus()
         }
         .alert("Delete Profile", isPresented: $showDeleteAlert) {
             Button("Cancel", role: .cancel) { }
@@ -45,6 +48,10 @@ struct ProfileListView: View {
             .font(.subheadline)
             .foregroundColor(theme.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    func loadConnectionStatus() async {
+        isConnected = await SessionManager.shared.connectionStatus
     }
 
     private var profileList: some View {
