@@ -17,7 +17,7 @@ struct ConnectionView: View {
             }
 
             Section {
-                if store.state.isConnecting {
+                if store.isConnecting {
                     HStack {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle())
@@ -28,16 +28,16 @@ struct ConnectionView: View {
                     Button(action: { store.send(.connect) }) {
                         HStack {
                             Spacer()
-                            Text(store.state.isConnected ? "Disconnect" : "Connect")
-                                .foregroundColor(store.state.isConnected ? .red : Color(hex: "10A37F"))
+                            Text(store.isConnected ? "Disconnect" : "Connect")
+                                .foregroundColor(store.isConnected ? .red : Color(hex: "10A37F"))
                             Spacer()
                         }
                     }
-                    .disabled(store.state.serverURL.isEmpty)
+                    .disabled(store.serverURL.isEmpty)
                 }
             }
 
-            if let error = store.state.error {
+            if let error = store.error {
                 Section {
                     Text(error)
                         .foregroundColor(.red)
@@ -48,14 +48,14 @@ struct ConnectionView: View {
         .navigationTitle("Connection")
     }
 
-    private func binding(for keyPath: WritableKeyPath<ConnectionFeature.State, String>) -> Binding<String> {
+    private func binding<T>(for keyPath: WritableKeyPath<ConnectionFeature.State, T>) -> Binding<T> {
         Binding(
-            get: { store.state[keyPath: keyPath] },
+            get: { store[keyPath: keyPath] },
             set: { newValue in
                 if keyPath == \.serverURL {
-                    store.send(.serverURLChanged(newValue))
+                    store.send(.serverURLChanged(newValue as! String))
                 } else if keyPath == \.authToken {
-                    store.send(.authTokenChanged(newValue))
+                    store.send(.authTokenChanged(newValue as! String))
                 }
             }
         )
