@@ -46,7 +46,6 @@ struct NativeChatViewModel {
         case appendNewMessages([ChatMessage])
         case loadMoreHistory
         case loadedMoreHistory([ChatMessage], hasMore: Bool)
-        case incrementCacheCounter
     }
 
     @Dependency(\.continuousClock) var clock
@@ -262,13 +261,14 @@ struct NativeChatViewModel {
 
                 // Acquire lock BEFORE creating .run closure to prevent concurrent Tasks
                 Self.loadHistoryLock.lock()
-                if Self.inFlightLoadHistory == cachedSessionKey {
+                let alreadyInProgress = Self.inFlightLoadHistory == cachedSessionKey
+                if alreadyInProgress {
                     Self.loadHistoryLock.unlock()
-                    logger.log("SMAlog: [loadHistory] already in progress for \(cachedSessionKeyPreview), skipping")
-                    return .none
+                    logger.log("SMAlog: [loadHistory] already in progress for \(cachedSessionKeyPreview)")
+                } else {
+                    Self.inFlightLoadHistory = cachedSessionKey
+                    Self.loadHistoryLock.unlock()
                 }
-                Self.inFlightLoadHistory = cachedSessionKey
-                Self.loadHistoryLock.unlock()
 
                 let taskIdStr = String(UUID().uuidString.prefix(8))
 
@@ -282,7 +282,7 @@ struct NativeChatViewModel {
                             }
                             Self.loadHistoryLock.unlock()
                         }
-                        // Always load cache first (messages already cleared in selectSession when switching)
+                        // Load cache first and send to UI immediately
                         let cachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
                         logger.log("SMAlog: cache returned \(cachedMessages.count) messages, sessionKey: \(cachedSessionKeyPreview)")
                         if !cachedMessages.isEmpty {
@@ -316,6 +316,7 @@ struct NativeChatViewModel {
                                 )
                             }
                             logger.log("SMAlog: Loaded \(chatMessages.count) cached messages for session: \(cachedSessionKeyPreview), isRestoring: \(cachedIsRestoring)")
+                            // Send cached messages to UI even if network fails
                             await send(.loadedCachedHistory(chatMessages, isRestoring: cachedIsRestoring))
                         }
 
@@ -499,21 +500,14 @@ struct NativeChatViewModel {
 
             case .loadedCachedHistory(let messages, let isRestoring):
                 logger.log("SMAlog: loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)")
+                // Populate markdown cache BEFORE updating state
+                // This ensures cache is ready when views first render
+                let cachedMessages = messages
+                Task { @MainActor in
+                    MarkdownCache.shared.precomputeForMessages(cachedMessages)
+                }
                 state.messages = messages
                 state.scrollTrigger += 1
-                state.cacheLoadCounter += 1
-                // Precompute markdown synchronously on main actor, then force refresh
-                return .run { [messages] send in
-                    Task {
-                        await MainActor.run {
-                            MarkdownCache.shared.precomputeForMessages(messages)
-                        }
-                        // Force view refresh after cache is populated
-                        await send(.incrementCacheCounter)
-                    }
-                }
-
-            case .incrementCacheCounter:
                 state.cacheLoadCounter += 1
                 return .none
 
