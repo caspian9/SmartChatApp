@@ -4,6 +4,7 @@ import OpenClawKit
 
 @Reducer
 struct ConnectionFeature {
+    @ObservableState
     struct State: Equatable {
         var serverURL: String = ""
         var authToken: String = ""
@@ -41,15 +42,17 @@ struct ConnectionFeature {
                 }
                 state.isConnecting = true
                 state.error = nil
+                let serverURL = state.serverURL
+                let authToken = state.authToken
                 return .run { send in
                     do {
-                        guard let url = URL(string: state.serverURL) else {
+                        guard let url = URL(string: serverURL) else {
                             await send(.connectionFailed("Invalid URL"))
                             return
                         }
                         let client = GatewayClient()
-                        _ = try await client.connect(gatewayURL: url, authToken: state.authToken)
-                        await client.disconnect()
+                        try await client.connect(gatewayURL: url, authToken: authToken)
+                        try await client.disconnect()
                         await send(.connectionSucceeded)
                     } catch {
                         await send(.connectionFailed(error.localizedDescription))

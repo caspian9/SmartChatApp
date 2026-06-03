@@ -175,11 +175,14 @@ struct ConnectionConfigSheet: View {
             return
         }
 
+        print("Testing connection to: \(urlString)")
+        print("Auth token: \(authToken.prefix(10))...")
+
         Task {
             do {
                 let client = GatewayClient()
-                _ = try await client.connect(gatewayURL: url, authToken: authToken)
-                await client.disconnect()
+                try await client.connect(gatewayURL: url, authToken: authToken)
+                try await client.disconnect()
 
                 await MainActor.run {
                     isTesting = false
@@ -187,6 +190,7 @@ struct ConnectionConfigSheet: View {
                     testResult = "Connection successful!"
                 }
             } catch {
+                print("Connection error: \(error)")
                 await MainActor.run {
                     isTesting = false
                     testStatus = .failure

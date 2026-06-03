@@ -9,7 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: ""
@@ -21,9 +22,7 @@ packages:
     url: https://github.com/pointfreeco/swift-composable-architecture
     from: "1.9.3"
   OpenClawKit:
-    url: https://github.com/caspian9/openclaw
-    branch: main
-    subpath: apps/shared/OpenClawKit
+    path: /Users/hai/Code/openclaw/apps/shared/OpenClawKit
 
 targets:
   SmartChatApp:

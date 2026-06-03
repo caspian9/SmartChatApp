@@ -5,14 +5,12 @@ import OpenClawKit
 struct ChatView: View {
     let sessionKey: String
     @State private var viewModel: OpenClawChatViewModel
-    @ObservedObject private var cardRegistry = CardRegistry.shared
 
     init(sessionKey: String, transport: any OpenClawChatTransport) {
         self.sessionKey = sessionKey
         _viewModel = State(initialValue: OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
-            prefersExplicitThinkingLevel: false,
             onThinkingLevelChanged: nil
         ))
     }
@@ -46,11 +44,7 @@ struct PendingCardsView: View {
     var body: some View {
         VStack(spacing: 8) {
             ForEach(toolCalls) { call in
-                if let cardView = CardRegistry.shared.createCard(for: call.name, arguments: call.args) {
-                    cardView
-                } else {
-                    PendingToolCallView(call: call)
-                }
+                PendingToolCallView(call: call)
             }
         }
     }
@@ -78,18 +72,5 @@ struct PendingToolCallView: View {
     private var displayName: String {
         let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
         return "\(display.emoji) \(display.label)"
-    }
-}
-
-struct ToolCallCardView: View {
-    let toolName: String
-    let arguments: AnyCodable?
-
-    var body: some View {
-        if let cardView = CardRegistry.shared.createCard(for: toolName, arguments: arguments) {
-            cardView
-        } else {
-            EmptyView()
-        }
     }
 }
