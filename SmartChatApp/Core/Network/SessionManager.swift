@@ -15,8 +15,8 @@ actor SessionManager {
 
     func connect(gatewayURL: URL, authToken: String) async throws {
         let connectOptions = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
+            role: "operator",
+            scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
             caps: ["sessions", "chat"],
             commands: [],
             permissions: [:],
