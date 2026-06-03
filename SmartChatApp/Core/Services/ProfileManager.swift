@@ -8,30 +8,20 @@ private let profileLog = Logger(subsystem: "SmartChatApp", category: "ProfileMan
 final class ProfileManager: ObservableObject {
     static let shared = ProfileManager()
 
-    private var modelContainer: ModelContainer?
-    private var modelContext: ModelContext?
+    var modelContainer: ModelContainer?
 
     @Published var profiles: [GatewayProfile] = []
     @Published var activeProfile: GatewayProfile?
 
-    private init() {
-        setupContainer()
-    }
+    private init() {}
 
-    private func setupContainer() {
-        do {
-            let schema = Schema([GatewayProfile.self])
-            let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-            modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
-            modelContext = modelContainer?.mainContext
-            loadProfiles()
-        } catch {
-            profileLog.log("SMAlog: [ProfileManager] Failed to setup container: \(error.localizedDescription)")
-        }
+    func configure(with container: ModelContainer) {
+        self.modelContainer = container
+        loadProfiles()
     }
 
     func loadProfiles() {
-        guard let context = modelContext else { return }
+        guard let context = modelContainer?.mainContext else { return }
         do {
             let descriptor = FetchDescriptor<GatewayProfile>(sortBy: [SortDescriptor(\.createdAt)])
             profiles = try context.fetch(descriptor)
@@ -43,7 +33,7 @@ final class ProfileManager: ObservableObject {
     }
 
     func addProfile(name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool) -> GatewayProfile {
-        guard let context = modelContext else {
+        guard let context = modelContainer?.mainContext else {
             fatalError("ModelContext not initialized")
         }
         let profile = GatewayProfile(
@@ -74,7 +64,7 @@ final class ProfileManager: ObservableObject {
     }
 
     func deleteProfile(_ profile: GatewayProfile) {
-        guard let context = modelContext else { return }
+        guard let context = modelContainer?.mainContext else { return }
         let wasActive = profile.isActive
         context.delete(profile)
         saveContext()
@@ -85,7 +75,7 @@ final class ProfileManager: ObservableObject {
     }
 
     func activateProfile(_ profile: GatewayProfile?) {
-        guard let context = modelContext else { return }
+        guard let context = modelContainer?.mainContext else { return }
         for p in profiles {
             p.isActive = false
         }
@@ -96,19 +86,21 @@ final class ProfileManager: ObservableObject {
     }
 
     func switchToProfile(_ profile: GatewayProfile) async {
-        if await SessionManager.shared.connectionStatus {
+        let wasConnected = await SessionManager.shared.connectionStatus
+        if wasConnected {
             await SessionManager.shared.disconnect()
         }
         activateProfile(profile)
         do {
             try await SessionManager.shared.connectWithProfile(profile)
+            profileLog.log("SMAlog: [ProfileManager] Connected to profile: \(profile.name)")
         } catch {
             profileLog.log("SMAlog: [ProfileManager] Failed to connect: \(error.localizedDescription)")
         }
     }
 
     private func saveContext() {
-        guard let context = modelContext else { return }
+        guard let context = modelContainer?.mainContext else { return }
         do {
             try context.save()
         } catch {

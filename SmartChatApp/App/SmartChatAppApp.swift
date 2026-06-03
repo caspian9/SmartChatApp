@@ -18,6 +18,9 @@ struct SmartChatAppApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .onAppear {
+                    ProfileManager.shared.configure(with: sharedModelContainer)
+                }
         }
         .modelContainer(sharedModelContainer)
     }

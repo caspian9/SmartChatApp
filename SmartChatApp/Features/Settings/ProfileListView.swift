@@ -92,11 +92,10 @@ struct ProfileListView: View {
                         await ProfileManager.shared.switchToProfile(profile)
                     }
                 } label: {
-                    Text("Connect")
+                    Text(profile.isActive ? "Reconnect" : "Connect")
                         .font(.caption)
                         .foregroundColor(theme.primary)
                 }
-                .disabled(profile.isActive)
             }
             .padding(.vertical, 8)
             .contentShape(Rectangle())
