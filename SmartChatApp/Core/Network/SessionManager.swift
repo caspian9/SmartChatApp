@@ -397,13 +397,32 @@ actor SessionManager {
             logger.log("log: Already connected (operator+node), skipping")
             return
         }
-        guard let config = getGatewayConfig() else {
+
+        // Try active profile first, then fall back to legacy config
+        var host: String
+        var port: Int
+        var useTLS: Bool
+        var authToken: String
+
+        let activeProfile = await MainActor.run { ProfileManager.shared.activeProfile }
+        if let profile = activeProfile {
+            host = profile.host
+            port = profile.port
+            useTLS = profile.tlsEnabled
+            authToken = profile.token
+        } else if let config = getGatewayConfig() {
+            host = config.host
+            port = config.port
+            useTLS = config.useTLS
+            authToken = config.authToken
+        } else {
             logger.log("log: No gateway config available")
             appendDebugLog("gateway: No config available", category: "gateway")
             throw SessionManagerError.notConnected
         }
-        let scheme = config.useTLS ? "wss" : "ws"
-        let urlString = "\(scheme)://\(config.host):\(config.port)/gateway"
+
+        let scheme = useTLS ? "wss" : "ws"
+        let urlString = "\(scheme)://\(host):\(port)/gateway"
         guard let url = URL(string: urlString) else {
             throw SessionManagerError.notConnected
         }
@@ -412,14 +431,14 @@ actor SessionManager {
 
         switch role {
         case .operatorOnly:
-            try await connect(gatewayURL: url, authToken: config.authToken)
+            try await connect(gatewayURL: url, authToken: authToken)
         case .nodeOnly:
-            try await connectNodeRole(gatewayURL: url, authToken: config.authToken)
+            try await connectNodeRole(gatewayURL: url, authToken: authToken)
         case .operatorAndNode:
-            try await connect(gatewayURL: url, authToken: config.authToken)
+            try await connect(gatewayURL: url, authToken: authToken)
             if !nodeConnected {
                 do {
-                    try await connectNodeRole(gatewayURL: url, authToken: config.authToken)
+                    try await connectNodeRole(gatewayURL: url, authToken: authToken)
                 } catch {
                     logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
                 }

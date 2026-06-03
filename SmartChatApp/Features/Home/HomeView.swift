@@ -111,7 +111,6 @@ struct HomeView: View {
 
     private func refreshConnectionStatus() {
         Task {
-            let config = ConfigurationManager.shared
             let wasConnected = await SessionManager.shared.connectionStatus
             let deviceName = await SessionManager.shared.deviceName ?? ""
 
@@ -123,7 +122,12 @@ struct HomeView: View {
                     isConnected = false
                     connectedDeviceName = ""
                 }
-                gatewayHost = config.displayURL
+                // Use active profile host, or legacy config if no profile
+                if let activeProfile = ProfileManager.shared.activeProfile {
+                    gatewayHost = activeProfile.host
+                } else {
+                    gatewayHost = ConfigurationManager.shared.displayURL
+                }
             }
         }
     }
