@@ -242,7 +242,7 @@ struct EditProfileSheet: View {
                         onSave(editName, editColorTag, editHost, port, editToken, editTlsEnabled)
                         dismiss()
                     }
-                    .disabled(editName.isEmpty || editHost.isEmpty || editToken.isEmpty)
+                    .disabled(editName.isEmpty)
                 }
             }
         }
