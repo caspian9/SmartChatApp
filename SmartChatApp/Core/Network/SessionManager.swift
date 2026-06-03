@@ -89,6 +89,37 @@ actor SessionManager {
         GatewayChatTransport(nodeSession: nodeSession, sessionKey: sessionKey)
     }
 
+    struct GatewayConfig {
+        let host: String
+        let port: Int
+        let useTLS: Bool
+        let authToken: String
+    }
+
+    func getGatewayConfig() -> GatewayConfig? {
+        let config = ConfigurationManager.shared
+        guard !config.gatewayHost.isEmpty, !config.authToken.isEmpty else { return nil }
+        return GatewayConfig(
+            host: config.gatewayHost,
+            port: config.gatewayPort,
+            useTLS: config.gatewayUseTLS,
+            authToken: config.authToken
+        )
+    }
+
+    func ensureConnected() async throws {
+        if isConnected { return }
+        guard let config = getGatewayConfig() else {
+            throw SessionManagerError.notConnected
+        }
+        let scheme = config.useTLS ? "wss" : "ws"
+        let urlString = "\(scheme)://\(config.host):\(config.port)/gateway"
+        guard let url = URL(string: urlString) else {
+            throw SessionManagerError.notConnected
+        }
+        try await connect(gatewayURL: url, authToken: config.authToken)
+    }
+
     func disconnect() async {
         await nodeSession.disconnect()
         isConnected = false

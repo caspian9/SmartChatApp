@@ -6,10 +6,12 @@ struct ChatView: View {
     let sessionKey: String
     @State private var viewModel: OpenClawChatViewModel
     private let transport: any OpenClawChatTransport
+    private let onAppear: () -> Void
 
-    init(sessionKey: String, transport: any OpenClawChatTransport) {
+    init(sessionKey: String, transport: any OpenClawChatTransport, onAppear: @escaping () -> Void = {}) {
         self.sessionKey = sessionKey
         self.transport = transport
+        self.onAppear = onAppear
         _viewModel = State(initialValue: OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
@@ -37,6 +39,7 @@ struct ChatView: View {
                 }
             }
         }
+        .onAppear { onAppear() }
     }
 }
 
