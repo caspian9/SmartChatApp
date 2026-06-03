@@ -39,14 +39,8 @@ struct NativeChatView: View {
                             scrollToBottom(proxy: proxy)
                         }
                     }
-                    .onChange(of: store.messages) { _ in
-                        // Don't scroll on any message list changes - let content stability handle it
-                    }
-                    .onChange(of: store.isRestoringFromCache) { wasRestoring, isRestoring in
-                        // When done restoring from cache, immediately scroll to bottom
-                        if wasRestoring && !isRestoring {
-                            scrollToBottom(proxy: proxy)
-                        }
+                    .onChange(of: store.messages.count) { oldCount, newCount in
+                        // Debug: track message count changes
                     }
                 }
                 .onTapGesture {
