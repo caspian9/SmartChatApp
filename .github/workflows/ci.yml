@@ -18,12 +18,14 @@ jobs:
 
       # project.yml references OpenClawKit as a path-linked package
       # (../openclaw/apps/shared/OpenClawKit). Check out the openclaw
-      # fork as a sibling so the relative path resolves.
-      - name: Checkout OpenClaw sibling
-        uses: actions/checkout@v4
-        with:
-          repository: caspian9/openclaw
-          path: ../openclaw
+      # fork as a sibling so the relative path resolves. actions/checkout
+      # refuses paths outside the workspace, so we git clone directly
+      # using the runner's GITHUB_TOKEN.
+      - name: Clone OpenClaw sibling
+        run: |
+          git clone \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/caspian9/openclaw.git" \
+            ../openclaw
 
       - name: Install XcodeGen
         run: brew install xcodegen
