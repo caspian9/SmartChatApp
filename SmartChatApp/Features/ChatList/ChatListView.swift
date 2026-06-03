@@ -5,7 +5,8 @@ import OpenClawKit
 struct ChatListView: View {
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
-    @State private var selectedSessionKey: String?
+    @State private var isRefreshing = false
+    @State private var showError = false
 
     var body: some View {
         List {
@@ -31,7 +32,7 @@ struct ChatListView: View {
         .listStyle(.plain)
         .background(Color.black)
         .refreshable {
-            await loadSessionsAsync()
+            await refreshFromNetwork()
         }
         .navigationTitle("Chats")
         .navigationBarTitleDisplayMode(.large)
@@ -50,17 +51,41 @@ struct ChatListView: View {
                 }
             }
         }
-        .onAppear { loadSessions() }
+        .onAppear {
+            loadFromCacheThenRefresh()
+        }
     }
 
-    private func loadSessionsAsync() async {
+    private func loadFromCacheThenRefresh() {
+        // 1. 先加载缓存显示
+        if let cached = SessionCache.load() {
+            sessions = cached
+            isLoading = false
+        } else {
+            isLoading = true
+        }
+
+        // 2. 后台刷新网络数据
+        Task {
+            await refreshFromNetwork()
+        }
+    }
+
+    private func refreshFromNetwork() async {
         do {
             try await SessionManager.shared.ensureConnected()
             let transport = SessionManager.shared.makeTransport(sessionKey: "")
             let response = try await transport.listSessions(limit: 50)
-            sessions = response.sessions
+            await MainActor.run {
+                sessions = response.sessions
+                isLoading = false
+                SessionCache.save(response.sessions)
+            }
         } catch {
-            print("Failed to load sessions: \(error)")
+            await MainActor.run {
+                isLoading = false
+                // 网络失败时保持缓存数据，静默处理
+            }
         }
     }
 
@@ -79,26 +104,6 @@ struct ChatListView: View {
         )
     }
 
-    private func loadSessions() {
-        isLoading = true
-        Task {
-            do {
-                try await SessionManager.shared.ensureConnected()
-                let transport = SessionManager.shared.makeTransport(sessionKey: "")
-                let response = try await transport.listSessions(limit: 50)
-                await MainActor.run {
-                    sessions = response.sessions
-                    isLoading = false
-                }
-            } catch {
-                print("Failed to load sessions: \(error)")
-                await MainActor.run {
-                    isLoading = false
-                }
-            }
-        }
-    }
-
     private func createSession() {
         Task {
             do {
@@ -108,6 +113,7 @@ struct ChatListView: View {
                 let response = try await transport.listSessions(limit: 50)
                 await MainActor.run {
                     sessions = response.sessions
+                    SessionCache.save(response.sessions)
                 }
             } catch {
                 print("Failed to create session: \(error)")
