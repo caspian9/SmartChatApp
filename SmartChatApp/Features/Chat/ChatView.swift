@@ -20,7 +20,7 @@ struct ChatView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             OpenClawChatView(
                 viewModel: viewModel,
                 showsSessionSwitcher: false,
@@ -29,29 +29,24 @@ struct ChatView: View {
                 userAccent: Color(hex: "10A37F"),
                 showsAssistantTrace: false
             )
-            .id(sessionKey)
 
-            // Overlay cards for pending tool calls
             if !viewModel.pendingToolCalls.isEmpty {
-                VStack {
-                    Spacer()
-                    PendingCardsView(toolCalls: viewModel.pendingToolCalls)
-                        .padding()
-                }
+                toolCallsOverlay
             }
         }
         .onAppear { onAppear() }
     }
-}
 
-struct PendingCardsView: View {
-    let toolCalls: [OpenClawChatPendingToolCall]
-
-    var body: some View {
-        VStack(spacing: 8) {
-            ForEach(toolCalls) { call in
-                PendingToolCallView(call: call)
+    private var toolCallsOverlay: some View {
+        VStack {
+            Spacer()
+            VStack(spacing: 8) {
+                ForEach(viewModel.pendingToolCalls) { call in
+                    PendingToolCallView(call: call)
+                }
             }
+            .padding(.horizontal)
+            .padding(.bottom, 60)
         }
     }
 }
@@ -60,19 +55,22 @@ struct PendingToolCallView: View {
     let call: OpenClawChatPendingToolCall
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             ProgressView()
                 .controlSize(.small)
+                .tint(.white)
 
             Text(displayName)
-                .font(.footnote)
+                .font(.subheadline)
+                .foregroundColor(.white)
                 .lineLimit(1)
 
             Spacer()
         }
-        .padding(12)
-        .background(Color.white.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var displayName: String {
