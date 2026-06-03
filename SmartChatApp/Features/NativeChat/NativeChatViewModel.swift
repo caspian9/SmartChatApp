@@ -24,6 +24,7 @@ struct NativeChatViewModel {
         var isRestoringFromCache: Bool = false
         var needsScrollToBottom: Bool = false
         var scrollTrigger: Int = 0
+        var cacheLoadCounter: Int = 0
     }
 
     enum Action: Equatable {
@@ -498,7 +499,8 @@ struct NativeChatViewModel {
             case .loadedCachedHistory(let messages, let isRestoring):
                 logger.log("SMAlog: loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)")
                 state.messages = messages
-                state.needsScrollToBottom = true
+                state.scrollTrigger += 1
+                state.cacheLoadCounter += 1
                 return .none
 
             case .appendNewMessages(let newMessages):
