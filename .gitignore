@@ -22,10 +22,20 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 
+# XcodeGen generated project
+*.xcodeproj/
+!*.xcodeproj/
+!*.xcodeproj/*.pbxproj
+!*.xcodeproj/project.xcworkspace/
+!*.xcodeproj/project.xcworkspace/contents.xcworkspacedata
+!*.xcodeproj/project.xcworkspace/xcshareddata/
+!*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+!*.xcodeproj/xcuserdata/
+
 # Swift Package Manager
 .swiftpm/
 Packages/
-Package.resolved
+!Packages/Package.resolved
 *.xcodeproj
 !*.xcodeproj
 *.xcodeproj/
