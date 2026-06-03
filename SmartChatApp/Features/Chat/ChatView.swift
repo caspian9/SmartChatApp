@@ -6,13 +6,16 @@ struct ChatView: View {
     let sessionKey: String
     let sessionEntry: OpenClawChatSessionEntry?
     @State private var viewModel: OpenClawChatViewModel
-    private let transport: any OpenClawChatTransport
     private let onAppear: () -> Void
 
-    init(sessionKey: String, sessionEntry: OpenClawChatSessionEntry? = nil, transport: any OpenClawChatTransport, onAppear: @escaping () -> Void = {}) {
+    init(
+        sessionKey: String,
+        sessionEntry: OpenClawChatSessionEntry? = nil,
+        transport: any OpenClawChatTransport,
+        onAppear: @escaping () -> Void = {})
+    {
         self.sessionKey = sessionKey
         self.sessionEntry = sessionEntry
-        self.transport = transport
         self.onAppear = onAppear
         _viewModel = State(initialValue: OpenClawChatViewModel(
             sessionKey: sessionKey,
@@ -31,9 +34,5 @@ struct ChatView: View {
             showsAssistantTrace: true
         )
         .onAppear { onAppear() }
-        .task {
-            try? await transport.setActiveSessionKey(sessionKey)
-            viewModel.load()
-        }
     }
 }
