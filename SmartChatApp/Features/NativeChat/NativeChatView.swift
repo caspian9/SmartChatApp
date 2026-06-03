@@ -2,7 +2,9 @@ import SwiftUI
 import ComposableArchitecture
 
 struct NativeChatView: View {
-    let store: StoreOf<NativeChatViewModel>
+    @StateObject private var store = StoreOf<NativeChatViewModel>(initialState: NativeChatViewModel.State()) {
+        NativeChatViewModel()
+    }
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
@@ -24,11 +26,6 @@ struct NativeChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
-                        Text("Messages: \(store.messages.count), Sessions: \(store.sessions.count), Selected: \(store.selectedSession != nil)")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                            .padding()
-
                         ForEach(store.messages) { message in
                             MessageBubbleView(message: message)
                                 .id(message.id)

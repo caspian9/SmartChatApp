@@ -119,7 +119,15 @@ struct ChatMessage: Identifiable, Equatable {
     }
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
-        // Only compare by id - other fields can change without needing view update
-        lhs.id == rhs.id
+        // Compare all fields to ensure proper view updates
+        lhs.id == rhs.id &&
+        lhs.text == rhs.text &&
+        lhs.timestamp == rhs.timestamp &&
+        lhs.role == rhs.role &&
+        lhs.state == rhs.state &&
+        lhs.seq == rhs.seq &&
+        lhs.startedAt == rhs.startedAt &&
+        lhs.endedAt == rhs.endedAt &&
+        lhs.livenessState == rhs.livenessState
     }
 }

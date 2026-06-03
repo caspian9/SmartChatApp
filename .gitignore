@@ -81,6 +81,9 @@ Icon?
 *~
 .~lock*
 
+# Xcode index data
+.build/
+
 # Logging
 *.log
 logs/
