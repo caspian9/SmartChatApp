@@ -21,22 +21,8 @@ public actor GatewayChatTransport: OpenClawChatTransport {
             )
             let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: responseData)
 
-            if let serverMessages = payload.messages {
-                let decoded = serverMessages.compactMap { msg -> OpenClawChatMessage? in
-                    guard let data = try? JSONEncoder().encode(msg) else { return nil }
-                    return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
-                }
-
-                let cachedIds = await MessageCache.shared.messageIds(for: sessionKey)
-                let hasNewMessages = decoded.contains { msg in
-                    guard let id = msg.id.uuidString as String? else { return false }
-                    return !cachedIds.contains(id)
-                }
-
-                if hasNewMessages {
-                    await MessageCache.shared.setMessages(decoded, for: sessionKey)
-                }
-            }
+            // Note: MessageCache.setMessages is called by NativeChatViewModel after transforming messages
+            // to ensure proper deduplication and cache management there
             return payload
         } catch {
             print("requestHistory failed: \(error)")

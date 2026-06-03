@@ -1,6 +1,10 @@
 import Foundation
 import OpenClawKit
 import OpenClawChatUI
+import OSLog
+import CryptoKit
+
+private let osLog = OSLog(subsystem: "SmartChatApp", category: "MessageCache")
 
 actor MessageCache {
     static let shared = MessageCache()
@@ -16,48 +20,79 @@ actor MessageCache {
 
     func getMessages(for sessionKey: String) -> [OpenClawChatMessage] {
         if let cached = cache[sessionKey] {
+            os_log("SMAlog: [MessageCache getMessages] sessionKey=%{public}s returning=%{public}d from_memory", log: osLog, type: .debug, String(sessionKey.prefix(8)), cached.count)
             return cached
         }
         let messages = loadFromDisk(for: sessionKey)
+        os_log("SMAlog: [MessageCache getMessages] sessionKey=%{public}s returning=%{public}d from_disk", log: osLog, type: .debug, String(sessionKey.prefix(8)), messages.count)
         cache[sessionKey] = messages
         return messages
     }
 
-    /// Sets messages - merges with existing cache to preserve historical messages, avoids duplicates
+    /// Sets messages - merges new messages with existing cache
+    /// Uses content hash to detect genuinely new messages (not duplicates)
     func setMessages(_ messages: [OpenClawChatMessage], for sessionKey: String) {
         let existing = loadFromDisk(for: sessionKey)
-        var merged: [OpenClawChatMessage] = []
 
-        // Deduplicate: prefer existing (cached) messages over new ones
-        // This preserves historical messages during page loads
+        // Calculate dedup keys for existing messages
+        let existingKeys = Set(existing.map { dedupKey(for: $0) })
+
+        // Find genuinely new messages (not in cache)
+        var newMessages: [OpenClawChatMessage] = []
         for msg in messages {
-            let id = msg.id.uuidString
-            let existingHasId = existing.contains { $0.id.uuidString == id }
-            if !existingHasId {
-                merged.append(msg)
+            let key = dedupKey(for: msg)
+            if !existingKeys.contains(key) {
+                newMessages.append(msg)
             }
         }
 
-        // Combine: existing + new messages, sorted by timestamp ascending, trim to maxLocalMessages (oldest)
-        var allMessages = existing + merged
+        os_log("SMAlog: [MessageCache setMessages] sessionKey=%{public}s existing.count=%{public}d newMessages.count=%{public}d totalInput=%{public}d", log: osLog, type: .debug, String(sessionKey.prefix(8)), existing.count, newMessages.count, messages.count)
+
+        // Merge: keep existing + add genuinely new messages
+        var allMessages = existing + newMessages
         allMessages.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
         if allMessages.count > maxLocalMessages {
             allMessages = Array(allMessages.suffix(maxLocalMessages))
         }
 
+        os_log("SMAlog: [MessageCache setMessages] final allMessages.count=%{public}d", log: osLog, type: .debug, allMessages.count)
+
         cache[sessionKey] = allMessages
         saveToDisk(allMessages, for: sessionKey)
     }
 
-    /// Appends new streaming messages - deduplicates by id
+    /// Content-based dedup key using content hash
+    /// For toolCall/thinking/toolResult: uses first line only (stable across parameter order changes)
+    /// For other roles: uses full text
+    private func dedupKey(for message: OpenClawChatMessage) -> String {
+        let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // For toolCall/thinking/toolResult: use first line only (action/command is stable, params vary)
+        var textForHash = rawText
+        if message.role == "toolCall" || message.role == "toolResult" || message.role == "thinking" {
+            if let firstLine = rawText.split(separator: "\n", omittingEmptySubsequences: false).first {
+                textForHash = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        let data = "\(message.role)|\(textForHash)".data(using: .utf8) ?? Data()
+        let hash = SHA256.hash(data: data)
+        return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Appends new streaming messages - deduplicates by content-based key
     func appendMessages(_ newMessages: [OpenClawChatMessage], for sessionKey: String) {
         var existing = cache[sessionKey] ?? loadFromDisk(for: sessionKey)
+        os_log("SMAlog: [MessageCache appendMessages] sessionKey=%{public}s existing.count=%{public}d newMessages.count=%{public}d", log: osLog, type: .debug, String(sessionKey.prefix(8)), existing.count, newMessages.count)
         for newMsg in newMessages {
-            if !existing.contains(where: { $0.id == newMsg.id }) {
+            let key = dedupKey(for: newMsg)
+            if !existing.contains(where: { dedupKey(for: $0) == key }) {
                 existing.append(newMsg)
             }
         }
         let trimmed = Array(existing.suffix(maxLocalMessages))
+        os_log("SMAlog: [MessageCache appendMessages] final count=%{public}d", log: osLog, type: .debug, trimmed.count)
         cache[sessionKey] = trimmed
         saveToDisk(trimmed, for: sessionKey)
     }
@@ -82,11 +117,14 @@ actor MessageCache {
     }
 
     func clearAll() {
+        os_log("SMAlog: [MessageCache clearAll] START", log: osLog, type: .debug)
         cache.removeAll()
         let keys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(keyPrefix) }
+        os_log("SMAlog: [MessageCache clearAll] found %d keys to remove", log: osLog, type: .debug, keys.count)
         for key in keys {
             defaults.removeObject(forKey: key)
         }
+        os_log("SMAlog: [MessageCache clearAll] DONE", log: osLog, type: .debug)
     }
 
     func getStats() -> (sessionCount: Int, messageCount: Int) {
