@@ -5,6 +5,10 @@ struct MessageBubbleView: View {
     let message: ChatMessage
 
     @State private var animationOffset: CGFloat = 0
+    @State private var isExpanded: Bool = false
+
+    private let maxCollapsedLines: Int = 8
+    private let maxCollapsedHeight: CGFloat = 150
 
     var body: some View {
         HStack {
@@ -13,38 +17,7 @@ struct MessageBubbleView: View {
             }
 
             VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 4) {
-                // Show text or placeholder for streaming
-                if message.text.isEmpty {
-                    if message.state == "streaming" {
-                        TypingIndicatorView(color: message.isOutgoing ? .white : theme.textSecondary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(message.isOutgoing ? theme.primary : theme.cardBackground)
-                            .cornerRadius(12)
-                    } else {
-                        Text("")
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(message.text)
-                            .font(.body)
-                            .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-
-                        // Streaming indicator inside bubble - show bouncing dots
-                        if message.state == "streaming" && !message.isOutgoing {
-                            HStack(spacing: 4) {
-                                TypingIndicatorView()
-                                    .padding(.top, 4)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(message.isOutgoing ? theme.primary : theme.cardBackground)
-                    .cornerRadius(12)
-                }
+                bubbleContent
 
                 // Seq badge for AI messages
                 if !message.isOutgoing, let seq = message.seq {
@@ -112,6 +85,80 @@ struct MessageBubbleView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var bubbleContent: some View {
+        if message.text.isEmpty {
+            if message.state == "streaming" {
+                TypingIndicatorView(color: message.isOutgoing ? .white : theme.textSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(message.isOutgoing ? theme.primary : theme.cardBackground)
+                    .cornerRadius(12)
+            } else {
+                Text("")
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                messageText
+
+                // Streaming indicator inside bubble
+                if message.state == "streaming" && !message.isOutgoing {
+                    TypingIndicatorView()
+                        .padding(.top, 4)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(message.isOutgoing ? theme.primary : theme.cardBackground)
+            .cornerRadius(12)
+        }
+    }
+
+    @ViewBuilder
+    private var messageText: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(message.text)
+                .font(.body)
+                .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+                .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if shouldShowExpandButton {
+                Button {
+                    withAnimation {
+                        isExpanded = true
+                    }
+                } label: {
+                    Text("Show more...")
+                        .font(.caption)
+                        .foregroundColor(message.isOutgoing ? .white.opacity(0.8) : theme.primary)
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private var shouldShowExpandButton: Bool {
+        guard message.isOutgoing == false && !message.text.isEmpty else { return false }
+        return shouldCollapse && !isExpanded
+    }
+
+    private var shouldCollapse: Bool {
+        // If message has seq, it's from streaming - never collapse
+        if message.seq != nil {
+            return false
+        }
+        // Check if text exceeds roughly the line limit
+        let textHeight = message.text.boundingRect(
+            with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        ).height
+        return textHeight > maxCollapsedHeight
     }
 
     private func formatTime(_ timestamp: Date) -> String {
