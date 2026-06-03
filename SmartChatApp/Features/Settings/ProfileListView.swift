@@ -35,21 +35,10 @@ struct ProfileListView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Text("No Gateway Profiles")
-                .font(.headline)
-                .foregroundColor(theme.textPrimary)
-            Text("Add a profile to connect to a Gateway")
-                .font(.subheadline)
-                .foregroundColor(theme.textSecondary)
-            Button {
-                showNewProfileSheet = true
-            } label: {
-                Label("Add Profile", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .padding()
+        Text("Add a profile via the + button above")
+            .font(.subheadline)
+            .foregroundColor(theme.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var profileList: some View {
