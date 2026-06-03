@@ -189,6 +189,7 @@ struct NativeChatView: View {
             isSending: store.isSending,
             onSend: {
                 isUserScrolling = false
+                isInputFocused = false
                 store.send(.sendMessage)
             }
         )
