@@ -2,6 +2,14 @@
 
 **Updated:** 2026-05-12
 
+> **Status: Historical (2026-05-12).** Snapshot analysis of the
+> `OpenClawChatUI` SDK at the time it was integrated. For the
+> authoritative description of how SmartChatApp uses this SDK today,
+> see [`../../CLAUDE.md`](../../CLAUDE.md) (Key Components table) and
+> [`../../README.md`](../../README.md). This file is preserved as a
+> record of the original analysis and is not edited as the code
+> evolves.
+
 ## Overview
 
 `OpenClawChatUI` is a SwiftUI-based chat UI module in OpenClawKit that provides a complete chat interface with streaming support, session management, and message rendering.
