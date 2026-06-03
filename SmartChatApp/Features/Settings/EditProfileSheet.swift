@@ -4,15 +4,17 @@ struct EditProfileSheet: View {
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
 
-    let profile: GatewayProfile
+    let profile: GatewayProfile?
     let onSave: (String, String, String, Int, String, Bool) -> Void
-    let onDelete: (UUID) -> Void
+    let onDelete: ((UUID) -> Void)?
+    let onCancel: (() -> Void)?
 
-    @State private var editName: String
-    @State private var editHost: String
-    @State private var editPort: String
-    @State private var editToken: String
-    @State private var editTlsEnabled: Bool
+    @State private var editName: String = ""
+    @State private var editColorTag: String = "#10A37F"
+    @State private var editHost: String = ""
+    @State private var editPort: String = "443"
+    @State private var editToken: String = ""
+    @State private var editTlsEnabled: Bool = true
     @State private var isTesting = false
     @State private var isConnected = false
     @State private var testResult: String?
@@ -22,15 +24,25 @@ struct EditProfileSheet: View {
         case idle, testing, success, failure
     }
 
-    init(profile: GatewayProfile, onSave: @escaping (String, String, String, Int, String, Bool) -> Void, onDelete: @escaping (UUID) -> Void) {
+    private var isNewProfile: Bool {
+        profile == nil
+    }
+
+    private let colorOptions = ["#10A37F", "#3B82F6", "#F97316", "#EF4444", "#8B5CF6"]
+
+    init(profile: GatewayProfile?, onSave: @escaping (String, String, String, Int, String, Bool) -> Void, onDelete: ((UUID) -> Void)? = nil, onCancel: (() -> Void)? = nil) {
         self.profile = profile
         self.onSave = onSave
         self.onDelete = onDelete
-        _editName = State(initialValue: profile.name)
-        _editHost = State(initialValue: profile.host)
-        _editPort = State(initialValue: String(profile.port))
-        _editToken = State(initialValue: profile.token)
-        _editTlsEnabled = State(initialValue: profile.tlsEnabled)
+        self.onCancel = onCancel
+        if let profile = profile {
+            _editName = State(initialValue: profile.name)
+            _editColorTag = State(initialValue: profile.colorTag)
+            _editHost = State(initialValue: profile.host)
+            _editPort = State(initialValue: String(profile.port))
+            _editToken = State(initialValue: profile.token)
+            _editTlsEnabled = State(initialValue: profile.tlsEnabled)
+        }
     }
 
     private func testConnection() {
@@ -88,6 +100,23 @@ struct EditProfileSheet: View {
                 Section("Profile") {
                     TextField("Name", text: $editName)
                         .foregroundColor(theme.textPrimary)
+
+                    HStack {
+                        Text("Color")
+                        Spacer()
+                        ForEach(colorOptions, id: \.self) { color in
+                            Circle()
+                                .fill(Color(hex: color))
+                                .frame(width: 24, height: 24)
+                                .overlay(
+                                    Circle()
+                                        .stroke(editColorTag == color ? Color.primary : Color.clear, lineWidth: 2)
+                                )
+                                .onTapGesture {
+                                    editColorTag = color
+                                }
+                        }
+                    }
                 }
 
                 Section("Gateway Configuration") {
@@ -144,36 +173,41 @@ struct EditProfileSheet: View {
                     }
                 }
 
-                Section {
-                    Button(role: .destructive) {
-                        onDelete(profile.id)
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Image(systemName: "trash")
-                            Text("Delete Profile")
-                            Spacer()
+                if !isNewProfile {
+                    Section {
+                        Button(role: .destructive) {
+                            if let profile = profile {
+                                onDelete?(profile.id)
+                            }
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Image(systemName: "trash")
+                                Text("Delete Profile")
+                                Spacer()
+                            }
+                            .foregroundColor(.red)
                         }
-                        .foregroundColor(.red)
                     }
                 }
             }
-            .navigationTitle("Edit Profile")
+            .navigationTitle(isNewProfile ? "New Profile" : "Edit Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        onCancel?()
                         dismiss()
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Save") {
                         let port = Int(editPort) ?? 443
-                        onSave(editName, "#10A37F", editHost, port, editToken, editTlsEnabled)
+                        onSave(editName, editColorTag, editHost, port, editToken, editTlsEnabled)
                         dismiss()
                     }
-                    .disabled(editName.isEmpty)
+                    .disabled(editName.isEmpty || editHost.isEmpty || editToken.isEmpty)
                 }
             }
         }

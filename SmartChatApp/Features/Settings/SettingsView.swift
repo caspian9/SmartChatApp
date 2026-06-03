@@ -4,8 +4,9 @@ import UIKit
 struct SettingsView: View {
     @Environment(\.theme) private var theme
     @StateObject private var config = ConfigurationManager.shared
-    @State private var showNewProfile = false
     @State private var editingProfile: GatewayProfile?
+    @State private var isCreatingNew = false
+    @State private var showProfileSheet = false
     @State private var sessionCacheCount: Int = 0
     @State private var messageCacheStats: (sessionCount: Int, messageCount: Int) = (0, 0)
 
@@ -28,7 +29,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                ProfileListView(showNewProfileSheet: $showNewProfile) { profile in
+                ProfileListView(showNewProfileSheet: $isCreatingNew) { profile in
                     editingProfile = profile
                 }
 
@@ -55,7 +56,7 @@ struct SettingsView: View {
                     Text("Gateway")
                     Spacer()
                     Button {
-                        showNewProfile = true
+                        isCreatingNew = true
                     } label: {
                         Image(systemName: "plus.circle.fill")
                             .foregroundColor(.blue)
@@ -154,16 +155,29 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
-        .sheet(isPresented: $showNewProfile) {
-            ProfileEditSheet(profile: nil) { name, colorTag, host, port, token, tlsEnabled in
-                _ = ProfileManager.shared.addProfile(name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
-            }
-        }
-        .sheet(item: $editingProfile) { profile in
-            EditProfileSheet(profile: profile) { name, colorTag, host, port, token, tlsEnabled in
-                ProfileManager.shared.updateProfile(id: profile.id, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+        .sheet(isPresented: $showProfileSheet) {
+            EditProfileSheet(profile: editingProfile) { name, colorTag, host, port, token, tlsEnabled in
+                if let profile = editingProfile {
+                    ProfileManager.shared.updateProfile(id: profile.id, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+                } else {
+                    _ = ProfileManager.shared.addProfile(name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+                }
             } onDelete: { id in
                 ProfileManager.shared.deleteProfile(id: id)
+            } onCancel: {
+                editingProfile = nil
+                isCreatingNew = false
+            }
+        }
+        .onChange(of: isCreatingNew) { _, newValue in
+            if newValue {
+                editingProfile = nil
+                showProfileSheet = true
+            }
+        }
+        .onChange(of: editingProfile) { _, newValue in
+            if newValue != nil {
+                showProfileSheet = true
             }
         }
         .task {
