@@ -12,7 +12,7 @@ struct ChatListView: View {
             ForEach(sessions) { session in
                 NavigationLink(destination: sessionView(for: session)) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(session.displayName ?? session.key)
+                        Text(session.displayName ?? String(session.key.prefix(8)))
                             .font(.headline)
                             .foregroundColor(.white)
 
