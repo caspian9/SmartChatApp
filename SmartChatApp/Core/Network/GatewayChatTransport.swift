@@ -14,16 +14,46 @@ public actor GatewayChatTransport: OpenClawChatTransport {
 
     public func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         do {
+            let params = "{\"sessionKey\": \"\(sessionKey)\", \"limit\": 50, \"maxChars\": 50000}"
             let responseData = try await nodeSession.request(
                 method: "chat.history",
-                paramsJSON: "{\"sessionKey\": \"\(sessionKey)\"}"
+                paramsJSON: params
             )
-            return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: responseData)
+            let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: responseData)
+            if let messages = payload.messages {
+                let decoded = messages.compactMap { msg -> OpenClawChatMessage? in
+                    guard let data = try? JSONEncoder().encode(msg) else { return nil }
+                    return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+                }
+                await MessageCache.shared.setMessages(decoded, for: sessionKey)
+            }
+            return payload
         } catch {
             print("requestHistory failed: \(error)")
-            let emptyData = "{\"sessionKey\": \"\(sessionKey)\"}".data(using: .utf8)!
-            return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: emptyData)
+            let cached = await MessageCache.shared.getMessages(for: sessionKey)
+            if !cached.isEmpty {
+                let messagesAny: [AnyCodable] = cached.map { AnyCodable($0) }
+                let jsonStr = "{\"sessionKey\": \"\(sessionKey)\", \"messages\": \(messagesAny)}"
+                if let data = jsonStr.data(using: .utf8),
+                   let result = try? JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data) {
+                    return result
+                }
+            }
+            let jsonStr = "{\"sessionKey\": \"\(sessionKey)\"}"
+            if let data = jsonStr.data(using: .utf8) {
+                return (try? JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data)) ?? payloadWithEmptyMessages(sessionKey: sessionKey)
+            }
+            return payloadWithEmptyMessages(sessionKey: sessionKey)
         }
+    }
+
+    private func payloadWithEmptyMessages(sessionKey: String) -> OpenClawChatHistoryPayload {
+        let jsonStr = "{\"sessionKey\": \"\(sessionKey)\", \"messages\": []}"
+        if let data = jsonStr.data(using: .utf8),
+           let result = try? JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data) {
+            return result
+        }
+        fatalError("Cannot create empty history payload")
     }
 
     public func listModels() async throws -> [OpenClawChatModelChoice] {
@@ -61,6 +91,10 @@ public actor GatewayChatTransport: OpenClawChatTransport {
 
         let responseJSON = "{\"runId\": \"\(idempotencyKey)\", \"status\": \"started\"}"
         return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: responseJSON.data(using: .utf8)!)
+    }
+
+    public func appendUserMessage(_ message: OpenClawChatMessage, for sessionKey: String) async {
+        await MessageCache.shared.appendMessages([message], for: sessionKey)
     }
 
     public func abortRun(sessionKey: String, runId: String) async throws {
