@@ -30,7 +30,7 @@ public actor GatewayChatTransport: OpenClawChatTransport {
     {
         self.sessionKey = sessionKey
 
-        var params: [String: Any] = [
+        var params = [
             "key": sessionKey,
             "message": message,
             "idempotencyKey": idempotencyKey
@@ -39,10 +39,16 @@ public actor GatewayChatTransport: OpenClawChatTransport {
             params["thinking"] = thinking
         }
 
-        if let jsonData = try? JSONSerialization.data(withJSONObject: params),
-           let jsonString = String(data: jsonData, encoding: .utf8) {
-            _ = try await nodeSession.request(method: "sessions.send", paramsJSON: jsonString)
+        var jsonParts = params.map { "\"\($0.key)\": \"\($0.value)\"" }
+        if !attachments.isEmpty {
+            let attachmentsJSON = try JSONEncoder().encode(attachments)
+            if let attachmentsStr = String(data: attachmentsJSON, encoding: .utf8) {
+                jsonParts.append("\"attachments\": \(attachmentsStr)")
+            }
         }
+
+        let jsonString = "{\(jsonParts.joined(separator: ", "))}"
+        _ = try await nodeSession.request(method: "sessions.send", paramsJSON: jsonString)
 
         let responseJSON = "{\"runId\": \"\(idempotencyKey)\", \"status\": \"started\"}"
         return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: responseJSON.data(using: .utf8)!)
