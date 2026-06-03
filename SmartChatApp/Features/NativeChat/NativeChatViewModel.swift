@@ -141,6 +141,13 @@ struct NativeChatViewModel {
                 )
 
             case .loadedSessions(let sessions):
+                let prevSelectedKey = state.selectedSession?.key
+                let prevSelectedModel = state.selectedSession?.model
+                let prevSelectedTokens = state.selectedSession?.totalTokens
+                let prevSelectedUpdatedAt = state.selectedSession?.updatedAt
+                logger.log("SMAlog: [loadedSessions DIAG] prev selected: key=\(String(prevSelectedKey?.prefix(12) ?? "nil")) model=\(prevSelectedModel ?? "nil") tokens=\(prevSelectedTokens ?? -1) updatedAt=\(prevSelectedUpdatedAt ?? -1)")
+                logger.log("SMAlog: [loadedSessions DIAG] incoming: count=\(sessions.count) first.model=\(sessions.first?.model ?? "nil") first.tokens=\(sessions.first?.totalTokens ?? -1) first.updatedAt=\(sessions.first?.updatedAt ?? -1)")
+
                 state.sessions = sessions
                 state.isLoading = false
                 if let profileId = state.selectedProfileId {
@@ -152,7 +159,11 @@ struct NativeChatViewModel {
                    let key = UserDefaults.standard.string(forKey: lastSelectedSessionKey(for: profileId)),
                    let updatedSession = sessions.first(where: { $0.key == key }) {
                     state.selectedSession = updatedSession
-                    logger.log("SMAlog: restored and updated session: \(String(updatedSession.key.prefix(12))), tokens: \(updatedSession.totalTokens ?? -1)")
+                    let sameKey = updatedSession.key == prevSelectedKey
+                    let sameModel = updatedSession.model == prevSelectedModel
+                    let sameTokens = updatedSession.totalTokens == prevSelectedTokens
+                    let sameUpdatedAt = updatedSession.updatedAt == prevSelectedUpdatedAt
+                    logger.log("SMAlog: [loadedSessions DIAG] branch=lastKeyMatch key=\(String(updatedSession.key.prefix(12))) newModel=\(updatedSession.model ?? "nil") newTokens=\(updatedSession.totalTokens ?? -1) newUpdatedAt=\(updatedSession.updatedAt ?? -1) sameKey=\(sameKey ? 1 : 0) sameModel=\(sameModel ? 1 : 0) sameTokens=\(sameTokens ? 1 : 0) sameUpdatedAt=\(sameUpdatedAt ? 1 : 0)")
                     // Reload history with updated session info to refresh provider/model/tokens display
                     return .send(.loadHistory)
                 }
@@ -160,8 +171,19 @@ struct NativeChatViewModel {
                 // Auto-select first session if none selected
                 if state.selectedSession == nil, let first = sessions.first {
                     state.selectedSession = first
-                    logger.log("SMAlog: auto-selected first session: \(String(first.key.prefix(12)))")
+                    logger.log("SMAlog: [loadedSessions DIAG] branch=autoFirst key=\(String(first.key.prefix(12)))")
                     return .send(.loadHistory)
+                }
+                // No branch matched: a selectedSession was set from cache but lastKey
+                // didn't match (or no lastKey). Refresh the selectedSession in place
+                // from the network response so the header reflects the latest
+                // provider/model/tokens, even when the user is just re-entering.
+                if let currentKey = prevSelectedKey,
+                   let refreshed = sessions.first(where: { $0.key == currentKey }) {
+                    state.selectedSession = refreshed
+                    logger.log("SMAlog: [loadedSessions DIAG] branch=inPlaceRefresh key=\(String(currentKey.prefix(12))) newModel=\(refreshed.model ?? "nil") newTokens=\(refreshed.totalTokens ?? -1) newUpdatedAt=\(refreshed.updatedAt ?? -1)")
+                } else {
+                    logger.log("SMAlog: [loadedSessions DIAG] branch=noMatch prevKey=\(String(prevSelectedKey?.prefix(12) ?? "nil")) sessionsCount=\(sessions.count)")
                 }
                 return .none
 
@@ -191,12 +213,15 @@ struct NativeChatViewModel {
                 }
                 logger.log("SMAlog: saved selected session: \(String(session.key.prefix(12)))")
                 if didSwitch {
-                    return .run { _ in
-                        await MainActor.run {
-                            MarkdownStreamManager.shared.releaseAll()
-                        }
-                    }
-                    .merge(with: .send(.loadHistory))
+                    return .merge(
+                        .run { _ in
+                            await MainActor.run {
+                                MarkdownStreamManager.shared.releaseAll()
+                            }
+                        },
+                        .send(.loadSessions),
+                        .send(.loadHistory)
+                    )
                 }
                 return .send(.loadHistory)
 
