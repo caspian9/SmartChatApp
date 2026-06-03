@@ -5,6 +5,8 @@ struct ProfileListView: View {
     @ObservedObject private var profileManager = ProfileManager.shared
     @State private var showDeleteAlert = false
     @State private var profileToDelete: GatewayProfile?
+    @State private var isConnected = false
+    @State private var connectingProfileId: UUID?
 
     @Binding var showNewProfileSheet: Bool
     let onEditProfile: (GatewayProfile) -> Void
@@ -21,6 +23,9 @@ struct ProfileListView: View {
             } else {
                 profileList
             }
+        }
+        .task {
+            isConnected = await SessionManager.shared.connectionStatus
         }
         .alert("Delete Profile", isPresented: $showDeleteAlert) {
             Button("Cancel", role: .cancel) { }
@@ -68,13 +73,35 @@ struct ProfileListView: View {
 
                 Button {
                     Task {
-                        await ProfileManager.shared.switchToProfile(profile)
+                        if profile.isActive {
+                            if isConnected {
+                                await SessionManager.shared.disconnect()
+                                isConnected = false
+                            } else {
+                                connectingProfileId = profile.id
+                                try? await SessionManager.shared.connectWithProfile(profile)
+                                connectingProfileId = nil
+                                isConnected = await SessionManager.shared.connectionStatus
+                            }
+                        } else {
+                            connectingProfileId = profile.id
+                            ProfileManager.shared.activateProfile(profile)
+                            try? await SessionManager.shared.connectWithProfile(profile)
+                            connectingProfileId = nil
+                            isConnected = await SessionManager.shared.connectionStatus
+                        }
                     }
                 } label: {
-                    Text(profile.isActive ? "Reconnect" : "Connect")
-                        .font(.caption)
-                        .foregroundColor(theme.primary)
+                    if connectingProfileId == profile.id {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                    } else {
+                        Text(profile.isActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
+                    }
                 }
+                .font(.caption)
+                .foregroundColor(theme.primary)
+                .disabled(connectingProfileId != nil)
                 .buttonStyle(.bordered)
 
                 Button {

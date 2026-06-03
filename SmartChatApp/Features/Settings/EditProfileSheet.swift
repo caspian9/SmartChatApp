@@ -96,15 +96,7 @@ struct EditProfileSheet: View {
         testStatus = .testing
 
         let port = Int(editPort) ?? 443
-        let scheme = editTlsEnabled ? "wss" : "ws"
-        let urlString = "\(scheme)://\(editHost):\(port)/gateway"
-
-        guard let url = URL(string: urlString) else {
-            isTesting = false
-            testStatus = .failure
-            testResult = "Invalid URL"
-            return
-        }
+        let url = SessionManager.shared.gatewayURL(host: editHost, port: port, tlsEnabled: editTlsEnabled)
 
         Task {
             do {
