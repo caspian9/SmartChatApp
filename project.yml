@@ -20,8 +20,6 @@ packages:
   TCA:
     url: https://github.com/pointfreeco/swift-composable-architecture
     from: "1.9.3"
-  OpenClawKit:
-    path: /home/haili/workspaces/openclaw/apps/shared/OpenClawKit
 
 targets:
   SmartChatApp:
@@ -40,8 +38,6 @@ targets:
     dependencies:
       - package: TCA
         product: ComposableArchitecture
-      - package: OpenClawKit
-        product: OpenClawKit
     info:
       path: SmartChatApp/Info.plist
       properties:
