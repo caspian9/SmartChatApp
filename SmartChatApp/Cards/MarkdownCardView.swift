@@ -2,6 +2,8 @@ import SwiftUI
 import OpenClawKit
 import MarkdownDisplayView
 
+// MARK: - Static (history) markdown view
+
 struct MarkdownCardView: View {
     let content: String
 
@@ -29,6 +31,7 @@ struct MarkdownViewRepresentable: UIViewRepresentable {
         let view = MarkdownViewTextKit()
         view.enableTypewriterEffect = false
         view.onLinkTap = onLinkTap
+        view.markdown = markdown
         return view
     }
 
@@ -39,6 +42,41 @@ struct MarkdownViewRepresentable: UIViewRepresentable {
         uiView.onLinkTap = onLinkTap
     }
 }
+
+// MARK: - Streaming markdown view (uses MarkdownStreamManager)
+
+@available(iOS 15.0, *)
+struct StreamingMarkdownCardView: View {
+    let messageId: String
+    let content: String
+
+    var body: some View {
+        StreamingMarkdownRepresentable(messageId: messageId)
+            .frame(minHeight: 1)
+    }
+}
+
+@available(iOS 15.0, *)
+struct StreamingMarkdownRepresentable: UIViewRepresentable {
+    let messageId: String
+
+    func makeUIView(context: Context) -> MarkdownViewTextKit {
+        let holder = MarkdownStreamManager.shared.holder(for: messageId)
+        holder.begin()
+        return holder.view
+    }
+
+    func updateUIView(_ uiView: MarkdownViewTextKit, context: Context) {
+        // Content is managed via the streaming API; do not reassign markdown here.
+    }
+
+    static func dismantleUIView(_ uiView: MarkdownViewTextKit, coordinator: ()) {
+        // Holder stays alive in the manager; will be released by the view model
+        // when the message is removed from state.messages.
+    }
+}
+
+// MARK: - Card registry helpers (unchanged)
 
 public struct MarkdownCardData: Equatable {
     public let id: String
