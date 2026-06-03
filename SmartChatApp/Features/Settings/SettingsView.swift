@@ -69,6 +69,13 @@ struct SettingsView: View {
 
             Section("Device") {
                 HStack {
+                    Text("App Name")
+                    Spacer()
+                    Text(Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String ?? "SmartChatApp")
+                        .foregroundColor(theme.textSecondary)
+                }
+
+                HStack {
                     Text("Model")
                     Spacer()
                     Text(UIDevice.current.model)

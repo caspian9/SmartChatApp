@@ -332,11 +332,33 @@ struct NativeChatViewModel {
                 }()
                 logger.log("SMAlog: createSession - using selected agentId: \(selectedAgentId ?? "<default>")")
                 let agentIdCapture = selectedAgentId
+
+                // When we have a specific agent, request a custom key of the
+                // shape `agent:<id>:<clientLabel>:<uuid>` so the new session
+                // is tagged with the client app name in the session list
+                // (visible in the session picker). The gateway lowercases the
+                // entire key during normalization, so "SmartChatApp" is
+                // stored as "smartchatapp" server-side. Read the label from
+                // CFBundleDisplayName so a future rename of the app
+                // automatically tracks the bundle.
+                let clientLabel = Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+                    ?? "SmartChatApp"
+                let customKey: String? = {
+                    guard let agent = agentIdCapture, !agent.isEmpty else { return nil }
+                    return "agent:\(agent):\(clientLabel):\(UUID().uuidString.lowercased())"
+                }()
+                if let customKey {
+                    logger.log("SMAlog: createSession - requesting custom key: \(customKey)")
+                }
+
                 return .run { send in
                     Task {
                         do {
                             try await SessionManager.shared.ensureConnected()
-                            let sessionKey = try await SessionManager.shared.createSession(agentId: agentIdCapture)
+                            let sessionKey = try await SessionManager.shared.createSession(
+                                agentId: agentIdCapture,
+                                customKey: customKey
+                            )
                             logger.log("SMAlog: Created session: \(String(sessionKey))")
                             await send(.sessionCreated(sessionKey))
                             await send(.loadSessions)
