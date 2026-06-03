@@ -88,6 +88,7 @@ struct NativeChatViewModel {
 
             case .selectSession(let session):
                 state.selectedSession = session
+                state.isRestoringFromCache = true
                 return .send(.loadHistory)
 
             case .createSession:
