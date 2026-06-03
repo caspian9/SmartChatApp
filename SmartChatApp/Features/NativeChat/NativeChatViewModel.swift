@@ -49,6 +49,10 @@ struct NativeChatViewModel {
 
     @Dependency(\.continuousClock) var clock
 
+    // Static guard to prevent concurrent loadHistory
+    private static let loadHistoryLock = NSLock()
+    private static var inFlightLoadHistory: String? = nil
+
     var body: some Reducer<State, Action> {
         Reduce { state, action in
             switch action {
@@ -253,18 +257,32 @@ struct NativeChatViewModel {
                 let cachedSessionKey = sessionKey
                 let cachedSessionKeyPreview = sessionKeyPreview
                 let cachedIsRestoring = isRestoring
-                // Capture messages for deduplication before Task
-                let existingIds = Set(state.messages.map { $0.id })
 
-                let taskId = UUID().uuidString.prefix(8)
-                return .run { send in
+                // Acquire lock BEFORE creating .run closure to prevent concurrent Tasks
+                Self.loadHistoryLock.lock()
+                if Self.inFlightLoadHistory == cachedSessionKey {
+                    Self.loadHistoryLock.unlock()
+                    logger.log("SMAlog: [loadHistory] already in progress for \(cachedSessionKeyPreview), skipping")
+                    return .none
+                }
+                Self.inFlightLoadHistory = cachedSessionKey
+                Self.loadHistoryLock.unlock()
+
+                let taskIdStr = String(UUID().uuidString.prefix(8))
+
+                return .run { [cachedSessionKey, cachedSessionKeyPreview, cachedIsRestoring, taskIdStr] send in
                     Task {
-                        logger.log("SMAlog: [\(taskId)] loadHistory Task started, sessionKey: \(String(cachedSessionKeyPreview))")
+                        logger.log("SMAlog: [\(taskIdStr)] loadHistory Task started, sessionKey: \(cachedSessionKeyPreview)")
+                        defer {
+                            Self.loadHistoryLock.lock()
+                            if Self.inFlightLoadHistory == cachedSessionKey {
+                                Self.inFlightLoadHistory = nil
+                            }
+                            Self.loadHistoryLock.unlock()
+                        }
                         // Always load cache first (messages already cleared in selectSession when switching)
                         let cachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
-                        let cachedIds = Set(cachedMessages.map { $0.id.uuidString })
-                        logger.log("SMAlog: cache returned \(cachedMessages.count) messages, sessionKey: \(String(cachedSessionKeyPreview))")
-                        logger.log("SMAlog: cachedIds count=\(cachedIds.count)")
+                        logger.log("SMAlog: cache returned \(cachedMessages.count) messages, sessionKey: \(cachedSessionKeyPreview)")
                         if !cachedMessages.isEmpty {
                             let chatMessages = cachedMessages.compactMap { msg -> ChatMessage? in
                                 var text = ""
@@ -422,15 +440,55 @@ struct NativeChatViewModel {
                                 )
                             }
                             logger.log("SMAlog: chatMessages count=\(chatMessages.count)")
-                            // Cache the fetched messages
+                            // Cache the fetched messages (setMessages handles deduplication)
                             let openClawMessages = chatMessages.compactMap { createOpenClawChatMessage(from: $0) }
                             logger.log("SMAlog: openClawMessages count=\(openClawMessages.count)")
                             await MessageCache.shared.setMessages(openClawMessages, for: cachedSessionKey)
-                            // Find which messages are new (not in current state.messages)
-                            // Note: existingIds is computed from state.messages in the reducer before Task
-                            let newMessages = chatMessages.filter { !existingIds.contains($0.id) }
-                            logger.log("SMAlog: [\(taskId)] newMessages after filter count=\(newMessages.count), existingIds.count=\(existingIds.count)")
-                            await send(.appendNewMessages(newMessages))
+
+                            // Reload from cache to get accurate message count (cache now has all messages deduplicated)
+                            let finalCachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
+                            let finalChatMessages = finalCachedMessages.compactMap { msg -> ChatMessage? in
+                                var text = ""
+                                for contentItem in msg.content {
+                                    if let t = contentItem.text, !t.isEmpty {
+                                        text = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        break
+                                    }
+                                }
+                                if text.isEmpty { return nil }
+                                return ChatMessage(
+                                    id: msg.id.uuidString,
+                                    text: text,
+                                    timestamp: Date(timeIntervalSince1970: (msg.timestamp ?? 0) / 1000),
+                                    role: msg.role,
+                                    state: "final",
+                                    runId: nil,
+                                    seq: nil,
+                                    startedAt: nil,
+                                    endedAt: nil,
+                                    livenessState: nil,
+                                    inputTokens: msg.usage?.input,
+                                    outputTokens: msg.usage?.output,
+                                    cacheRead: msg.usage?.cacheRead,
+                                    cacheWrite: msg.usage?.cacheWrite,
+                                    toolCallId: msg.toolCallId,
+                                    toolName: msg.toolName,
+                                    stopReason: msg.stopReason
+                                )
+                            }
+                            logger.log("SMAlog: [\(taskIdStr)] finalCachedMessages from cache: \(finalChatMessages.count)")
+
+                            // Only update UI if we didn't already show cache, or if there are new messages
+                            // This prevents flickering when cache and network return the same data
+                            if cachedMessages.isEmpty {
+                                // No cache was shown, this is first data load
+                                await send(.loadedCachedHistory(finalChatMessages, isRestoring: false))
+                            } else if finalChatMessages.count > cachedMessages.count {
+                                // New messages were added
+                                await send(.loadedCachedHistory(finalChatMessages, isRestoring: false))
+                            } else {
+                                logger.log("SMAlog: [\(taskIdStr)] Network returned same messages as cache, skipping UI update")
+                            }
                         } catch {
                             logger.log("SMAlog: Load history error: \(error.localizedDescription)")
                         }
@@ -440,9 +498,7 @@ struct NativeChatViewModel {
             case .loadedCachedHistory(let messages, let isRestoring):
                 logger.log("SMAlog: loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)")
                 state.messages = messages
-                // Force state change notification by setting a marker
                 state.needsScrollToBottom = true
-                logger.log("SMAlog: loadedCachedHistory set needsScrollToBottom=true, messages should update")
                 return .none
 
             case .appendNewMessages(let newMessages):
