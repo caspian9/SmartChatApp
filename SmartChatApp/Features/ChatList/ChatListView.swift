@@ -8,6 +8,10 @@ struct ChatListView: View {
     @State private var isLoading = false
     @State private var showError = false
 
+    private var activeProfileId: UUID? {
+        ProfileManager.shared.activeProfile?.id
+    }
+
     var body: some View {
         List {
             if isLoading && sessions.isEmpty {
@@ -55,7 +59,7 @@ struct ChatListView: View {
 
     private func loadFromCacheThenRefresh() {
         // Load from cache first for instant display
-        if let cached = SessionCache.load() {
+        if let profileId = activeProfileId, let cached = SessionCache.load(for: profileId) {
             sessions = cached
             isLoading = false
         } else {
@@ -76,7 +80,9 @@ struct ChatListView: View {
             await MainActor.run {
                 sessions = response.sessions
                 isLoading = false
-                SessionCache.save(response.sessions)
+                if let profileId = activeProfileId {
+                    SessionCache.save(response.sessions, for: profileId)
+                }
             }
         } catch {
             await MainActor.run {
@@ -109,7 +115,9 @@ struct ChatListView: View {
                 let response = try await transport.listSessions(limit: 50)
                 await MainActor.run {
                     sessions = response.sessions
-                    SessionCache.save(response.sessions)
+                    if let profileId = activeProfileId {
+                        SessionCache.save(response.sessions, for: profileId)
+                    }
                 }
             } catch {
                 print("Failed to create session: \(error)")

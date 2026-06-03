@@ -114,7 +114,7 @@ struct SettingsView: View {
                 }
 
                 Button("Clear Session Cache") {
-                    SessionCache.clear()
+                    SessionCache.clearAll()
                     sessionCacheCount = 0
                 }
                 .foregroundColor(.red)
@@ -130,7 +130,7 @@ struct SettingsView: View {
                 .foregroundColor(.red)
 
                 Button("Clear All Caches") {
-                    SessionCache.clear()
+                    SessionCache.clearAll()
                     Task {
                         await MessageCache.shared.clearAll()
                     }
@@ -197,10 +197,9 @@ struct SettingsView: View {
     }
 
     private func loadCacheStats() async {
-        if let cached = SessionCache.load() {
-            await MainActor.run {
-                sessionCacheCount = cached.count
-            }
+        let count = SessionCache.totalSessionCount()
+        await MainActor.run {
+            sessionCacheCount = count
         }
         let stats = await MessageCache.shared.getStats()
         await MainActor.run {

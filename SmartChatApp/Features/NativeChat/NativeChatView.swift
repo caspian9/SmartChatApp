@@ -6,6 +6,7 @@ private let logger = Logger(subsystem: "SmartChatApp", category: "NativeChatView
 
 struct NativeChatView: View {
     @Environment(\.theme) private var theme
+    @ObservedObject private var profileManager = ProfileManager.shared
     @StateObject private var store = StoreOf<NativeChatViewModel>(initialState: NativeChatViewModel.State()) {
         NativeChatViewModel()
     }
@@ -27,7 +28,16 @@ struct NativeChatView: View {
             .toolbar { toolbarItem }
             .onAppear {
                 logger.log("SMAlog: NativeChatView onAppear called")
+                if store.selectedProfileId == nil {
+                    store.send(.setSelectedProfile(profileManager.activeProfile?.id))
+                }
                 store.send(.loadSessions)
+            }
+            .onChange(of: profileManager.profiles) { _ in
+                if let selectedId = store.selectedProfileId,
+                   !profileManager.profiles.contains(where: { $0.id == selectedId }) {
+                    store.send(.setSelectedProfile(profileManager.activeProfile?.id))
+                }
             }
     }
 
@@ -57,7 +67,23 @@ struct NativeChatView: View {
                     set: { newValue in
                         if let s = newValue { store.send(.selectSession(s)) }
                     }
-                )
+                ),
+                profiles: profileManager.profiles,
+                selectedProfileId: store.selectedProfileId,
+                onProfileChange: { newId in
+                    store.send(.switchProfile(newId))
+                }
+            )
+        } else if !profileManager.profiles.isEmpty {
+            // No sessions yet, but show gateway picker
+            SessionPickerView(
+                sessions: [],
+                selectedSession: .constant(nil),
+                profiles: profileManager.profiles,
+                selectedProfileId: store.selectedProfileId,
+                onProfileChange: { newId in
+                    store.send(.switchProfile(newId))
+                }
             )
         }
     }
