@@ -8,9 +8,16 @@
 
 /* Begin PBXBuildFile section */
 		0ACAAB79C22C2CA458C6373B /* SmartChatAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E318F67B9DFDAC9E0AD84F08 /* SmartChatAppTests.swift */; };
-		37A33822825EC071B6BAF313 /* TCA in Frameworks */ = {isa = PBXBuildFile; productRef = 14B49891B71959269491A12E /* TCA */; };
+		377F720FDB0B48111BA6C4E2 /* SettingsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8ADEDCB4D572538B181ACE1 /* SettingsFeature.swift */; };
+		37A33822825EC071B6BAF313 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = 73416EAF08F184DE857566CB /* ComposableArchitecture */; };
 		3C8025EB79B3026F3FFC4893 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 664AF41A3FCE1C3BBEE6581B /* Assets.xcassets */; };
+		55F72CE1CC61FE5D8E1C8E95 /* VideoCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C019FF55E0F5BD8B315FAA76 /* VideoCard.swift */; };
+		7FFE8652E03B8D79C0CF8E4F /* ButtonCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D647C43563841B298A334276 /* ButtonCard.swift */; };
+		8A903CB22625EF4CCC910460 /* CardRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4D5FA4CC5577ACECA7BF676 /* CardRegistry.swift */; };
 		B3DB3B56E59985BCA62F39AD /* SmartChatAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A261DD70F4AC633D637D1C8 /* SmartChatAppApp.swift */; };
+		B9F968474319B94E2A58FED7 /* MusicCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F63791E93AA5C72DF50187F /* MusicCard.swift */; };
+		C8AAAEC155B67DD7B40051C9 /* ImageCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2067397BFDEB816FBEACC8F /* ImageCard.swift */; };
+		F41B70A47D45D6CDBF7A88F9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93813CACE45E2D13DA0FA36F /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -25,9 +32,16 @@
 
 /* Begin PBXFileReference section */
 		4548872237EE0E5B3F8933E4 /* SmartChatApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SmartChatApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5F63791E93AA5C72DF50187F /* MusicCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicCard.swift; sourceTree = "<group>"; };
 		664AF41A3FCE1C3BBEE6581B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		93813CACE45E2D13DA0FA36F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		98D2098C092A4DEFEC02C1AE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		9A261DD70F4AC633D637D1C8 /* SmartChatAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartChatAppApp.swift; sourceTree = "<group>"; };
+		B4D5FA4CC5577ACECA7BF676 /* CardRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardRegistry.swift; sourceTree = "<group>"; };
+		B8ADEDCB4D572538B181ACE1 /* SettingsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsFeature.swift; sourceTree = "<group>"; };
+		C019FF55E0F5BD8B315FAA76 /* VideoCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCard.swift; sourceTree = "<group>"; };
+		D647C43563841B298A334276 /* ButtonCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ButtonCard.swift; sourceTree = "<group>"; };
+		E2067397BFDEB816FBEACC8F /* ImageCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCard.swift; sourceTree = "<group>"; };
 		E318F67B9DFDAC9E0AD84F08 /* SmartChatAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartChatAppTests.swift; sourceTree = "<group>"; };
 		FA82AA06FCB363DFA193470C /* SmartChatAppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SmartChatAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -37,7 +51,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				37A33822825EC071B6BAF313 /* TCA in Frameworks */,
+				37A33822825EC071B6BAF313 /* ComposableArchitecture in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -85,6 +99,10 @@
 		730073727C9690A3BADE254B /* Cards */ = {
 			isa = PBXGroup;
 			children = (
+				D647C43563841B298A334276 /* ButtonCard.swift */,
+				E2067397BFDEB816FBEACC8F /* ImageCard.swift */,
+				5F63791E93AA5C72DF50187F /* MusicCard.swift */,
+				C019FF55E0F5BD8B315FAA76 /* VideoCard.swift */,
 			);
 			path = Cards;
 			sourceTree = "<group>";
@@ -143,6 +161,8 @@
 		C9AFCA2EC5ED5568FF6555C6 /* Settings */ = {
 			isa = PBXGroup;
 			children = (
+				B8ADEDCB4D572538B181ACE1 /* SettingsFeature.swift */,
+				93813CACE45E2D13DA0FA36F /* SettingsView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -180,6 +200,7 @@
 		F795D07E9B15EFBD553EDAE8 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				B4D5FA4CC5577ACECA7BF676 /* CardRegistry.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -219,7 +240,7 @@
 			);
 			name = SmartChatApp;
 			packageProductDependencies = (
-				14B49891B71959269491A12E /* TCA */,
+				73416EAF08F184DE857566CB /* ComposableArchitecture */,
 			);
 			productName = SmartChatApp;
 			productReference = 4548872237EE0E5B3F8933E4 /* SmartChatApp.app */;
@@ -283,7 +304,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7FFE8652E03B8D79C0CF8E4F /* ButtonCard.swift in Sources */,
+				8A903CB22625EF4CCC910460 /* CardRegistry.swift in Sources */,
+				C8AAAEC155B67DD7B40051C9 /* ImageCard.swift in Sources */,
+				B9F968474319B94E2A58FED7 /* MusicCard.swift in Sources */,
+				377F720FDB0B48111BA6C4E2 /* SettingsFeature.swift in Sources */,
+				F41B70A47D45D6CDBF7A88F9 /* SettingsView.swift in Sources */,
 				B3DB3B56E59985BCA62F39AD /* SmartChatAppApp.swift in Sources */,
+				55F72CE1CC61FE5D8E1C8E95 /* VideoCard.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -553,10 +581,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		14B49891B71959269491A12E /* TCA */ = {
+		73416EAF08F184DE857566CB /* ComposableArchitecture */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5B5A6838073CC68BB94938B3 /* XCRemoteSwiftPackageReference "swift-composable-architecture" */;
-			productName = TCA;
+			productName = ComposableArchitecture;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

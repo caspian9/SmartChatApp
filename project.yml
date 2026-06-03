@@ -37,6 +37,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
     dependencies:
       - package: TCA
+        product: ComposableArchitecture
     info:
       path: SmartChatApp/Info.plist
       properties:
