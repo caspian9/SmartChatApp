@@ -29,27 +29,37 @@ actor MessageCache {
         return messages
     }
 
-    /// Sets messages - merges new messages with existing cache
-    /// Uses content hash to detect genuinely new messages (not duplicates)
+    /// Sets messages - merges new messages with existing cache.
+    /// REPLACE strategy: when a new message has the same content+timestamp
+    /// bucket as an existing one, the existing entry is replaced (the new
+    /// copy is more authoritative, e.g. the server's version of a message
+    /// we previously wrote locally on send). New messages are appended.
+    /// Skips empty-text placeholders (streaming-final has empty text; the
+    /// real copy with full text arrives from history).
     func setMessages(_ messages: [OpenClawChatMessage], for sessionKey: String) {
-        let existing = loadFromDisk(for: sessionKey)
+        var allMessages = loadFromDisk(for: sessionKey)
+        let originalCount = allMessages.count
 
-        // Calculate dedup keys for existing messages
-        let existingKeys = Set(existing.map { dedupKey(for: $0) })
-
-        // Find genuinely new messages (not in cache)
-        var newMessages: [OpenClawChatMessage] = []
+        var added = 0
+        var replaced = 0
+        var skippedEmpty = 0
         for msg in messages {
+            if isEmptyTextPlaceholder(msg) {
+                skippedEmpty += 1
+                continue
+            }
             let key = dedupKey(for: msg)
-            if !existingKeys.contains(key) {
-                newMessages.append(msg)
+            if let existingIndex = allMessages.firstIndex(where: { dedupKey(for: $0) == key }) {
+                allMessages[existingIndex] = msg
+                replaced += 1
+            } else {
+                allMessages.append(msg)
+                added += 1
             }
         }
 
-        os_log("SMAlog: [MessageCache setMessages] sessionKey=%{public}s existing.count=%{public}d newMessages.count=%{public}d totalInput=%{public}d", log: osLog, type: .debug, String(sessionKey.prefix(8)), existing.count, newMessages.count, messages.count)
+        os_log("SMAlog: [MessageCache setMessages] sessionKey=%{public}s original=%{public}d added=%{public}d replaced=%{public}d skippedEmpty=%{public}d totalInput=%{public}d", log: osLog, type: .debug, String(sessionKey.prefix(8)), originalCount, added, replaced, skippedEmpty, messages.count)
 
-        // Merge: keep existing + add genuinely new messages
-        var allMessages = existing + newMessages
         allMessages.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
         if allMessages.count > maxLocalMessages {
             allMessages = Array(allMessages.suffix(maxLocalMessages))
@@ -64,10 +74,11 @@ actor MessageCache {
     /// Content-based dedup key using content hash
     /// For toolCall/thinking/toolResult: uses first line only (stable across parameter order changes)
     /// For other roles: uses full text
-    /// Includes timestamp and usage so a streaming message that later gains
-    /// final usage tokens isn't collapsed against the earlier streaming copy,
-    /// and so two messages that share role+text but land at different times
-    /// are treated as distinct entries.
+    /// Uses a 10-second timestamp bucket so the same logical message
+    /// collapses across sources (local user send with client clock vs.
+    /// server fetch with server clock, even with a few seconds of
+    /// network latency or clock skew). The accompanying REPLACE strategy
+    /// ensures the server's authoritative copy wins on a history fetch.
     private func dedupKey(for message: OpenClawChatMessage) -> String {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -80,28 +91,59 @@ actor MessageCache {
             }
         }
 
-        let timestamp = message.timestamp.map { String($0) } ?? "-"
+        // Bucket the timestamp to 10-second resolution. Same logical
+        // message from local send (client clock) and server fetch (server
+        // clock) typically fall in the same bucket. Two distinct sends
+        // of the same text are usually separated by more than 10s.
+        let tsBucket: Int64 = {
+            guard let ts = message.timestamp else { return -1 }
+            return Int64(ts / 10_000) // ms -> 10s bucket
+        }()
+
         let usage = message.usage.map { u in
             "\(u.input ?? 0),\(u.output ?? 0),\(u.cacheRead ?? 0),\(u.cacheWrite ?? 0),\(u.total ?? 0)"
         } ?? "-"
 
-        let data = "\(message.role)|\(textForHash)|\(timestamp)|\(usage)".data(using: .utf8) ?? Data()
+        let data = "\(message.role)|\(textForHash)|\(tsBucket)|\(usage)".data(using: .utf8) ?? Data()
         let hash = SHA256.hash(data: data)
         return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Appends new streaming messages - deduplicates by content-based key
+    /// Returns true if this is a streaming placeholder (empty text + has usage
+    /// from `agent end`). The real copy with full text arrives from history;
+    /// we don't want the empty placeholder to consume a cache slot.
+    private func isEmptyTextPlaceholder(_ message: OpenClawChatMessage) -> Bool {
+        let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return rawText.isEmpty
+    }
+
+    /// Appends new streaming messages - REPLACE on content match, otherwise add.
+    /// Skips empty-text placeholders (streaming-final has empty text; the
+    /// real copy with full text arrives from history).
     func appendMessages(_ newMessages: [OpenClawChatMessage], for sessionKey: String) {
         var existing = cache[sessionKey] ?? loadFromDisk(for: sessionKey)
+        let originalCount = existing.count
         os_log("SMAlog: [MessageCache appendMessages] sessionKey=%{public}s existing.count=%{public}d newMessages.count=%{public}d", log: osLog, type: .debug, String(sessionKey.prefix(8)), existing.count, newMessages.count)
+        var added = 0
+        var replaced = 0
+        var skippedEmpty = 0
         for newMsg in newMessages {
+            if isEmptyTextPlaceholder(newMsg) {
+                skippedEmpty += 1
+                continue
+            }
             let key = dedupKey(for: newMsg)
-            if !existing.contains(where: { dedupKey(for: $0) == key }) {
+            if let existingIndex = existing.firstIndex(where: { dedupKey(for: $0) == key }) {
+                existing[existingIndex] = newMsg
+                replaced += 1
+            } else {
                 existing.append(newMsg)
+                added += 1
             }
         }
         let trimmed = Array(existing.suffix(maxLocalMessages))
-        os_log("SMAlog: [MessageCache appendMessages] final count=%{public}d", log: osLog, type: .debug, trimmed.count)
+        os_log("SMAlog: [MessageCache appendMessages] original=%{public}d added=%{public}d replaced=%{public}d skippedEmpty=%{public}d final count=%{public}d", log: osLog, type: .debug, originalCount, added, replaced, skippedEmpty, trimmed.count)
         cache[sessionKey] = trimmed
         saveToDisk(trimmed, for: sessionKey)
     }
