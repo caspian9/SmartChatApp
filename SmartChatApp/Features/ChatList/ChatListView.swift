@@ -129,14 +129,21 @@ struct SessionRowView: View {
 
                 Spacer()
 
-                if let model = session.model {
-                    Text(model)
-                        .font(.caption2)
-                        .foregroundColor(Color(hex: "10A37F"))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color(hex: "10A37F").opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                VStack(alignment: .trailing, spacing: 2) {
+                    if let model = session.model {
+                        Text(model)
+                            .font(.caption2)
+                            .foregroundColor(Color(hex: "10A37F"))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(hex: "10A37F").opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    if let modelProvider = session.modelProvider {
+                        Text(modelProvider)
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
                 }
             }
 
@@ -175,7 +182,7 @@ struct SessionRowView: View {
     }
 
     private func formatDate(_ timestamp: Double) -> String {
-        let date = Date(timeIntervalSince1970: timestamp)
+        let date = Date(timeIntervalSince1970: timestamp / 1000)
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
