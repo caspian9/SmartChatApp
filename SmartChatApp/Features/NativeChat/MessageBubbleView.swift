@@ -24,18 +24,42 @@ struct MessageBubbleView: View {
                             .padding(.vertical, 8)
                     }
                 } else {
-                    ZStack {
-                        Text(message.text)
-                            .font(.body)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
-                            .cornerRadius(12)
+                    Text(message.text)
+                        .font(.body)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
+                        .cornerRadius(12)
+                }
 
-                        CopyButton(text: message.text)
+                // Action bar
+                HStack(spacing: 16) {
+                    Button {
+                        UIPasteboard.general.string = message.text
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+
+                    Button {
+                        // Forward action - TODO
+                    } label: {
+                        Image(systemName: "arrowshape.turn.up.right")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+
+                    Button {
+                        // Favorite action - TODO
+                    } label: {
+                        Image(systemName: "star")
+                            .font(.caption)
+                            .foregroundColor(.gray)
                     }
                 }
+                .padding(.top, 2)
 
                 HStack(spacing: 8) {
                     if let startedAt = message.startedAt {
@@ -72,28 +96,6 @@ struct MessageBubbleView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: timestamp)
-    }
-}
-
-struct CopyButton: View {
-    let text: String
-    @State private var isCopied = false
-
-    var body: some View {
-        Button {
-            UIPasteboard.general.string = text
-            isCopied = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                isCopied = false
-            }
-        } label: {
-            Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.7))
-                .padding(8)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(8)
-        }
     }
 }
 
