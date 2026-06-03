@@ -18,6 +18,7 @@ struct NativeChatViewModel {
         var isSending: Bool = false
         var error: String?
         var streamingText: String = ""
+        var receivedMessageIds: Set<String> = []
     }
 
     enum Action: Equatable {
@@ -35,6 +36,7 @@ struct NativeChatViewModel {
         case setSending(Bool)
         case updateStreamingText(String)
         case clearStreamingText
+        case clearReceivedMessageIds
     }
 
     @Dependency(\.continuousClock) var clock
@@ -78,7 +80,7 @@ struct NativeChatViewModel {
 
             case .selectSession(let session):
                 state.selectedSession = session
-                return .send(.loadHistory)
+                return .merge(.send(.loadHistory), .send(.clearReceivedMessageIds))
 
             case .createSession:
                 state.isLoading = true
@@ -148,6 +150,8 @@ struct NativeChatViewModel {
                                 attachments: []
                             )
                             logger.log("SMAlog: Message sent, waiting for response...")
+                            // Message sent successfully, reset sending state
+                            await send(.setSending(false))
                         } catch {
                             logger.log("SMAlog: Send message error: \(error.localizedDescription)")
                             await send(.setError(error.localizedDescription))
@@ -210,7 +214,13 @@ struct NativeChatViewModel {
                 return .none
 
             case .receiveMessage(let message):
+                // Skip duplicate messages
+                if state.receivedMessageIds.contains(message.id) {
+                    logger.log("SMAlog: duplicate message skipped: \(message.id)")
+                    return .none
+                }
                 state.messages.append(message)
+                state.receivedMessageIds.insert(message.id)
                 return .none
 
             case .setError(let error):
@@ -230,6 +240,10 @@ struct NativeChatViewModel {
 
             case .clearStreamingText:
                 state.streamingText = ""
+                return .none
+
+            case .clearReceivedMessageIds:
+                state.receivedMessageIds.removeAll()
                 return .none
             }
         }
