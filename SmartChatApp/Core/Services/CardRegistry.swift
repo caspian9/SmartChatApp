@@ -5,50 +5,30 @@ import SwiftUI
 final class CardRegistry: ObservableObject {
     static let shared = CardRegistry()
 
-    private var cards: [String: (ToolCall) -> any CardView] = [:]
-
-    private init() {
-        registerDefaultCards()
-    }
-
-    private func registerDefaultCards() {
-        cards["music_search"] = { toolCall in
-            MusicCardContent(toolCall: toolCall)
-        }
-        cards["video_search"] = { toolCall in
-            VideoCardContent(toolCall: toolCall)
-        }
-        cards["open_url"] = { toolCall in
-            ButtonCardContent(toolCall: toolCall, actionTitle: "Open Link")
-        }
-        cards["image"] = { toolCall in
-            ImageCardContent(toolCall: toolCall)
-        }
-    }
-
-    func register(_ cardType: String, factory: @escaping (ToolCall) -> any CardView) {
-        cards[cardType] = factory
-    }
+    private init() {}
 
     @ViewBuilder
     func createCard(for toolCall: ToolCall) -> some View {
-        if let factory = cards[toolCall.name] {
-            factory(toolCall)
-        } else {
+        switch toolCall.name {
+        case "music_search":
+            MusicCardContent(toolCall: toolCall)
+        case "video_search":
+            VideoCardContent(toolCall: toolCall)
+        case "open_url":
+            ButtonCardContent(toolCall: toolCall, actionTitle: "Open Link")
+        case "image":
+            ImageCardContent(toolCall: toolCall)
+        default:
             UnknownCardView(toolCall: toolCall)
         }
     }
 
     func canHandle(_ toolCall: ToolCall) -> Bool {
-        cards[toolCall.name] != nil
+        ["music_search", "video_search", "open_url", "image"].contains(toolCall.name)
     }
 }
 
-protocol CardView: View {
-    var toolCall: ToolCall { get }
-}
-
-struct UnknownCardView: CardView {
+struct UnknownCardView: View {
     let toolCall: ToolCall
 
     var body: some View {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct VideoCardContent: CardView {
+struct VideoCardContent: View {
     let toolCall: ToolCall
     @State private var isPlaying = false
 
