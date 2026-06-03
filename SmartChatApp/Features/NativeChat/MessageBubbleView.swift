@@ -131,13 +131,18 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var messageText: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(message.text)
-                .font(.body)
-                .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
-                .fixedSize(horizontal: false, vertical: true)
+            if shouldRenderMarkdown {
+                MarkdownCardView(content: message.text)
+                    .frame(minHeight: 30)
+            } else {
+                Text(message.text)
+                    .font(.body)
+                    .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+                    .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
-            if shouldShowExpandButton {
+            if shouldShowExpandButton && !shouldRenderMarkdown {
                 Button {
                     withAnimation {
                         isExpanded = true
@@ -150,6 +155,11 @@ struct MessageBubbleView: View {
                 .padding(.top, 4)
             }
         }
+    }
+
+    private var shouldRenderMarkdown: Bool {
+        guard !message.isOutgoing && !message.text.isEmpty else { return false }
+        return CardRegistry.containsMarkdown(content: message.text)
     }
 
     private var shouldShowExpandButton: Bool {
