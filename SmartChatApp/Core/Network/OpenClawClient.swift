@@ -12,8 +12,7 @@ actor OpenClawClient {
 
     func connect(authToken: String) async throws -> HelloOk {
         self.authToken = authToken
-        let wsURL = gatewayURL.appendingPathComponent("gateway")
-        webSocket = WebSocketManager(url: wsURL)
+        webSocket = WebSocketManager(url: gatewayURL)
         try await webSocket?.connect()
 
         let connectParams = ConnectParams(
@@ -160,8 +159,8 @@ actor OpenClawClient {
         return dict.mapValues { AnyCodable($0) }
     }
 
-    func disconnect() async {
-        await webSocket?.disconnect()
+    func disconnect() {
+        webSocket?.disconnect()
         webSocket = nil
     }
 }

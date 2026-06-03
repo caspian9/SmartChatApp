@@ -1,5 +1,4 @@
 import SwiftUI
-import ComposableArchitecture
 
 struct ChatListView: View {
     @State private var sessions: [ChatSession] = []
@@ -35,8 +34,15 @@ struct ChatListView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button(action: createSession) {
-                    Image(systemName: "square.and.pencil")
+                Menu {
+                    Button(action: createSession) {
+                        Label("New Chat", systemImage: "square.and.pencil")
+                    }
+                    NavigationLink(destination: SettingsView()) {
+                        Label("Settings", systemImage: "gear")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                         .foregroundColor(Color(hex: "10A37F"))
                 }
             }
