@@ -2,22 +2,26 @@ import SwiftUI
 import ComposableArchitecture
 
 struct ConnectionView: View {
-    let store: StoreOf<ConnectionFeature>
+    @State private var serverURL: String = ""
+    @State private var authToken: String = ""
+    @State private var isConnecting: Bool = false
+    @State private var isConnected: Bool = false
+    @State private var errorMessage: String?
 
     var body: some View {
         Form {
             Section("Server Configuration") {
-                TextField("Gateway URL", text: binding(for: \.serverURL))
+                TextField("Gateway URL", text: $serverURL)
                     .textContentType(.URL)
                     .autocapitalization(.none)
                     .keyboardType(.URL)
 
-                SecureField("Auth Token", text: binding(for: \.authToken))
+                SecureField("Auth Token", text: $authToken)
                     .textContentType(.password)
             }
 
             Section {
-                if store.isConnecting {
+                if isConnecting {
                     HStack {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle())
@@ -25,19 +29,19 @@ struct ConnectionView: View {
                             .foregroundColor(.gray)
                     }
                 } else {
-                    Button(action: { store.send(.connect) }) {
+                    Button(action: connect) {
                         HStack {
                             Spacer()
-                            Text(store.isConnected ? "Disconnect" : "Connect")
-                                .foregroundColor(store.isConnected ? .red : Color(hex: "10A37F"))
+                            Text(isConnected ? "Disconnect" : "Connect")
+                                .foregroundColor(isConnected ? .red : Color(hex: "10A37F"))
                             Spacer()
                         }
                     }
-                    .disabled(store.serverURL.isEmpty)
+                    .disabled(serverURL.isEmpty)
                 }
             }
 
-            if let error = store.error {
+            if let error = errorMessage {
                 Section {
                     Text(error)
                         .foregroundColor(.red)
@@ -48,16 +52,18 @@ struct ConnectionView: View {
         .navigationTitle("Connection")
     }
 
-    private func binding<T>(for keyPath: WritableKeyPath<ConnectionFeature.State, T>) -> Binding<T> {
-        Binding(
-            get: { store[keyPath: keyPath] },
-            set: { newValue in
-                if keyPath == \.serverURL {
-                    store.send(.serverURLChanged(newValue as! String))
-                } else if keyPath == \.authToken {
-                    store.send(.authTokenChanged(newValue as! String))
-                }
-            }
-        )
+    private func connect() {
+        guard !serverURL.isEmpty else {
+            errorMessage = "Server URL is required"
+            return
+        }
+        isConnecting = true
+        errorMessage = nil
+
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            isConnecting = false
+            isConnected = true
+        }
     }
 }
