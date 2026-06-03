@@ -80,6 +80,11 @@ actor SessionManager {
         }
     }
 
+    func connectWithProfile(_ profile: GatewayProfile) async throws {
+        let url = URL(string: "\(profile.tlsEnabled ? "https" : "http")://\(profile.host):\(profile.port)")!
+        try await connectWithRole(gatewayURL: url, authToken: profile.token, role: .operatorAndNode)
+    }
+
     func connect(gatewayURL: URL, authToken: String) async throws {
         let deviceIdentity = DeviceIdentityStore.loadOrCreate()
         let connectOptions = GatewayConnectOptions(
