@@ -51,6 +51,11 @@ struct NativeChatView: View {
                             scrollToBottom(proxy: proxy)
                         }
                     }
+                    .onChange(of: store.needsScrollToBottom) { needsScroll in
+                        if needsScroll {
+                            scrollToBottom(proxy: proxy)
+                        }
+                    }
                 }
                 .onTapGesture {
                     isInputFocused = false
@@ -95,9 +100,7 @@ struct NativeChatView: View {
 
     private func scrollToBottom(proxy: ScrollViewProxy) {
         if let lastMessage = store.messages.last {
-            withAnimation(.easeOut(duration: 0.25)) {
-                proxy.scrollTo(lastMessage.id, anchor: .bottom)
-            }
+            proxy.scrollTo(lastMessage.id, anchor: .bottom)
         }
     }
 }
