@@ -19,6 +19,17 @@ struct NativeChatViewModel {
         var error: String?
         var isRestoringFromCache: Bool = false
         var needsScrollToBottom: Bool = false
+
+        init() {
+            // Pre-load from cache on init
+            if let cached = SessionCache.load(), !cached.isEmpty {
+                self.sessions = cached
+                if let first = cached.first {
+                    self.selectedSession = first
+                    self.isRestoringFromCache = true
+                }
+            }
+        }
     }
 
     enum Action: Equatable {
