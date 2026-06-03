@@ -8,7 +8,7 @@ enum AppearanceTheme: String, CaseIterable {
     case dark = "Dark"
 }
 
-enum GatewayConnectionRole: String, CaseIterable {
+enum GatewayConnectionRole: String, CaseIterable, Codable {
     case operatorAndNode = "operator / node"
     case operatorOnly = "operator"
     case nodeOnly = "node"

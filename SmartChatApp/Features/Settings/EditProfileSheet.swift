@@ -5,7 +5,7 @@ struct EditProfileSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let profile: GatewayProfile?
-    let onSave: (String, String, String, Int, String, Bool) -> Void
+    let onSave: (String, String, String, Int, String, Bool, GatewayConnectionRole) -> Void
     let onDelete: ((UUID) -> Void)?
     let onCancel: (() -> Void)?
 
@@ -15,6 +15,7 @@ struct EditProfileSheet: View {
     @State private var editPort: String = "443"
     @State private var editToken: String = ""
     @State private var editTlsEnabled: Bool = true
+    @State private var editRole: GatewayConnectionRole = .operatorAndNode
     @State private var isTesting = false
     @State private var isConnected = false
     @State private var testResult: String?
@@ -56,7 +57,7 @@ struct EditProfileSheet: View {
 
     private let colorOptions = ["#10A37F", "#3B82F6", "#F97316", "#EF4444", "#8B5CF6"]
 
-    init(profile: GatewayProfile?, onSave: @escaping (String, String, String, Int, String, Bool) -> Void, onDelete: ((UUID) -> Void)? = nil, onCancel: (() -> Void)? = nil) {
+    init(profile: GatewayProfile?, onSave: @escaping (String, String, String, Int, String, Bool, GatewayConnectionRole) -> Void, onDelete: ((UUID) -> Void)? = nil, onCancel: (() -> Void)? = nil) {
         self.profile = profile
         self.onSave = onSave
         self.onDelete = onDelete
@@ -68,6 +69,7 @@ struct EditProfileSheet: View {
             _editPort = State(initialValue: String(profile.port))
             _editToken = State(initialValue: profile.token)
             _editTlsEnabled = State(initialValue: profile.tlsEnabled)
+            _editRole = State(initialValue: profile.role)
         }
     }
 
@@ -100,7 +102,7 @@ struct EditProfileSheet: View {
 
         Task {
             do {
-                try await SessionManager.shared.connectWithRole(gatewayURL: url, authToken: editToken, role: .operatorAndNode)
+                try await SessionManager.shared.connectWithRole(gatewayURL: url, authToken: editToken, role: editRole)
                 await MainActor.run {
                     isTesting = false
                     testStatus = .success
@@ -167,6 +169,12 @@ struct EditProfileSheet: View {
 
                     Toggle("Use TLS/SSL", isOn: $editTlsEnabled)
                         .foregroundColor(theme.textPrimary)
+
+                    Picker("Role", selection: $editRole) {
+                        ForEach(GatewayConnectionRole.allCases, id: \.self) { role in
+                            Text(role.rawValue).tag(role)
+                        }
+                    }
                 }
 
                 Section("Authentication") {
@@ -239,7 +247,7 @@ struct EditProfileSheet: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Save") {
                         let port = Int(editPort) ?? 443
-                        onSave(editName, editColorTag, editHost, port, editToken, editTlsEnabled)
+                        onSave(editName, editColorTag, editHost, port, editToken, editTlsEnabled, editRole)
                         dismiss()
                     }
                     .disabled(editName.isEmpty)

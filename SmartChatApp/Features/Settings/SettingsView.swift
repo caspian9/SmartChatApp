@@ -155,11 +155,11 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .sheet(isPresented: $showProfileSheet) {
-            EditProfileSheet(profile: editingProfile) { name, colorTag, host, port, token, tlsEnabled in
+            EditProfileSheet(profile: editingProfile) { name, colorTag, host, port, token, tlsEnabled, role in
                 if let profile = editingProfile {
-                    ProfileManager.shared.updateProfile(id: profile.id, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+                    ProfileManager.shared.updateProfile(id: profile.id, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled, role: role)
                 } else {
-                    _ = ProfileManager.shared.addProfile(name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+                    _ = ProfileManager.shared.addProfile(name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled, role: role)
                 }
             } onDelete: { id in
                 ProfileManager.shared.deleteProfile(id: id)
