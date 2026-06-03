@@ -55,22 +55,28 @@ struct NativeChatViewModel {
         Reduce { state, action in
             switch action {
             case .loadSessions:
-                logger.log("SMAlog: loadSessions called")
-                // First load from cache
-                if let cached = SessionCache.load(), !cached.isEmpty {
-                    logger.log("SMAlog: Loaded \(cached.count) cached sessions")
-                    state.sessions = cached
-                    state.isRestoringFromCache = true
-                    if state.selectedSession == nil, let first = cached.first {
-                        state.selectedSession = first
-                        logger.log("SMAlog: Auto-selected first session: \(String(first.key.prefix(12)))")
-                        return .send(.loadHistory)
+                logger.log("SMAlog: loadSessions called, current selectedSession: \(state.selectedSession?.key.prefix(8) as String? ?? "nil")")
+                // Check if we need to load from cache first
+                if state.selectedSession == nil {
+                    // First load from cache
+                    if let cached = SessionCache.load(), !cached.isEmpty {
+                        logger.log("SMAlog: Loaded \(cached.count) cached sessions")
+                        state.sessions = cached
+                        state.isRestoringFromCache = true
+                        if let first = cached.first {
+                            state.selectedSession = first
+                            logger.log("SMAlog: Auto-selected first session: \(String(first.key.prefix(12)))")
+                            return .send(.loadHistory)
+                        }
+                        state.isRestoringFromCache = false
+                    } else {
+                        logger.log("SMAlog: No cached sessions found")
                     }
-                    state.isRestoringFromCache = false
                 } else {
-                    logger.log("SMAlog: No cached sessions found")
+                    logger.log("SMAlog: selectedSession already set, will load history")
+                    return .send(.loadHistory)
                 }
-                // Then fetch from network
+                // Always fetch from network to get latest sessions
                 state.isLoading = true
                 state.error = nil
                 return .run { send in
