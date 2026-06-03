@@ -35,6 +35,7 @@ actor SessionManager {
     private var debugLoggingEnabled = false
     private var discoveryDebugLoggingEnabled = false
     private var debugLog: [DebugLogEntry] = []
+    private let commandRouter = NodeCommandRouter()
 
     private init() {
         self.operatorSession = GatewayNodeSession()
@@ -125,6 +126,8 @@ actor SessionManager {
             connectedDeviceName = deviceIdentity.deviceId.prefix(16).description
             logger.log("log: Operator connection established, deviceId: \(self.connectedDeviceName ?? "unknown")")
             appendDebugLog("gateway: Operator connected to gateway", category: "gateway")
+            appendDebugLog("gateway: Operator caps: \(connectOptions.caps.joined(separator: ", "))", category: "gateway")
+            appendDebugLog("gateway: Operator commands: \(connectOptions.commands.joined(separator: ", "))", category: "gateway")
         } catch let error as GatewayConnectAuthError {
             let requestIdStr = error.requestId.map { " (requestId: \($0))" } ?? ""
             let displayError = SessionManagerError.authError(error.message + requestIdStr, error.detailCodeRaw)
@@ -160,19 +163,27 @@ actor SessionManager {
                         await self?.setNodeConnected(false)
                     }
                 },
-                onInvoke: { request in
-                    BridgeInvokeResponse(
-                        id: request.id,
-                        ok: true,
-                        payloadJSON: nil,
-                        error: nil
-                    )
+                onInvoke: { [weak self] request in
+                    guard let self = self else {
+                        return BridgeInvokeResponse(
+                            type: "response",
+                            id: request.id,
+                            ok: false,
+                            payloadJSON: nil,
+                            error: OpenClawNodeError(code: .unavailable, message: "Session unavailable")
+                        )
+                    }
+                    return await self.commandRouter.handle(request)
                 }
             )
             nodeConnected = true
             nodeConnectionError = nil
             logger.log("log: Node connection established")
+            let caps = nodeCaps()
+            let commands = nodeCommands()
             appendDebugLog("gateway: Node connected to gateway", category: "gateway")
+            appendDebugLog("gateway: Node caps: \(caps.joined(separator: ", "))", category: "gateway")
+            appendDebugLog("gateway: Node commands: \(commands.joined(separator: ", "))", category: "gateway")
         } catch {
             logger.log("log: Node connection error: \(error.localizedDescription)")
             nodeConnectionError = error.localizedDescription
@@ -195,14 +206,113 @@ actor SessionManager {
     }
 
     private func nodeCaps() -> [String] {
-        ["canvas", "screen", "device", "talk"]
+        var caps: [String] = [
+            OpenClawCapability.canvas.rawValue,
+            OpenClawCapability.screen.rawValue,
+            OpenClawCapability.device.rawValue,
+            OpenClawCapability.talk.rawValue,
+        ]
+
+        // Optional caps based on user settings
+        let config = ConfigurationManager.shared
+        if config.cameraEnabled {
+            caps.append(OpenClawCapability.camera.rawValue)
+        }
+        if config.voiceWakeEnabled {
+            caps.append(OpenClawCapability.voiceWake.rawValue)
+        }
+        if config.locationEnabled {
+            caps.append(OpenClawCapability.location.rawValue)
+        }
+
+        // Always-on caps
+        caps.append(contentsOf: [
+            OpenClawCapability.photos.rawValue,
+            OpenClawCapability.contacts.rawValue,
+            OpenClawCapability.calendar.rawValue,
+            OpenClawCapability.reminders.rawValue,
+        ])
+
+        return caps
     }
 
     private func nodeCommands() -> [String] {
-        []
+        var commands: [String] = [
+            // Canvas commands
+            OpenClawCanvasCommand.present.rawValue,
+            OpenClawCanvasCommand.hide.rawValue,
+            OpenClawCanvasCommand.navigate.rawValue,
+            OpenClawCanvasCommand.evalJS.rawValue,
+            OpenClawCanvasCommand.snapshot.rawValue,
+            // Canvas A2UI commands
+            OpenClawCanvasA2UICommand.push.rawValue,
+            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
+            OpenClawCanvasA2UICommand.reset.rawValue,
+            // Screen commands
+            OpenClawScreenCommand.record.rawValue,
+            // System commands
+            OpenClawSystemCommand.notify.rawValue,
+            // Chat commands
+            OpenClawChatCommand.push.rawValue,
+            // Talk commands
+            OpenClawTalkCommand.pttStart.rawValue,
+            OpenClawTalkCommand.pttStop.rawValue,
+            OpenClawTalkCommand.pttCancel.rawValue,
+            OpenClawTalkCommand.pttOnce.rawValue,
+        ]
+
+        let caps = Set(nodeCaps())
+
+        if caps.contains(OpenClawCapability.camera.rawValue) {
+            commands.append(contentsOf: [
+                OpenClawCameraCommand.list.rawValue,
+                OpenClawCameraCommand.snap.rawValue,
+                OpenClawCameraCommand.clip.rawValue,
+            ])
+        }
+
+        if caps.contains(OpenClawCapability.location.rawValue) {
+            commands.append(OpenClawLocationCommand.get.rawValue)
+        }
+
+        if caps.contains(OpenClawCapability.device.rawValue) {
+            commands.append(contentsOf: [
+                OpenClawDeviceCommand.status.rawValue,
+                OpenClawDeviceCommand.info.rawValue,
+            ])
+        }
+
+        if caps.contains(OpenClawCapability.photos.rawValue) {
+            commands.append(OpenClawPhotosCommand.latest.rawValue)
+        }
+
+        if caps.contains(OpenClawCapability.contacts.rawValue) {
+            commands.append(contentsOf: [
+                OpenClawContactsCommand.search.rawValue,
+                OpenClawContactsCommand.add.rawValue,
+            ])
+        }
+
+        if caps.contains(OpenClawCapability.calendar.rawValue) {
+            commands.append(contentsOf: [
+                OpenClawCalendarCommand.events.rawValue,
+                OpenClawCalendarCommand.add.rawValue,
+            ])
+        }
+
+        if caps.contains(OpenClawCapability.reminders.rawValue) {
+            commands.append(contentsOf: [
+                OpenClawRemindersCommand.list.rawValue,
+                OpenClawRemindersCommand.add.rawValue,
+            ])
+        }
+
+        return commands
     }
 
     private func nodePermissions() -> [String: Bool] {
+        // Return empty permissions for now
+        // Can be expanded to check actual authorization status
         [:]
     }
 

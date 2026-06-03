@@ -79,3 +79,21 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: SmartChatApp
+
+schemes:
+  SmartChatApp:
+    build:
+      targets:
+        SmartChatApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - SmartChatAppTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
