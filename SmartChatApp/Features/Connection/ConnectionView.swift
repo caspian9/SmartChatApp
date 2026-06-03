@@ -2,7 +2,9 @@ import SwiftUI
 import ComposableArchitecture
 
 struct ConnectionView: View {
-    @StateObject private var store = StoreOf<ConnectionFeature>(ConnectionFeature())
+    @StateObject private var store = StoreOf<ConnectionFeature>(initialState: ConnectionFeature.State()) {
+        ConnectionFeature()
+    }
     @State private var serverURL: String = ""
     @State private var authToken: String = ""
 
@@ -13,41 +15,32 @@ struct ConnectionView: View {
                     .textContentType(.URL)
                     .autocapitalization(.none)
                     .keyboardType(.URL)
-                    .onChange(of: serverURL) { _, newValue in
+                    .onChange(of: serverURL) { newValue in
                         store.send(.serverURLChanged(newValue))
                     }
 
                 SecureField("Auth Token", text: $authToken)
                     .textContentType(.password)
-                    .onChange(of: authToken) { _, newValue in
+                    .onChange(of: authToken) { newValue in
                         store.send(.authTokenChanged(newValue))
                     }
             }
 
             Section {
-                if store.isConnecting {
+                Button(action: {
+                    store.send(.connect)
+                }) {
                     HStack {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
-                        Text("Connecting...")
-                            .foregroundColor(.gray)
+                        Spacer()
+                        Text(store.state.isConnecting ? "Connecting..." : (store.state.isConnected ? "Disconnect" : "Connect"))
+                            .foregroundColor(store.state.isConnected ? .red : Color(hex: "10A37F"))
+                        Spacer()
                     }
-                } else {
-                    Button(action: {
-                        store.send(.connect)
-                    }) {
-                        HStack {
-                            Spacer()
-                            Text(store.isConnected ? "Disconnect" : "Connect")
-                                .foregroundColor(store.isConnected ? .red : Color(hex: "10A37F"))
-                            Spacer()
-                        }
-                    }
-                    .disabled(serverURL.isEmpty)
                 }
+                .disabled(serverURL.isEmpty)
             }
 
-            if let error = store.error {
+            if let error = store.state.error {
                 Section {
                     Text(error)
                         .foregroundColor(.red)

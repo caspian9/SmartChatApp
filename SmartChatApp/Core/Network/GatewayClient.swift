@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawKit
 import OpenClawProtocol
+import OpenClawChatUI
 
 actor GatewayClient {
     private let nodeSession: GatewayNodeSession
@@ -11,7 +12,7 @@ actor GatewayClient {
         self.nodeSession = GatewayNodeSession()
     }
 
-    func connect(gatewayURL: URL, authToken: String) async throws -> HelloOk {
+    func connect(gatewayURL: URL, authToken: String) async throws {
         self.activeURL = gatewayURL
 
         let connectOptions = GatewayConnectOptions(
@@ -28,24 +29,31 @@ actor GatewayClient {
 
         let sessionBox = WebSocketSessionBox(session: URLSession.shared)
 
-        return try await nodeSession.connect(
-            url: gatewayURL,
-            token: authToken,
-            bootstrapToken: nil,
-            password: nil,
-            connectOptions: connectOptions,
-            sessionBox: sessionBox,
-            onConnected: {},
-            onDisconnected: { _ in },
-            onInvoke: { request in
-                BridgeInvokeResponse(
-                    id: request.id,
-                    ok: true,
-                    error: nil,
-                    payloadJSON: nil
-                )
-            }
-        )
+        do {
+            try await nodeSession.connect(
+                url: gatewayURL,
+                token: authToken,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: connectOptions,
+                sessionBox: sessionBox,
+                onConnected: {},
+                onDisconnected: { reason in
+                    print("Gateway disconnected: \(reason)")
+                },
+                onInvoke: { request in
+                    BridgeInvokeResponse(
+                        id: request.id,
+                        ok: true,
+                        payloadJSON: nil,
+                        error: nil
+                    )
+                }
+            )
+        } catch {
+            print("Gateway connection error: \(error)")
+            throw error
+        }
     }
 
     func createSession() async throws -> String {
@@ -81,18 +89,10 @@ actor GatewayClient {
         )
     }
 
-    func subscribe(sessionKey: String) -> AsyncThrowingStream<GatewayEvent, Error> {
+    func subscribe(sessionKey: String) -> AsyncThrowingStream<OpenClawChatTransportEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
-                do {
-                    let events = nodeSession.subscribeServerEvents()
-                    for try await event in events {
-                        continuation.yield(.event(event))
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
+                continuation.finish()
             }
         }
     }

@@ -1,5 +1,59 @@
 import Foundation
 import SwiftUI
+import OpenClawKit
+
+@MainActor
+public final class CardRegistry: Observable {
+    private var toolResultHandlers: [String: CardToolResult] = [:]
+
+    public static let shared = CardRegistry()
+
+    private init() {
+        register(MusicToolResult())
+        register(VideoToolResult())
+        register(ButtonToolResult())
+        register(ImageToolResult())
+    }
+
+    public func register(_ handler: CardToolResult) {
+        toolResultHandlers[handler.toolName] = handler
+    }
+
+    public func canHandle(toolName: String) -> Bool {
+        toolResultHandlers.keys.contains(toolName.lowercased())
+    }
+
+    public func createCard(for toolName: String, arguments: AnyCodable?) -> View? {
+        guard let handler = toolResultHandlers[toolName.lowercased()] else { return nil }
+
+        if let data = handler.parseResult(from: arguments) {
+            return renderCard(type: handler.cardType, data: data)
+        }
+        return nil
+    }
+
+    @ViewBuilder
+    private func renderCard(type: CardType, data: Any) -> some View {
+        switch type {
+        case .music:
+            if let musicData = data as? MusicCardData {
+                MusicCardView(data: musicData)
+            }
+        case .video:
+            if let videoData = data as? VideoCardData {
+                VideoCardView(data: videoData)
+            }
+        case .button:
+            if let buttonData = data as? ButtonCardData {
+                ButtonCardView(data: buttonData)
+            }
+        case .image:
+            if let imageData = data as? ImageCardData {
+                ImageCardView(data: imageData)
+            }
+        }
+    }
+}
 
 public enum CardType: String {
     case music
@@ -122,58 +176,5 @@ public struct ImageToolResult: CardToolResult {
             altText: dict["alt"] as? String,
             fullscreenUrl: (dict["fullscreenUrl"] as? String).flatMap { URL(string: $0) }
         )
-    }
-}
-
-@MainActor
-public final class CardRegistry: Observable {
-    private var toolResultHandlers: [String: CardToolResult] = [:]
-
-    public static let shared = CardRegistry()
-
-    private init() {
-        register(MusicToolResult())
-        register(VideoToolResult())
-        register(ButtonToolResult())
-        register(ImageToolResult())
-    }
-
-    public func register(_ handler: CardToolResult) {
-        toolResultHandlers[handler.toolName] = handler
-    }
-
-    public func canHandle(toolName: String) -> Bool {
-        toolResultHandlers.keys.contains(toolName.lowercased())
-    }
-
-    public func createCard(for toolName: String, arguments: AnyCodable?) -> AnyView? {
-        guard let handler = toolResultHandlers[toolName.lowercased()] else { return nil }
-
-        if let data = handler.parseResult(from: arguments) {
-            return renderCard(type: handler.cardType, data: data)
-        }
-        return nil
-    }
-
-    @ViewBuilder
-    private func renderCard(type: CardType, data: Any) -> some View {
-        switch type {
-        case .music:
-            if let musicData = data as? MusicCardData {
-                MusicCardView(data: musicData)
-            }
-        case .video:
-            if let videoData = data as? VideoCardData {
-                VideoCardView(data: videoData)
-            }
-        case .button:
-            if let buttonData = data as? ButtonCardData {
-                ButtonCardView(data: buttonData)
-            }
-        case .image:
-            if let imageData = data as? ImageCardData {
-                ImageCardView(data: imageData)
-            }
-        }
     }
 }
