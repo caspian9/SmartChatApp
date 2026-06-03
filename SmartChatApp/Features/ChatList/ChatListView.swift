@@ -129,11 +129,11 @@ struct SessionRowView: View {
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 2) {
+                VStack(alignment: .center, spacing: 2) {
                     if let model = session.model {
                         Text(model)
                             .font(.caption2)
-                            .foregroundColor(Color(hex: "10A37F"))
+                            .foregroundColor(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color(hex: "10A37F").opacity(0.15))
@@ -142,7 +142,7 @@ struct SessionRowView: View {
                     if let modelProvider = session.modelProvider {
                         Text(modelProvider)
                             .font(.caption2)
-                            .foregroundColor(.gray)
+                            .foregroundColor(Color(hex: "6B7280"))
                     }
                 }
             }
