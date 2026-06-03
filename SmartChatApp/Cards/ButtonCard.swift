@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ButtonCardContent: CardView {
+struct ButtonCardContent: View {
     let toolCall: ToolCall
     let actionTitle: String
 

@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct MusicCardContent: CardView {
+struct MusicCardContent: View {
     let toolCall: ToolCall
     @State private var isPlaying = false
     @State private var progress: Double = 0.0

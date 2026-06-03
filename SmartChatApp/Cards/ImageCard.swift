@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ImageCardContent: CardView {
+struct ImageCardContent: View {
     let toolCall: ToolCall
     @State private var showFullScreen = false
 
