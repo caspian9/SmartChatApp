@@ -51,12 +51,19 @@ struct StreamingMarkdownCardView: View {
     let content: String
     @State private var height: CGFloat = 0
 
+    /// Match the width a static `MarkdownCardView` naturally fills inside
+    /// a `MessageBubbleView`: screen width minus the outer HStack padding
+    /// (16 × 2) and the bubble's own horizontal padding (12 × 2). The
+    /// previous 0.7 multiplier left the streaming bubble visibly narrower
+    /// than history bubbles for the same content.
+    private static let bubbleChromeWidth: CGFloat = 16 * 2 + 12 * 2
+
     var body: some View {
         StreamingMarkdownRepresentable(messageId: messageId, height: $height)
             // Give the view an explicit width so it can compute a non-zero height.
             // MarkdownViewTextKit's intrinsicContentSize is 0 when content is empty,
             // which traps it at 0x0 inside SwiftUI's layout.
-            .frame(width: UIScreen.main.bounds.width * 0.7,
+            .frame(width: UIScreen.main.bounds.width - Self.bubbleChromeWidth,
                    height: max(height, 1),
                    alignment: .topLeading)
     }
