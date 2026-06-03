@@ -157,8 +157,8 @@ struct SessionRowView: View {
                         .foregroundColor(theme.textSecondary)
                 }
 
-                if let inputTokens = session.inputTokens, let outputTokens = session.outputTokens {
-                    Text("\(inputTokens + outputTokens) tokens")
+                if let tokens = session.totalTokens {
+                    Text("\(tokens) tokens")
                         .font(.caption)
                         .foregroundColor(theme.textSecondary)
                 }

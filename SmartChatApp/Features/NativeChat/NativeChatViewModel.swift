@@ -50,7 +50,7 @@ struct NativeChatViewModel {
             switch action {
             case .loadSessions:
                 logger.log("SMAlog: loadSessions called")
-                // First load from cache
+                // First load from cache for fast display
                 if let cached = SessionCache.load(), !cached.isEmpty {
                     logger.log("SMAlog: Loaded \(cached.count) cached sessions")
                     state.sessions = cached
@@ -80,9 +80,7 @@ struct NativeChatViewModel {
                 return .run { send in
                     Task {
                         do {
-                            // Ensure connected first, with retry
                             try await SessionManager.shared.ensureConnected()
-                            // Small delay to ensure connection is stable
                             try await Task.sleep(for: .milliseconds(100))
                             let transport = await SessionManager.shared.makeTransport(sessionKey: "")
                             let response = try await transport.listSessions(limit: 50)
@@ -90,7 +88,6 @@ struct NativeChatViewModel {
                             await send(.loadedSessions(response.sessions))
                         } catch {
                             logger.log("SMAlog: Load sessions error: \(error.localizedDescription)")
-                            // Retry once after a short delay
                             try? await Task.sleep(for: .milliseconds(500))
                             do {
                                 try await SessionManager.shared.ensureConnected()
@@ -110,11 +107,12 @@ struct NativeChatViewModel {
                 state.isLoading = false
                 SessionCache.save(sessions)
 
-                // Try to restore last selected session
+                // Try to restore last selected session and update with latest data from network
                 let lastKey = UserDefaults.standard.string(forKey: lastSelectedSessionKey)
-                if let key = lastKey, let lastSession = sessions.first(where: { $0.key == key }) {
-                    state.selectedSession = lastSession
-                    logger.log("SMAlog: restored last selected session: \(String(lastSession.key.prefix(12)))")
+                if let key = lastKey, let updatedSession = sessions.first(where: { $0.key == key }) {
+                    state.selectedSession = updatedSession
+                    logger.log("SMAlog: restored and updated session: \(String(updatedSession.key.prefix(12))), tokens: \(updatedSession.totalTokens ?? -1)")
+                    // Reload history with updated session info to refresh provider/model/tokens display
                     return .send(.loadHistory)
                 }
 
@@ -273,6 +271,10 @@ struct NativeChatViewModel {
                                     startedAt: nil,
                                     endedAt: nil,
                                     livenessState: nil,
+                                    inputTokens: msg.usage?.input,
+                                    outputTokens: msg.usage?.output,
+                                    cacheRead: msg.usage?.cacheRead,
+                                    cacheWrite: msg.usage?.cacheWrite,
                                     toolCallId: msg.toolCallId,
                                     toolName: msg.toolName,
                                     stopReason: msg.stopReason
@@ -325,6 +327,10 @@ struct NativeChatViewModel {
                                     startedAt: nil,
                                     endedAt: nil,
                                     livenessState: nil,
+                                    inputTokens: msg.usage?.input,
+                                    outputTokens: msg.usage?.output,
+                                    cacheRead: msg.usage?.cacheRead,
+                                    cacheWrite: msg.usage?.cacheWrite,
                                     toolCallId: msg.toolCallId,
                                     toolName: msg.toolName,
                                     stopReason: msg.stopReason
@@ -354,7 +360,7 @@ struct NativeChatViewModel {
                 // where UI didn't update when counts matched
                 logger.log("SMAlog: loadedHistory updating messages, count: \(messages.count)")
                 state.messages = messages
-                state.needsScrollToBottom = false
+                state.needsScrollToBottom = true
                 state.isSending = false
                 return .none
 
@@ -374,6 +380,10 @@ struct NativeChatViewModel {
                     if message.endedAt != nil { existingMessage.endedAt = message.endedAt }
                     if message.livenessState != nil { existingMessage.livenessState = message.livenessState }
                     if message.seq != nil { existingMessage.seq = message.seq }
+                    if message.inputTokens != nil { existingMessage.inputTokens = message.inputTokens }
+                    if message.outputTokens != nil { existingMessage.outputTokens = message.outputTokens }
+                    if message.cacheRead != nil { existingMessage.cacheRead = message.cacheRead }
+                    if message.cacheWrite != nil { existingMessage.cacheWrite = message.cacheWrite }
                     state.messages[existingIndex] = existingMessage
                     state.scrollTrigger += 1
                     logger.log("SMAlog: updated message: \(message.id), text length: \(existingMessage.text.count), state: \(message.state)")
@@ -475,7 +485,33 @@ struct NativeChatViewModel {
                 logger.log("SMAlog: agent start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)")
             } else if phase == "end" {
                 // End of run - preserve existing text, just update state and endedAt
-                logger.log("SMAlog: agent end - runId: \(runId), seq: \(seq ?? -1), endedAt: \(endedAtMs)")
+                logger.log("SMAlog: agent end - processing data, keys: \(data.keys.map { $0 })")
+                for (key, value) in data {
+                    logger.log("SMAlog: data key: \(key), value: \(String(describing: value.value))")
+                }
+                // Extract tokens from nested usage structure
+                var inputTokens: Int?
+                var outputTokens: Int?
+                var cacheRead: Int?
+                var cacheWrite: Int?
+                // Check for usage dictionary
+                if let usage = data["usage"]?.value as? [String: Any] {
+                    logger.log("SMAlog: found usage dict: \(String(describing: usage))")
+                    if let input = usage["input"] as? Int { inputTokens = input }
+                    if let output = usage["output"] as? Int { outputTokens = output }
+                    if let cr = usage["cacheRead"] as? Int { cacheRead = cr }
+                    if let cw = usage["cacheWrite"] as? Int { cacheWrite = cw }
+                } else if let usage = data["usage"] {
+                    logger.log("SMAlog: usage found but not dict: \(String(describing: usage.value))")
+                } else {
+                    logger.log("SMAlog: no usage key found in data")
+                }
+                // Also check for top-level token fields
+                if inputTokens == nil, let input = data["inputTokens"]?.value as? Int { inputTokens = input }
+                if outputTokens == nil, let output = data["outputTokens"]?.value as? Int { outputTokens = output }
+                if cacheRead == nil, let cr = data["cacheRead"]?.value as? Int { cacheRead = cr }
+                if cacheWrite == nil, let cw = data["cacheWrite"]?.value as? Int { cacheWrite = cw }
+                logger.log("SMAlog: agent end - tokens: input: \(inputTokens ?? -1), output: \(outputTokens ?? -1), cacheRead: \(cacheRead ?? -1), cacheWrite: \(cacheWrite ?? -1)")
                 let message = ChatMessage(
                     id: runId,
                     text: "",  // Will be ignored in receiveMessage - preserve existing
@@ -487,6 +523,10 @@ struct NativeChatViewModel {
                     startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : nil,
                     endedAt: endedAtMs > 0 ? Date(timeIntervalSince1970: endedAtMs / 1000) : timestamp,
                     livenessState: livenessState,
+                    inputTokens: inputTokens,
+                    outputTokens: outputTokens,
+                    cacheRead: cacheRead,
+                    cacheWrite: cacheWrite,
                     toolCallId: nil,
                     toolName: nil,
                     stopReason: nil

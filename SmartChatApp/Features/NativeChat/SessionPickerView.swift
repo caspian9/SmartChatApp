@@ -172,9 +172,9 @@ struct SessionPickerView: View {
                         .cornerRadius(4)
                 }
                 if let tokens = session.totalTokens {
-                    Text("\(tokens) tokens")
+                    Text("\(tokens)")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.green)
                 }
 
                 Spacer()

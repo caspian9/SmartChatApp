@@ -19,17 +19,45 @@ struct MessageBubbleView: View {
             VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 4) {
                 bubbleContent
 
-                // Seq badge for AI messages
-                if !message.isOutgoing, let seq = message.seq {
-                    HStack(spacing: 4) {
+                HStack(spacing: 8) {
+                    // Seq badge for AI messages
+                    if !message.isOutgoing, let seq = message.seq {
                         Text("#\(seq)")
                             .font(.caption2)
                             .foregroundColor(theme.textSecondary)
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(theme.inputBackground)
-                    .cornerRadius(4)
+
+                    if let startedAt = message.startedAt {
+                        Text(formatTime(startedAt))
+                            .font(.caption2)
+                            .foregroundColor(theme.textSecondary)
+                    }
+                    if let endedAt = message.endedAt {
+                        Text("→ \(formatTime(endedAt))")
+                            .font(.caption2)
+                            .foregroundColor(theme.textSecondary)
+                    }
+                    // Token usage display
+                    if let input = message.inputTokens, let output = message.outputTokens {
+                        Text("↑\(input) ↓\(output)")
+                            .font(.caption2)
+                            .foregroundColor(theme.textSecondary)
+                    }
+                    if let cacheRead = message.cacheRead {
+                        Text("↑\(cacheRead)")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    }
+                    if let cacheWrite = message.cacheWrite {
+                        Text("↓\(cacheWrite)")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+                    if message.livenessState == "working" && message.state == "streaming" {
+                        Text("●")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    }
                 }
 
                 // Action bar
@@ -59,24 +87,6 @@ struct MessageBubbleView: View {
                     }
                 }
                 .padding(.top, 2)
-
-                HStack(spacing: 8) {
-                    if let startedAt = message.startedAt {
-                        Text(formatTime(startedAt))
-                            .font(.caption2)
-                            .foregroundColor(theme.textSecondary)
-                    }
-                    if let endedAt = message.endedAt {
-                        Text("→ \(formatTime(endedAt))")
-                            .font(.caption2)
-                            .foregroundColor(theme.textSecondary)
-                    }
-                    if message.livenessState == "working" && message.state == "streaming" {
-                        Text("●")
-                            .font(.caption2)
-                            .foregroundColor(.green)
-                    }
-                }
             }
 
             if !message.isOutgoing {
@@ -206,6 +216,10 @@ struct ChatMessage: Identifiable, Equatable {
     var startedAt: Date?
     var endedAt: Date?
     var livenessState: String?
+    var inputTokens: Int?
+    var outputTokens: Int?
+    var cacheRead: Int?
+    var cacheWrite: Int?
     let toolCallId: String?
     let toolName: String?
     let stopReason: String?
