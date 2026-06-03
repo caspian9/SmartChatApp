@@ -63,17 +63,17 @@ actor SessionManager {
         connectedDeviceName
     }
 
-    func connectWithRole(gatewayURL: URL, authToken: String, role: GatewayConnectionRole) async throws {
+    func connectWithRole(gatewayURL: URL, authToken: String, role: GatewayConnectionRole, cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) async throws {
         switch role {
         case .operatorOnly:
             try await connect(gatewayURL: gatewayURL, authToken: authToken)
         case .nodeOnly:
-            try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken)
+            try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
         case .operatorAndNode:
             try await connect(gatewayURL: gatewayURL, authToken: authToken)
             if !nodeConnected {
                 do {
-                    try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken)
+                    try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
                 } catch {
                     logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
                 }
@@ -83,7 +83,7 @@ actor SessionManager {
 
     func connectWithProfile(_ profile: GatewayProfile) async throws {
         let url = URL(string: "\(profile.tlsEnabled ? "https" : "http")://\(profile.host):\(profile.port)")!
-        try await connectWithRole(gatewayURL: url, authToken: profile.token, role: profile.role)
+        try await connectWithRole(gatewayURL: url, authToken: profile.token, role: profile.role, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
     }
 
     func connect(gatewayURL: URL, authToken: String) async throws {
@@ -147,9 +147,9 @@ actor SessionManager {
         }
     }
 
-    func connectNodeRole(gatewayURL: URL, authToken: String) async throws {
+    func connectNodeRole(gatewayURL: URL, authToken: String, cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) async throws {
         let deviceIdentity = DeviceIdentityStore.loadOrCreate()
-        let nodeOptions = makeNodeConnectOptions(deviceIdentity: deviceIdentity)
+        let nodeOptions = makeNodeConnectOptions(deviceIdentity: deviceIdentity, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
         let sessionBox = WebSocketSessionBox(session: URLSession.shared)
 
         do {
@@ -185,8 +185,8 @@ actor SessionManager {
             nodeConnected = true
             nodeConnectionError = nil
             logger.log("log: Node connection established")
-            let caps = nodeCaps()
-            let commands = nodeCommands()
+            let caps = nodeCaps(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
+            let commands = nodeCommands(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
             appendDebugLog("gateway: Node connected to gateway", category: "gateway")
             appendDebugLog("gateway: Node caps: \(caps.joined(separator: ", "))", category: "gateway")
             appendDebugLog("gateway: Node commands: \(commands.joined(separator: ", "))", category: "gateway")
@@ -197,12 +197,12 @@ actor SessionManager {
         }
     }
 
-    private func makeNodeConnectOptions(deviceIdentity: DeviceIdentity) -> GatewayConnectOptions {
+    private func makeNodeConnectOptions(deviceIdentity: DeviceIdentity, cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) -> GatewayConnectOptions {
         GatewayConnectOptions(
             role: "node",
             scopes: [],
-            caps: nodeCaps(),
-            commands: nodeCommands(),
+            caps: nodeCaps(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled),
+            commands: nodeCommands(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled),
             permissions: nodePermissions(),
             clientId: "openclaw-ios",
             clientMode: "node",
@@ -211,7 +211,7 @@ actor SessionManager {
         )
     }
 
-    private func nodeCaps() -> [String] {
+    private func nodeCaps(cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) -> [String] {
         var caps: [String] = [
             OpenClawCapability.canvas.rawValue,
             OpenClawCapability.screen.rawValue,
@@ -219,15 +219,14 @@ actor SessionManager {
             OpenClawCapability.talk.rawValue,
         ]
 
-        // Optional caps based on user settings
-        let config = ConfigurationManager.shared
-        if config.cameraEnabled {
+        // Optional caps based on profile settings
+        if cameraEnabled {
             caps.append(OpenClawCapability.camera.rawValue)
         }
-        if config.voiceWakeEnabled {
+        if voiceWakeEnabled {
             caps.append(OpenClawCapability.voiceWake.rawValue)
         }
-        if config.locationEnabled {
+        if locationEnabled {
             caps.append(OpenClawCapability.location.rawValue)
         }
 
@@ -242,7 +241,7 @@ actor SessionManager {
         return caps
     }
 
-    private func nodeCommands() -> [String] {
+    private func nodeCommands(cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) -> [String] {
         var commands: [String] = [
             // Canvas commands
             OpenClawCanvasCommand.present.rawValue,
@@ -267,9 +266,8 @@ actor SessionManager {
             OpenClawTalkCommand.pttOnce.rawValue,
         ]
 
-        let caps = Set(nodeCaps())
-
-        if caps.contains(OpenClawCapability.camera.rawValue) {
+        // Add commands based on capabilities
+        if cameraEnabled {
             commands.append(contentsOf: [
                 OpenClawCameraCommand.list.rawValue,
                 OpenClawCameraCommand.snap.rawValue,
@@ -277,36 +275,35 @@ actor SessionManager {
             ])
         }
 
-        if caps.contains(OpenClawCapability.location.rawValue) {
+        if locationEnabled {
             commands.append(OpenClawLocationCommand.get.rawValue)
         }
 
-        if caps.contains(OpenClawCapability.device.rawValue) {
-            commands.append(contentsOf: [
-                OpenClawDeviceCommand.status.rawValue,
-                OpenClawDeviceCommand.info.rawValue,
-            ])
-        }
+        // Always include device commands
+        commands.append(contentsOf: [
+            OpenClawDeviceCommand.status.rawValue,
+            OpenClawDeviceCommand.info.rawValue,
+        ])
 
-        if caps.contains(OpenClawCapability.photos.rawValue) {
+        if true { // photos is always enabled
             commands.append(OpenClawPhotosCommand.latest.rawValue)
         }
 
-        if caps.contains(OpenClawCapability.contacts.rawValue) {
+        if true { // contacts is always enabled
             commands.append(contentsOf: [
                 OpenClawContactsCommand.search.rawValue,
                 OpenClawContactsCommand.add.rawValue,
             ])
         }
 
-        if caps.contains(OpenClawCapability.calendar.rawValue) {
+        if true { // calendar is always enabled
             commands.append(contentsOf: [
                 OpenClawCalendarCommand.events.rawValue,
                 OpenClawCalendarCommand.add.rawValue,
             ])
         }
 
-        if caps.contains(OpenClawCapability.reminders.rawValue) {
+        if true { // reminders is always enabled
             commands.append(contentsOf: [
                 OpenClawRemindersCommand.list.rawValue,
                 OpenClawRemindersCommand.add.rawValue,
@@ -366,7 +363,15 @@ actor SessionManager {
     }
 
     func ensureConnected() async throws {
-        let role = ConfigurationManager.shared.gatewayRole
+        // Use active profile
+        let activeProfile = await MainActor.run { ProfileManager.shared.activeProfile }
+        guard let profile = activeProfile else {
+            logger.log("log: No active profile available")
+            appendDebugLog("gateway: No active profile", category: "gateway")
+            return
+        }
+
+        let role = profile.role
         if role == .operatorOnly && operatorConnected {
             logger.log("log: Already connected (operator), skipping")
             return
@@ -377,14 +382,6 @@ actor SessionManager {
         }
         if role == .operatorAndNode && operatorConnected {
             logger.log("log: Already connected (operator+node), skipping")
-            return
-        }
-
-        // Use active profile
-        let activeProfile = await MainActor.run { ProfileManager.shared.activeProfile }
-        guard let profile = activeProfile else {
-            logger.log("log: No active profile available")
-            appendDebugLog("gateway: No active profile", category: "gateway")
             return
         }
 
@@ -401,12 +398,12 @@ actor SessionManager {
         case .operatorOnly:
             try await connect(gatewayURL: url, authToken: profile.token)
         case .nodeOnly:
-            try await connectNodeRole(gatewayURL: url, authToken: profile.token)
+            try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
         case .operatorAndNode:
             try await connect(gatewayURL: url, authToken: profile.token)
             if !nodeConnected {
                 do {
-                    try await connectNodeRole(gatewayURL: url, authToken: profile.token)
+                    try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
                 } catch {
                     logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
                 }
@@ -439,7 +436,7 @@ actor SessionManager {
         // Connect node
         if !nodeConnected {
             do {
-                try await connectNodeRole(gatewayURL: url, authToken: profile.token)
+                try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
             } catch {
                 logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
             }
