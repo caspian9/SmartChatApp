@@ -607,6 +607,19 @@ struct NativeChatViewModel {
 
     private func createOpenClawChatMessage(from chatMessage: ChatMessage) -> OpenClawChatMessage? {
         guard let uuid = UUID(uuidString: chatMessage.id) else { return nil }
+        // Build usage if we have token data - encode as JSON then decode to OpenClawChatUsage
+        var usage: OpenClawChatUsage? = nil
+        if chatMessage.inputTokens != nil || chatMessage.outputTokens != nil || chatMessage.cacheRead != nil || chatMessage.cacheWrite != nil {
+            var usageData: [String: AnyCodable] = [:]
+            if let input = chatMessage.inputTokens { usageData["input"] = AnyCodable(input) }
+            if let output = chatMessage.outputTokens { usageData["output"] = AnyCodable(output) }
+            if let cr = chatMessage.cacheRead { usageData["cacheRead"] = AnyCodable(cr) }
+            if let cw = chatMessage.cacheWrite { usageData["cacheWrite"] = AnyCodable(cw) }
+            if let data = try? JSONEncoder().encode(usageData),
+               let decoded = try? JSONDecoder().decode(OpenClawChatUsage.self, from: data) {
+                usage = decoded
+            }
+        }
         return OpenClawChatMessage(
             id: uuid,
             role: chatMessage.role,
@@ -614,7 +627,7 @@ struct NativeChatViewModel {
             timestamp: chatMessage.timestamp.timeIntervalSince1970 * 1000,
             toolCallId: chatMessage.toolCallId,
             toolName: chatMessage.toolName,
-            usage: nil,
+            usage: usage,
             stopReason: chatMessage.stopReason
         )
     }
