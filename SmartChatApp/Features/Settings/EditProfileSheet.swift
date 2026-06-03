@@ -21,7 +21,33 @@ struct EditProfileSheet: View {
     @State private var testStatus: TestStatus = .idle
 
     enum TestStatus {
-        case idle, testing, success, failure
+        case idle, testing, success, failure, invalid
+    }
+
+    private var isConnectEnabled: Bool {
+        !editHost.isEmpty && isValidHost && !isTesting && !isConnected
+    }
+
+    private var isDisconnectEnabled: Bool {
+        isConnected && !isTesting
+    }
+
+    private var isValidHost: Bool {
+        let host = editHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return false }
+        // Basic host validation: not empty, no spaces
+        // Accept domain format (e.g., api.example.com) or IP format (e.g., 192.168.1.1)
+        let domainPattern = "^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?)+$"
+        let ipPattern = "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+
+        let domainRegex = try? NSRegularExpression(pattern: domainPattern, options: .caseInsensitive)
+        let ipRegex = try? NSRegularExpression(pattern: ipPattern, options: .caseInsensitive)
+
+        let range = NSRange(host.startIndex..., in: host)
+        let isDomain = domainRegex?.firstMatch(in: host, options: [], range: range) != nil
+        let isIP = ipRegex?.firstMatch(in: host, options: [], range: range) != nil
+
+        return isDomain || isIP
     }
 
     private var isNewProfile: Bool {
@@ -46,7 +72,16 @@ struct EditProfileSheet: View {
     }
 
     private func testConnection() {
-        guard !editHost.isEmpty else { return }
+        if editHost.isEmpty {
+            testStatus = .invalid
+            testResult = "Host is required"
+            return
+        }
+        if !isValidHost {
+            testStatus = .invalid
+            testResult = "Invalid host format"
+            return
+        }
 
         isTesting = true
         testResult = nil
