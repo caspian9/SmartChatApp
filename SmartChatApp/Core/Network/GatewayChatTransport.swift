@@ -13,8 +13,17 @@ public actor GatewayChatTransport: OpenClawChatTransport {
     }
 
     public func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        let emptyJSON = "{\"sessionKey\": \"\(sessionKey)\"}".data(using: .utf8)!
-        return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: emptyJSON)
+        do {
+            let responseData = try await nodeSession.request(
+                method: "sessions.history",
+                paramsJSON: "{\"key\": \"\(sessionKey)\"}"
+            )
+            return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: responseData)
+        } catch {
+            print("requestHistory failed: \(error)")
+            let emptyData = "{\"sessionKey\": \"\(sessionKey)\"}".data(using: .utf8)!
+            return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: emptyData)
+        }
     }
 
     public func listModels() async throws -> [OpenClawChatModelChoice] {
