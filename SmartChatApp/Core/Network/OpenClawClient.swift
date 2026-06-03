@@ -27,7 +27,12 @@ actor OpenClawClient {
                 mode: "user"
             ),
             caps: ["sessions", "chat"],
-            auth: AuthInfo(token: authToken)
+            auth: AuthInfo(
+                token: authToken,
+                bootstrapToken: nil,
+                deviceToken: nil,
+                password: nil
+            )
         )
 
         let frame = RequestFrame(
