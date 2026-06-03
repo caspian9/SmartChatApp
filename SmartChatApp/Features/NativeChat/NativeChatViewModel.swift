@@ -18,6 +18,7 @@ struct NativeChatViewModel {
         var isSending: Bool = false
         var error: String?
         var isRestoringFromCache: Bool = false
+        var needsScrollToBottom: Bool = false
     }
 
     enum Action: Equatable {
@@ -34,6 +35,7 @@ struct NativeChatViewModel {
         case receiveMessage(ChatMessage)
         case setError(String?)
         case setSending(Bool)
+        case scrollToBottom
     }
 
     @Dependency(\.continuousClock) var clock
@@ -274,13 +276,17 @@ struct NativeChatViewModel {
 
             case .loadedCachedHistory(let messages):
                 state.messages = messages
-                // Don't reset isRestoringFromCache here - let network response handle it
+                // Scroll to bottom after cached messages are loaded (for session switch)
+                let isRestoring = state.isRestoringFromCache
+                if isRestoring {
+                    state.isRestoringFromCache = false
+                    state.needsScrollToBottom = true
+                }
                 return .none
 
             case .loadedHistory(let messages):
-                if state.isRestoringFromCache {
-                    // Merging network messages with cached - don't replace if same
-                    state.isRestoringFromCache = false
+                if state.needsScrollToBottom {
+                    state.needsScrollToBottom = false
                 }
                 state.messages = messages
                 state.isSending = false
@@ -328,6 +334,10 @@ struct NativeChatViewModel {
 
             case .setSending(let value):
                 state.isSending = value
+                return .none
+
+            case .scrollToBottom:
+                state.needsScrollToBottom = true
                 return .none
             }
         }
