@@ -89,46 +89,48 @@ struct NativeChatViewModel {
                     if let key = lastKey, let lastSession = cached.first(where: { $0.key == key }) {
                         state.selectedSession = lastSession
                         logger.log("SMAlog: restored last selected session: \(String(lastSession.key.prefix(12)))")
-                        return .send(.loadHistory)
-                    }
-
-                    // Auto-select first session if none selected and no restore
-                    if state.selectedSession == nil, let first = cached.first {
+                    } else if state.selectedSession == nil, let first = cached.first {
+                        // Auto-select first session if none selected and no restore
                         state.selectedSession = first
                         logger.log("SMAlog: Auto-selected first session: \(String(first.key.prefix(12)))")
-                        return .send(.loadHistory)
                     }
                     state.isRestoringFromCache = false
                 } else {
                     logger.log("SMAlog: No cached sessions found for profile \(profileIdCapture.uuidString.prefix(8))")
                 }
-                // Then fetch from network
+                // Then fetch from network (even on cache hit) so the
+                // selected session's totals/timestamps reflect the latest
+                // server state. The cache is for fast display only; without
+                // this, re-entering NativeChat would show stale model/tokens.
                 state.isLoading = true
                 state.error = nil
-                return .run { send in
-                    Task {
-                        do {
-                            try await SessionManager.shared.ensureConnected()
-                            try await Task.sleep(for: .milliseconds(100))
-                            let transport = await SessionManager.shared.makeTransport(sessionKey: "")
-                            let response = try await transport.listSessions(limit: 50)
-                            logger.log("SMAlog: Loaded \(response.sessions.count) sessions")
-                            await send(.loadedSessions(response.sessions))
-                        } catch {
-                            logger.log("SMAlog: Load sessions error: \(error.localizedDescription)")
-                            try? await Task.sleep(for: .milliseconds(500))
+                return .merge(
+                    .send(.loadHistory),
+                    .run { send in
+                        Task {
                             do {
                                 try await SessionManager.shared.ensureConnected()
+                                try await Task.sleep(for: .milliseconds(100))
                                 let transport = await SessionManager.shared.makeTransport(sessionKey: "")
                                 let response = try await transport.listSessions(limit: 50)
+                                logger.log("SMAlog: Loaded \(response.sessions.count) sessions")
                                 await send(.loadedSessions(response.sessions))
                             } catch {
-                                logger.log("SMAlog: Load sessions retry failed: \(error.localizedDescription)")
-                                await send(.loadedSessions([]))
+                                logger.log("SMAlog: Load sessions error: \(error.localizedDescription)")
+                                try? await Task.sleep(for: .milliseconds(500))
+                                do {
+                                    try await SessionManager.shared.ensureConnected()
+                                    let transport = await SessionManager.shared.makeTransport(sessionKey: "")
+                                    let response = try await transport.listSessions(limit: 50)
+                                    await send(.loadedSessions(response.sessions))
+                                } catch {
+                                    logger.log("SMAlog: Load sessions retry failed: \(error.localizedDescription)")
+                                    await send(.loadedSessions([]))
+                                }
                             }
                         }
                     }
-                }
+                )
 
             case .loadedSessions(let sessions):
                 state.sessions = sessions
@@ -157,7 +159,16 @@ struct NativeChatViewModel {
 
             case .selectSession(let session):
                 let previousKey = state.selectedSession?.key
-                state.selectedSession = session
+                // Pick the freshest instance from state.sessions (rather than
+                // the one passed in, which may be from a stale dropdown).
+                // This keeps the second-line provider/model/totalTokens/updatedAt
+                // in sync with whatever the most recent session-list fetch
+                // produced.
+                if let fresh = state.sessions.first(where: { $0.key == session.key }) {
+                    state.selectedSession = fresh
+                } else {
+                    state.selectedSession = session
+                }
 
                 // Only clear messages if switching to a different session
                 let didSwitch = previousKey != session.key
