@@ -33,6 +33,12 @@ struct NativeChatView: View {
                         }
                     }
                     .padding(.vertical, 8)
+                    .onAppear {
+                        // Scroll to bottom immediately when view appears with cached messages
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            scrollToBottom(proxy: proxy)
+                        }
+                    }
                     .onChange(of: store.messages.count) { oldCount, newCount in
                         // Only scroll when new messages are added, not when replacing cached with network data
                         if !store.isRestoringFromCache && newCount > oldCount {
