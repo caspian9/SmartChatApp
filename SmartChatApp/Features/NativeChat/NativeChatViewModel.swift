@@ -979,11 +979,11 @@ struct NativeChatViewModel {
                     var outputTokens: Int?
                     var cacheRead: Int?
                     var cacheWrite: Int?
-                    if let usage = data["usage"]?.value as? [String: AnyCodable] {
-                        if let input = usage["input"]?.value as? Int { inputTokens = input }
-                        if let output = usage["output"]?.value as? Int { outputTokens = output }
-                        if let cr = usage["cacheRead"]?.value as? Int { cacheRead = cr }
-                        if let cw = usage["cacheWrite"]?.value as? Int { cacheWrite = cw }
+                    if let usage = data["usage"]?.value as? [String: Any] {
+                        if let input = usage["input"] as? Int { inputTokens = input }
+                        if let output = usage["output"] as? Int { outputTokens = output }
+                        if let cr = usage["cacheRead"] as? Int { cacheRead = cr }
+                        if let cw = usage["cacheWrite"] as? Int { cacheWrite = cw }
                     }
                     if inputTokens == nil, let input = data["inputTokens"]?.value as? Int { inputTokens = input }
                     if outputTokens == nil, let output = data["outputTokens"]?.value as? Int { outputTokens = output }
@@ -1233,7 +1233,7 @@ struct NativeChatViewModel {
     /// Mirrors the format the history decoder uses (lines 533-565 of the
     /// pre-refactor file) so the streaming toolCall bubble looks the same as
     /// one loaded from history.
-    func formatToolCallText(name: String?, args: AnyCodable?) -> String {
+    private func formatToolCallText(name: String?, args: AnyCodable?) -> String {
         var lines: [String] = []
         lines.append("ToolCall: \(name ?? "unknown")")
         if let args {
@@ -1274,22 +1274,16 @@ struct NativeChatViewModel {
     /// The result is `{ content: [{ type: "text", text: "..." }] }` per the
     /// OpenClaw protocol; we extract the joined text so it renders identically
     /// to the toolResult row in the history list.
-    func formatToolResultText(result: AnyCodable?, isError: Bool, toolName: String?) -> String {
+    private func formatToolResultText(result: AnyCodable?, isError: Bool, toolName: String?) -> String {
         let prefix = isError ? "Error" : "Result"
-        // AnyCodable round-trips nested JSON objects as [String: AnyCodable]
-        // and arrays as [AnyCodable]. The previous version cast to
-        // [String: Any] / [[String: Any]], which never matched the real
-        // shape, so the function silently fell through to "Result" / "Error"
-        // and the bubble showed up empty.
-        if let resultDict = result?.value as? [String: AnyCodable],
-           let content = resultDict["content"]?.value as? [AnyCodable] {
+        if let resultDict = result?.value as? [String: Any],
+           let content = resultDict["content"] as? [[String: Any]] {
             let texts = content.compactMap { item -> String? in
-                guard let dict = item.value as? [String: AnyCodable],
-                      let type = dict["type"]?.value as? String, type == "text",
-                      let text = dict["text"]?.value as? String else {
-                    return nil
+                if let type = item["type"] as? String, type == "text",
+                   let text = item["text"] as? String {
+                    return text
                 }
-                return text
+                return nil
             }
             if !texts.isEmpty {
                 let joined = texts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
