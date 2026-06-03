@@ -19,7 +19,7 @@ struct ChatInputView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .foregroundColor(.white)
-                    .frame(minHeight: 36, maxHeight: 100)
+                    .frame(minHeight: 36, maxHeight: 60)
                     .disabled(isSending)
             }
             .background(Color(hex: "2A2A2A"))
