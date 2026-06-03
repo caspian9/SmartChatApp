@@ -225,14 +225,17 @@ struct NativeChatViewModel {
                 if let existingIndex = state.messages.firstIndex(where: { $0.id == message.id }) {
                     // Update existing message (streaming text update)
                     var existingMessage = state.messages[existingIndex]
-                    existingMessage.text = message.text
+                    // Only update text if new text is not empty (preserve content on end phase)
+                    if !message.text.isEmpty {
+                        existingMessage.text = message.text
+                    }
                     existingMessage.state = message.state
                     if message.startedAt != nil { existingMessage.startedAt = message.startedAt }
                     if message.endedAt != nil { existingMessage.endedAt = message.endedAt }
                     if message.livenessState != nil { existingMessage.livenessState = message.livenessState }
                     if message.seq != nil { existingMessage.seq = message.seq }
                     state.messages[existingIndex] = existingMessage
-                    logger.log("SMAlog: updated message: \(message.id), text length: \(message.text.count), state: \(message.state)")
+                    logger.log("SMAlog: updated message: \(message.id), text length: \(existingMessage.text.count), state: \(message.state)")
                 } else {
                     // New message
                     state.messages.append(message)
