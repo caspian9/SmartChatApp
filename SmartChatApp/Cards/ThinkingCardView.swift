@@ -9,7 +9,7 @@ struct ThinkingCardView: View {
                 .font(.caption)
                 .foregroundColor(.purple)
 
-            Text(content)
+            Text(formattedContent)
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .italic()
@@ -17,5 +17,9 @@ struct ThinkingCardView: View {
         .padding(8)
         .background(Color.purple.opacity(0.1))
         .cornerRadius(8)
+    }
+
+    private var formattedContent: String {
+        content.replacingOccurrences(of: "\\n", with: "\n")
     }
 }
