@@ -21,6 +21,7 @@ struct NativeChatViewModel {
         var error: String?
         var isRestoringFromCache: Bool = false
         var needsScrollToBottom: Bool = false
+        var scrollTrigger: Int = 0
     }
 
     enum Action: Equatable {
@@ -39,6 +40,7 @@ struct NativeChatViewModel {
         case setSending(Bool)
         case scrollToBottom
         case setNeedsScrollToBottom(Bool)
+        case incrementScrollTrigger
     }
 
     @Dependency(\.continuousClock) var clock
@@ -361,9 +363,11 @@ struct NativeChatViewModel {
                 if let existingIndex = state.messages.firstIndex(where: { $0.id == message.id }) {
                     // Update existing message (streaming text update)
                     var existingMessage = state.messages[existingIndex]
+                    logger.log("SMAlog: receiveMessage update - id: \(String(message.id.prefix(8))), existingIndex: \(existingIndex), newText len: \(message.text.count), existingText len: \(existingMessage.text.count), state: \(message.state)")
                     // Only update text if new text is not empty (preserve content on end phase)
                     if !message.text.isEmpty {
                         existingMessage.text = message.text
+                        logger.log("SMAlog: receiveMessage updated text, new len: \(existingMessage.text.count)")
                     }
                     existingMessage.state = message.state
                     if message.startedAt != nil { existingMessage.startedAt = message.startedAt }
@@ -371,11 +375,13 @@ struct NativeChatViewModel {
                     if message.livenessState != nil { existingMessage.livenessState = message.livenessState }
                     if message.seq != nil { existingMessage.seq = message.seq }
                     state.messages[existingIndex] = existingMessage
+                    state.scrollTrigger += 1
                     logger.log("SMAlog: updated message: \(message.id), text length: \(existingMessage.text.count), state: \(message.state)")
                 } else {
                     // New message
                     state.messages.append(message)
-                    logger.log("SMAlog: added new message: \(message.id), state: \(message.state)")
+                    state.scrollTrigger += 1
+                    logger.log("SMAlog: receiveMessage new - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)")
                 }
                 // When state is final, message reception is complete - reset sending state
                 if message.state == "final" {
@@ -407,6 +413,10 @@ struct NativeChatViewModel {
             case .setNeedsScrollToBottom(let needsScroll):
                 state.needsScrollToBottom = needsScroll
                 return .none
+
+            case .incrementScrollTrigger:
+                state.scrollTrigger += 1
+                return .none
             }
         }
     }
@@ -434,15 +444,18 @@ struct NativeChatViewModel {
             let timestamp = Date(timeIntervalSince1970: Double(ts) / 1000)
             let data = payload.data
 
+            // Extract seq from payload (not from data)
+            let seq = payload.seq
+
             // Extract phase
             let phase = extractString(from: data, key: "phase")
             let startedAtMs = extractDouble(from: data, key: "startedAt")
             let endedAtMs = extractDouble(from: data, key: "endedAt")
             let livenessState = extractString(from: data, key: "livenessState")
-            let seq = extractInt(from: data, key: "seq")
 
             if phase == "start" {
                 // Start of a new run
+                logger.log("SMAlog: agent start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)")
                 let message = ChatMessage(
                     id: runId,
                     text: "",
@@ -461,10 +474,11 @@ struct NativeChatViewModel {
                 await send(.receiveMessage(message))
                 logger.log("SMAlog: agent start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)")
             } else if phase == "end" {
-                // End of run
+                // End of run - preserve existing text, just update state and endedAt
+                logger.log("SMAlog: agent end - runId: \(runId), seq: \(seq ?? -1), endedAt: \(endedAtMs)")
                 let message = ChatMessage(
                     id: runId,
-                    text: "",
+                    text: "",  // Will be ignored in receiveMessage - preserve existing
                     timestamp: timestamp,
                     role: "assistant",
                     state: "final",
@@ -485,6 +499,7 @@ struct NativeChatViewModel {
                 // Assistant stream - update text with delta
                 let text = extractString(from: data, key: "text") ?? ""
 
+                logger.log("SMAlog: agent else branch - text len: \(text.count), phase: \(phase ?? "nil")")
                 if !text.isEmpty {
                     let message = ChatMessage(
                         id: runId,

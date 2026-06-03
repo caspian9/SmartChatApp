@@ -10,6 +10,9 @@ struct NativeChatView: View {
         NativeChatViewModel()
     }
     @FocusState private var isInputFocused: Bool
+    @State private var isUserScrolling = false
+    @State private var scrollToMessageId: String?
+    @State private var triggerCount: Int = 0
 
     init() {
         logger.log("SMAlog: NativeChatView init")
@@ -75,7 +78,33 @@ struct NativeChatView: View {
             }
             .onChange(of: store.messages.count) { count in
                 logger.log("SMAlog: messages.count changed to \(count)")
-                scheduleScroll(proxy: proxy)
+                if !isUserScrolling {
+                    scheduleScroll(proxy: proxy)
+                }
+            }
+            .onChange(of: store.scrollTrigger) { [self] newValue in
+                guard newValue != triggerCount else { return }
+                triggerCount = newValue
+                let lastId = store.messages.last?.id
+                logger.log("SMAlog: scrollTrigger changed to \(newValue), lastId: \(lastId?.prefix(8) ?? "nil")")
+                if let id = lastId, !isUserScrolling {
+                    logger.log("SMAlog: triggering immediate scroll to \(String(id.prefix(8)))")
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: store.isSending) { isSending in
+                logger.log("SMAlog: isSending changed to \(isSending)")
+                if !isSending {
+                    isUserScrolling = false
+                }
+            }
+            .onChange(of: isInputFocused) { focused in
+                logger.log("SMAlog: isInputFocused changed to \(focused)")
+                if !isUserScrolling {
+                    scheduleScroll(proxy: proxy)
+                }
             }
         }
     }
@@ -83,11 +112,9 @@ struct NativeChatView: View {
     private func scheduleScroll(proxy: ScrollViewProxy) {
         let lastId = store.messages.last?.id
         guard let id = lastId else { return }
-        logger.log("SMAlog: scheduleScroll to \(String(id.prefix(8)))")
-        // Schedule multiple scroll attempts to handle slow rendering
+        logger.log("SMAlog: scheduleScroll to \(String(id.prefix(8))), isUserScrolling: \(isUserScrolling)")
         for i in 0..<5 {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.1) {
-                logger.log("SMAlog: scroll attempt \(i+1)")
                 proxy.scrollTo(id, anchor: .bottom)
             }
         }
@@ -107,10 +134,16 @@ struct NativeChatView: View {
         ChatInputView(
             inputText: Binding(
                 get: { store.inputText },
-                set: { store.send(.updateInputText($0)) }
+                set: { newValue in
+                    store.send(.updateInputText(newValue))
+                    isUserScrolling = false
+                }
             ),
             isSending: store.isSending,
-            onSend: { store.send(.sendMessage) }
+            onSend: {
+                isUserScrolling = false
+                store.send(.sendMessage)
+            }
         )
         .focused($isInputFocused)
     }
