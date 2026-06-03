@@ -24,7 +24,7 @@ actor GatewayClient {
             clientId: "openclaw-ios",
             clientMode: "ui",
             clientDisplayName: "SmartChatApp",
-            includeDeviceIdentity: false
+            includeDeviceIdentity: true
         )
 
         let sessionBox = WebSocketSessionBox(session: URLSession.shared)
@@ -50,6 +50,9 @@ actor GatewayClient {
                     )
                 }
             )
+        } catch let error as GatewayConnectAuthError {
+            print("Gateway connection error: \(error.message) (requestId: \(error.requestId ?? "nil")), detailCode: \(error.detailCodeRaw ?? "nil")")
+            throw error
         } catch {
             print("Gateway connection error: \(error)")
             throw error
