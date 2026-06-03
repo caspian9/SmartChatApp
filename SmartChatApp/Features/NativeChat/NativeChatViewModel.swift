@@ -294,7 +294,12 @@ struct NativeChatViewModel {
                 }
             }
         case .sessionMessage, .agent, .tick, .health, .seqGap:
-            // Ignored - only handle .chat events
+            // Only handle .chat events, ignore others but log for debugging
+            if case .agent(let payload) = event {
+                logger.log("SMAlog: agent event - stream: \(payload.stream)")
+            } else if case .health(let ok) = event {
+                logger.log("SMAlog: health check: \(ok)")
+            }
             break
         }
     }
