@@ -7,17 +7,32 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		067C2B3C6795AFE4A2045129 /* OpenClawClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F61DEE1560444E4966CD42F /* OpenClawClient.swift */; };
 		0ACAAB79C22C2CA458C6373B /* SmartChatAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E318F67B9DFDAC9E0AD84F08 /* SmartChatAppTests.swift */; };
+		2147A295CD0E53277F1D3932 /* Typography.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48171BB9D1B1DEE7E7CA119F /* Typography.swift */; };
+		32EA1DE019959950F73D7CF0 /* ConnectionFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEDE479F6B62CDA623F46854 /* ConnectionFeature.swift */; };
 		377F720FDB0B48111BA6C4E2 /* SettingsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8ADEDCB4D572538B181ACE1 /* SettingsFeature.swift */; };
 		37A33822825EC071B6BAF313 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = 73416EAF08F184DE857566CB /* ComposableArchitecture */; };
 		3C8025EB79B3026F3FFC4893 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 664AF41A3FCE1C3BBEE6581B /* Assets.xcassets */; };
+		52BFC269989EBE52E84F852D /* StreamingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46700966D1F67E64CC5314A7 /* StreamingManager.swift */; };
 		55F72CE1CC61FE5D8E1C8E95 /* VideoCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C019FF55E0F5BD8B315FAA76 /* VideoCard.swift */; };
+		623C7AE8EA82F1429ABA98DF /* ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE79DE752CAA0809A14E4284 /* ConnectionView.swift */; };
+		6B2BBB7D595E91CDF196A104 /* GatewayModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2B0D1E3AFA37113E35B897 /* GatewayModels.swift */; };
 		7FFE8652E03B8D79C0CF8E4F /* ButtonCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D647C43563841B298A334276 /* ButtonCard.swift */; };
 		8A903CB22625EF4CCC910460 /* CardRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4D5FA4CC5577ACECA7BF676 /* CardRegistry.swift */; };
+		8F5FA46347888A18F4316A75 /* ChatListFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34FB23096800C678D2F0E1CE /* ChatListFeature.swift */; };
+		98B5248D1CFFB4B34B25A833 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F8913554498F553537D7453 /* ChatView.swift */; };
+		AD35D34140950580CA8EAD0F /* ChatListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E71CC1E198A001FD0CCCA8 /* ChatListView.swift */; };
 		B3DB3B56E59985BCA62F39AD /* SmartChatAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A261DD70F4AC633D637D1C8 /* SmartChatAppApp.swift */; };
 		B9F968474319B94E2A58FED7 /* MusicCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F63791E93AA5C72DF50187F /* MusicCard.swift */; };
+		C017E769F7824404D29C5C31 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 035BEF05A74AC2572D6981DF /* Theme.swift */; };
+		C7485B09961821EAD8B0AE1B /* DomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4775F4B0C779DC210ADB3248 /* DomainModels.swift */; };
 		C8AAAEC155B67DD7B40051C9 /* ImageCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2067397BFDEB816FBEACC8F /* ImageCard.swift */; };
+		D51FF819302F99ADC52FA5BF /* ChatFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC2F0FD062660E5838C19DD4 /* ChatFeature.swift */; };
+		D73E00A2BA27980F2889C05D /* WebSocketManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C95642C2C7E1D0480B0377E6 /* WebSocketManager.swift */; };
+		E5AB7725552F4AF49F0BD3BF /* MessageParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED86CCFAD4B002E45C23BF0 /* MessageParser.swift */; };
 		F41B70A47D45D6CDBF7A88F9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93813CACE45E2D13DA0FA36F /* SettingsView.swift */; };
+		FD3AC4F34075F8D4FB22D4F3 /* MessageRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD1165BF0CEF1FBA6A59C15 /* MessageRowView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -31,19 +46,34 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		035BEF05A74AC2572D6981DF /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		34FB23096800C678D2F0E1CE /* ChatListFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListFeature.swift; sourceTree = "<group>"; };
+		42E71CC1E198A001FD0CCCA8 /* ChatListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListView.swift; sourceTree = "<group>"; };
 		4548872237EE0E5B3F8933E4 /* SmartChatApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SmartChatApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		46700966D1F67E64CC5314A7 /* StreamingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingManager.swift; sourceTree = "<group>"; };
+		4775F4B0C779DC210ADB3248 /* DomainModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainModels.swift; sourceTree = "<group>"; };
+		48171BB9D1B1DEE7E7CA119F /* Typography.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Typography.swift; sourceTree = "<group>"; };
+		5A2B0D1E3AFA37113E35B897 /* GatewayModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewayModels.swift; sourceTree = "<group>"; };
+		5ED86CCFAD4B002E45C23BF0 /* MessageParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageParser.swift; sourceTree = "<group>"; };
 		5F63791E93AA5C72DF50187F /* MusicCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicCard.swift; sourceTree = "<group>"; };
 		664AF41A3FCE1C3BBEE6581B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7CD1165BF0CEF1FBA6A59C15 /* MessageRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRowView.swift; sourceTree = "<group>"; };
+		7F8913554498F553537D7453 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		8F61DEE1560444E4966CD42F /* OpenClawClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawClient.swift; sourceTree = "<group>"; };
 		93813CACE45E2D13DA0FA36F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		98D2098C092A4DEFEC02C1AE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		9A261DD70F4AC633D637D1C8 /* SmartChatAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartChatAppApp.swift; sourceTree = "<group>"; };
+		AE79DE752CAA0809A14E4284 /* ConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionView.swift; sourceTree = "<group>"; };
 		B4D5FA4CC5577ACECA7BF676 /* CardRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardRegistry.swift; sourceTree = "<group>"; };
 		B8ADEDCB4D572538B181ACE1 /* SettingsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsFeature.swift; sourceTree = "<group>"; };
 		C019FF55E0F5BD8B315FAA76 /* VideoCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCard.swift; sourceTree = "<group>"; };
+		C95642C2C7E1D0480B0377E6 /* WebSocketManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketManager.swift; sourceTree = "<group>"; };
 		D647C43563841B298A334276 /* ButtonCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ButtonCard.swift; sourceTree = "<group>"; };
 		E2067397BFDEB816FBEACC8F /* ImageCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCard.swift; sourceTree = "<group>"; };
 		E318F67B9DFDAC9E0AD84F08 /* SmartChatAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartChatAppTests.swift; sourceTree = "<group>"; };
+		EC2F0FD062660E5838C19DD4 /* ChatFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatFeature.swift; sourceTree = "<group>"; };
 		FA82AA06FCB363DFA193470C /* SmartChatAppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SmartChatAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FEDE479F6B62CDA623F46854 /* ConnectionFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFeature.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,6 +91,9 @@
 		22545DE904CFA8B5860C28DE /* Chat */ = {
 			isa = PBXGroup;
 			children = (
+				EC2F0FD062660E5838C19DD4 /* ChatFeature.swift */,
+				7F8913554498F553537D7453 /* ChatView.swift */,
+				7CD1165BF0CEF1FBA6A59C15 /* MessageRowView.swift */,
 			);
 			path = Chat;
 			sourceTree = "<group>";
@@ -76,6 +109,8 @@
 		30CCE52920681C4D67BD39A0 /* Design */ = {
 			isa = PBXGroup;
 			children = (
+				035BEF05A74AC2572D6981DF /* Theme.swift */,
+				48171BB9D1B1DEE7E7CA119F /* Typography.swift */,
 			);
 			path = Design;
 			sourceTree = "<group>";
@@ -83,6 +118,8 @@
 		57F56BB49A13144F915E9DD6 /* Connection */ = {
 			isa = PBXGroup;
 			children = (
+				FEDE479F6B62CDA623F46854 /* ConnectionFeature.swift */,
+				AE79DE752CAA0809A14E4284 /* ConnectionView.swift */,
 			);
 			path = Connection;
 			sourceTree = "<group>";
@@ -129,6 +166,9 @@
 		9F7A0E2F39F9FA2E227AE686 /* Network */ = {
 			isa = PBXGroup;
 			children = (
+				8F61DEE1560444E4966CD42F /* OpenClawClient.swift */,
+				46700966D1F67E64CC5314A7 /* StreamingManager.swift */,
+				C95642C2C7E1D0480B0377E6 /* WebSocketManager.swift */,
 			);
 			path = Network;
 			sourceTree = "<group>";
@@ -170,6 +210,8 @@
 		D2B66212A14506FB4C73A56D /* ChatList */ = {
 			isa = PBXGroup;
 			children = (
+				34FB23096800C678D2F0E1CE /* ChatListFeature.swift */,
+				42E71CC1E198A001FD0CCCA8 /* ChatListView.swift */,
 			);
 			path = ChatList;
 			sourceTree = "<group>";
@@ -185,6 +227,8 @@
 		E6D2D207AF833E57C11E4FC3 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				4775F4B0C779DC210ADB3248 /* DomainModels.swift */,
+				5A2B0D1E3AFA37113E35B897 /* GatewayModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -201,6 +245,7 @@
 			isa = PBXGroup;
 			children = (
 				B4D5FA4CC5577ACECA7BF676 /* CardRegistry.swift */,
+				5ED86CCFAD4B002E45C23BF0 /* MessageParser.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -306,12 +351,27 @@
 			files = (
 				7FFE8652E03B8D79C0CF8E4F /* ButtonCard.swift in Sources */,
 				8A903CB22625EF4CCC910460 /* CardRegistry.swift in Sources */,
+				D51FF819302F99ADC52FA5BF /* ChatFeature.swift in Sources */,
+				8F5FA46347888A18F4316A75 /* ChatListFeature.swift in Sources */,
+				AD35D34140950580CA8EAD0F /* ChatListView.swift in Sources */,
+				98B5248D1CFFB4B34B25A833 /* ChatView.swift in Sources */,
+				32EA1DE019959950F73D7CF0 /* ConnectionFeature.swift in Sources */,
+				623C7AE8EA82F1429ABA98DF /* ConnectionView.swift in Sources */,
+				C7485B09961821EAD8B0AE1B /* DomainModels.swift in Sources */,
+				6B2BBB7D595E91CDF196A104 /* GatewayModels.swift in Sources */,
 				C8AAAEC155B67DD7B40051C9 /* ImageCard.swift in Sources */,
+				E5AB7725552F4AF49F0BD3BF /* MessageParser.swift in Sources */,
+				FD3AC4F34075F8D4FB22D4F3 /* MessageRowView.swift in Sources */,
 				B9F968474319B94E2A58FED7 /* MusicCard.swift in Sources */,
+				067C2B3C6795AFE4A2045129 /* OpenClawClient.swift in Sources */,
 				377F720FDB0B48111BA6C4E2 /* SettingsFeature.swift in Sources */,
 				F41B70A47D45D6CDBF7A88F9 /* SettingsView.swift in Sources */,
 				B3DB3B56E59985BCA62F39AD /* SmartChatAppApp.swift in Sources */,
+				52BFC269989EBE52E84F852D /* StreamingManager.swift in Sources */,
+				C017E769F7824404D29C5C31 /* Theme.swift in Sources */,
+				2147A295CD0E53277F1D3932 /* Typography.swift in Sources */,
 				55F72CE1CC61FE5D8E1C8E95 /* VideoCard.swift in Sources */,
+				D73E00A2BA27980F2889C05D /* WebSocketManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
