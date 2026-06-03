@@ -22,7 +22,7 @@ packages:
     url: https://github.com/pointfreeco/swift-composable-architecture
     from: "1.9.3"
   OpenClawKit:
-    path: /Users/hai/Code/openclaw/apps/shared/OpenClawKit
+    path: ../openclaw/apps/shared/OpenClawKit
   MarkdownDisplayView:
     url: https://github.com/zjc19891106/MarkdownDisplayView.git
     from: "1.7.8"
