@@ -21,7 +21,7 @@ actor GatewayClient {
             caps: ["sessions", "chat"],
             commands: [],
             permissions: [:],
-            clientId: "smartchat-ios",
+            clientId: "openclaw-ios",
             clientMode: "ui",
             clientDisplayName: "SmartChatApp",
             includeDeviceIdentity: false
