@@ -70,6 +70,7 @@ struct ChatListView: View {
         isLoading = true
         Task {
             do {
+                try await SessionManager.shared.ensureConnected()
                 let transport = SessionManager.shared.makeTransport(sessionKey: "")
                 let response = try await transport.listSessions(limit: 50)
                 await MainActor.run {
@@ -88,6 +89,7 @@ struct ChatListView: View {
     private func createSession() {
         Task {
             do {
+                try await SessionManager.shared.ensureConnected()
                 let sessionKey = try await SessionManager.shared.createSession()
                 let transport = SessionManager.shared.makeTransport(sessionKey: sessionKey)
                 let response = try await transport.listSessions(limit: 50)
