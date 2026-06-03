@@ -20,6 +20,7 @@ struct SmartChatAppApp: App {
             RootView()
                 .onAppear {
                     ProfileManager.shared.configure(with: sharedModelContainer)
+                    ProfileManager.shared.migrateFromLegacyConfig()
                 }
         }
         .modelContainer(sharedModelContainer)
@@ -41,9 +42,6 @@ struct RootView: View {
             if config.autoConnectOnLaunch && config.isConfigured {
                 try? await SessionManager.shared.ensureConnected()
             }
-        }
-        .task {
-            ProfileManager.shared.migrateFromLegacyConfig()
         }
     }
 
