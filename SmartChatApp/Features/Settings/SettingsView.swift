@@ -81,12 +81,6 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Capabilities") {
-                Toggle("Camera", isOn: $config.cameraEnabled)
-                Toggle("Location", isOn: $config.locationEnabled)
-                Toggle("Voice Wake", isOn: $config.voiceWakeEnabled)
-            }
-
             Section("Appearance") {
                 Picker("Theme", selection: $config.appearanceTheme) {
                     ForEach(AppearanceTheme.allCases, id: \.self) { theme in
