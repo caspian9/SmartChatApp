@@ -108,8 +108,8 @@ When promoting a stub to a real implementation that touches a privacy-protected 
 ## Roadmap
 
 - [ ] Real implementations for the stubbed node capabilities (camera, photos, contacts, calendar, reminders, talk, canvas, screen)
-- [ ] GitHub Actions CI (`.github/workflows/ci.yml`) for PR build verification on `macos-14` / `macos-15` runners
-- [ ] Issue and PR templates
+- [x] GitHub Actions CI (`.github/workflows/ci.yml`) — real `xcodebuild build` + `xcodebuild test` on `macos-15`
+- [x] Issue and PR templates (`.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.md`)
 - [ ] Test coverage for `NativeChatViewModel` agent event stream handling
 
 ## Contributing

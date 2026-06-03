@@ -1331,7 +1331,7 @@ struct NativeChatViewModel {
         return nil
     }
 
-    private func formatAnyCodableValue(_ value: Any) -> String {
+    func formatAnyCodableValue(_ value: Any) -> String {
         if let str = value as? String {
             let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return "" }
@@ -1379,7 +1379,7 @@ struct NativeChatViewModel {
     /// Builds a short human-readable label for a tool call: "name: args".
     /// Falls back to a one-line JSON dump of args so the bubble has something
     /// to show even when no friendly field is present.
-    private func formatToolCallText(name: String, args: Any?) -> String {
+    func formatToolCallText(name: String, args: Any?) -> String {
         if name.isEmpty { return "" }
         guard let args else { return name }
         if let str = args as? String, !str.isEmpty {
@@ -1403,7 +1403,7 @@ struct NativeChatViewModel {
     /// Pretty-prints a tool result payload. JSON values get indented; raw
     /// strings pass through. The MessageBubbleView will further pretty-print
     /// anything it sees for `role == "toolResult"`, so this stays minimal.
-    private func formatToolResultText(result: Any?) -> String {
+    func formatToolResultText(result: Any?) -> String {
         guard let result else { return "" }
         if let str = result as? String { return str }
         if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .fragmentsAllowed, .sortedKeys]),
