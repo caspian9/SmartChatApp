@@ -72,6 +72,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        NSLocationWhenInUseUsageDescription: SmartChatApp needs access to your location to provide location-based services.
+        NSLocationAlwaysAndWhenInUseUsageDescription: SmartChatApp needs access to your location at all times to provide continuous location-based services.
 
   SmartChatAppTests:
     type: bundle.unit-test
