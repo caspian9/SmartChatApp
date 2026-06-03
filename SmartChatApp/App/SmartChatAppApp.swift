@@ -13,6 +13,7 @@ struct SmartChatAppApp: App {
 
 struct RootView: View {
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var systemColorScheme
     @StateObject private var config = ConfigurationManager.shared
 
     var body: some View {
@@ -28,10 +29,10 @@ struct RootView: View {
         }
     }
 
-    private var effectiveColorScheme: ColorScheme? {
+    private var colorSchemeForTheme: ColorScheme {
         switch config.appearanceTheme {
         case .system:
-            return nil
+            return systemColorScheme
         case .light:
             return .light
         case .dark:
@@ -40,17 +41,10 @@ struct RootView: View {
     }
 
     private var preferredScheme: ColorScheme? {
-        switch config.appearanceTheme {
-        case .system:
-            return nil
-        case .light:
-            return .light
-        case .dark:
-            return .dark
-        }
+        config.appearanceTheme == .system ? nil : colorSchemeForTheme
     }
 
     private var currentTheme: Theme {
-        Theme(colorScheme: effectiveColorScheme ?? .dark)
+        Theme(colorScheme: colorSchemeForTheme)
     }
 }
