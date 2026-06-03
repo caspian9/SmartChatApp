@@ -61,11 +61,15 @@ Each feature follows TCA pattern:
 | `StreamingManager` | `SmartChatApp/Core/Network/` | SSE event parsing |
 | `WebSocketManager` | `SmartChatApp/Core/Network/` | Raw WebSocket transport |
 | `CardRegistry` | `SmartChatApp/Core/Services/` | Interactive card rendering |
-| `ChatFeature` | `SmartChatApp/Features/Chat/` | Chat state management |
-| `ChatListFeature` | `SmartChatApp/Features/ChatList/` | Session list management |
-| `NodeCommandRouter` | `SmartChatApp/Core/NodeHandlers/` | Node command dispatch (location.get, device.status, etc.) |
-| `LocationService` | `SmartChatApp/Core/NodeHandlers/` | CoreLocation async/await wrapper |
-| `DeviceService` | `SmartChatApp/Core/NodeHandlers/` | Device status and info |
+| `MessageParser` | `SmartChatApp/Core/Services/` | Message parsing and validation |
+| `ConfigurationManager` | `SmartChatApp/Core/Services/` | App settings and configuration |
+| `CollapseStateCache` | `SmartChatApp/Core/Services/` | Message collapse state caching |
+| `MarkdownCache` | `SmartChatApp/Core/Services/` | Markdown rendering decision cache |
+| `HomeView` | `SmartChatApp/Features/Home/` | Home screen with navigation entries |
+| `NativeChatViewModel` | `SmartChatApp/Features/NativeChat/` | Native chat state management |
+| `NativeChatView` | `SmartChatApp/Features/NativeChat/` | Native chat UI with message bubbles |
+| `ChatListView` | `SmartChatApp/Features/ChatList/` | Session list management |
+| `ChatListFeature` | `SmartChatApp/Features/ChatList/` | Chat list state management |
 
 ### Node Command Handlers
 
@@ -120,6 +124,21 @@ Cards are rendered based on tool call names:
 - `video_search` → VideoCard (play, fullscreen)
 - `open_url` → ButtonCard (open links)
 - `image` → ImageCard (view full size)
+- `markdown` → MarkdownCardView (rendered via MarkdownDisplayView library)
+
+## Message Collapse Behavior
+
+- **Assistant + Markdown messages**: Display fully without collapse (lineLimit not supported for UIViewRepresentable)
+- **Other message types** (toolResult, toolCall, thinking, plain text): Collapse with `Show more...` button
+- Collapse state is cached in `CollapseStateCache` per message ID
+- `lineLimit(8)` controls visible lines for collapsible messages
+
+## Theme Configuration
+
+App supports three appearance modes: `.system`, `.light`, `.dark`
+- `Theme` struct provides colors via `@Environment(\.theme)` 
+- When set to `.system`, follows iOS device color scheme
+- Theme colors: `background`, `cardBackground`, `primary`, `textPrimary`, `textSecondary`, `inputBackground`
 
 ## Project Structure
 
@@ -139,9 +158,11 @@ SmartChatApp/
 │   ├── Features/
 │   │   ├── Chat/           # ChatFeature, ChatView, MessageRowView
 │   │   ├── ChatList/       # ChatListFeature, ChatListView
-│   │   ├── Connection/      # ConnectionFeature, ConnectionView
+│   │   ├── Connection/     # ConnectionFeature, ConnectionView
+│   │   ├── Home/           # HomeView with entry cards
+│   │   ├── NativeChat/     # NativeChatViewModel, NativeChatView, MessageBubbleView
 │   │   └── Settings/       # SettingsFeature, SettingsView
-│   ├── Cards/              # MusicCard, VideoCard, ButtonCard, ImageCard
+│   ├── Cards/              # MusicCard, VideoCard, ButtonCard, ImageCard, MarkdownCardView
 │   ├── Design/             # Theme, Typography
 │   └── Resources/          # Assets.xcassets
 ├── SmartChatAppTests/      # Unit tests
