@@ -24,7 +24,7 @@ struct MessageBubbleView: View {
     @State private var lastTextForMarkdown: String = ""
     @State private var lastMarkdownState: Bool = false
 
-    private let maxCollapsedLines: Int = 8
+    private let maxCollapsedLines: Int = 4
     private let maxCollapsedHeight: CGFloat = 150
 
     private func updateCollapseCache() {
@@ -226,33 +226,21 @@ struct MessageBubbleView: View {
             let shouldMd = shouldRenderMarkdown
             if shouldMd {
                 MarkdownCardView(content: message.text)
-                    .frame(minHeight: 30, alignment: .topLeading)
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.onAppear {
-                                measuredHeight = geo.size.height
-                                isMarkdownCollapsed = geo.size.height > maxCollapsedHeight && !isExpanded
-                            }
-                        }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: isExpanded ? nil : safeHeight, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, maxHeight: shouldCollapse && !isExpanded ? CGFloat(maxCollapsedLines * 55) : .infinity, alignment: .topLeading)
                     .clipped()
             } else if message.role == "thinking" {
                 ThinkingCardView(content: message.text)
-                    .frame(maxWidth: .infinity, maxHeight: isExpanded ? nil : safeHeight, alignment: .topLeading)
-                    .clipped()
+                    .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
             } else if message.role == "toolResult" {
                 Text(formatJsonText(message.text))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
                     .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
-                    .fixedSize(horizontal: false, vertical: true)
             } else if message.role == "toolCall" {
                 Text(message.text)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
                     .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
-                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(message.text)
                     .font(.body)
