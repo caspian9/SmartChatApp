@@ -17,7 +17,6 @@ struct NativeChatViewModel {
         var isLoading: Bool = false
         var isSending: Bool = false
         var error: String?
-        var streamingText: String = ""
     }
 
     enum Action: Equatable {
@@ -33,8 +32,6 @@ struct NativeChatViewModel {
         case receiveMessage(ChatMessage)
         case setError(String?)
         case setSending(Bool)
-        case updateStreamingText(String)
-        case clearStreamingText
     }
 
     @Dependency(\.continuousClock) var clock
@@ -116,7 +113,6 @@ struct NativeChatViewModel {
                 let message = ChatMessage(
                     id: UUID().uuidString,
                     text: text,
-                    isOutgoing: true,
                     timestamp: Date(),
                     role: "user",
                     state: "final",
@@ -178,7 +174,6 @@ struct NativeChatViewModel {
                                     logger.log("SMAlog: message[\(index)] failed to decode as OpenClawChatMessage")
                                     return nil
                                 }
-                                let isOutgoing = msg.role.lowercased() == "user"
                                 var text = ""
                                 for contentItem in msg.content {
                                     if let t = contentItem.text, !t.isEmpty {
@@ -194,7 +189,6 @@ struct NativeChatViewModel {
                                 return ChatMessage(
                                     id: msgId,
                                     text: text,
-                                    isOutgoing: isOutgoing,
                                     timestamp: Date(timeIntervalSince1970: ts / 1000),
                                     role: msg.role,
                                     state: "final",
@@ -221,12 +215,12 @@ struct NativeChatViewModel {
             case .receiveMessage(let message):
                 // Check if this is an update to existing message or new message
                 if let existingIndex = state.messages.firstIndex(where: { $0.id == message.id }) {
-                    // Update existing message
+                    // Update existing message (streaming text update)
                     var existingMessage = state.messages[existingIndex]
                     existingMessage.text = message.text
                     existingMessage.state = message.state
                     state.messages[existingIndex] = existingMessage
-                    logger.log("SMAlog: updated existing message: \(message.id), state: \(message.state)")
+                    logger.log("SMAlog: updated message: \(message.id), text length: \(message.text.count), state: \(message.state)")
                 } else {
                     // New message
                     state.messages.append(message)
@@ -247,14 +241,6 @@ struct NativeChatViewModel {
             case .setSending(let value):
                 state.isSending = value
                 return .none
-
-            case .updateStreamingText(let text):
-                state.streamingText = text
-                return .none
-
-            case .clearStreamingText:
-                state.streamingText = ""
-                return .none
             }
         }
     }
@@ -269,7 +255,6 @@ struct NativeChatViewModel {
                     logger.log("SMAlog: failed to decode chat message")
                     return
                 }
-                let isOutgoing = chatMsg.role.lowercased() == "user"
                 var text = ""
                 for contentItem in chatMsg.content {
                     if let t = contentItem.text, !t.isEmpty {
@@ -277,21 +262,19 @@ struct NativeChatViewModel {
                         break
                     }
                 }
-                if !text.isEmpty || !isOutgoing {
-                    let message = ChatMessage(
-                        id: chatMsg.id.uuidString,
-                        text: text,
-                        isOutgoing: isOutgoing,
-                        timestamp: Date(timeIntervalSince1970: (chatMsg.timestamp ?? 0) / 1000),
-                        role: chatMsg.role,
-                        state: payload.state ?? "in_progress",
-                        runId: payload.runId,
-                        toolCallId: chatMsg.toolCallId,
-                        toolName: chatMsg.toolName,
-                        stopReason: chatMsg.stopReason
-                    )
-                    await send(.receiveMessage(message))
-                }
+                // Always create/update message - even if text is empty for assistant messages
+                let message = ChatMessage(
+                    id: chatMsg.id.uuidString,
+                    text: text,
+                    timestamp: Date(timeIntervalSince1970: (chatMsg.timestamp ?? 0) / 1000),
+                    role: chatMsg.role,
+                    state: payload.state ?? "in_progress",
+                    runId: payload.runId,
+                    toolCallId: chatMsg.toolCallId,
+                    toolName: chatMsg.toolName,
+                    stopReason: chatMsg.stopReason
+                )
+                await send(.receiveMessage(message))
             }
         case .sessionMessage, .tick, .seqGap:
             // Ignored - only handle .chat events

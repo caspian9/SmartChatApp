@@ -41,14 +41,17 @@ struct MessageBubbleView: View {
 struct ChatMessage: Identifiable, Equatable {
     let id: String
     var text: String
-    let isOutgoing: Bool
     let timestamp: Date
     let role: String
-    var state: String  // "in_progress", "completed", "final"
+    var state: String  // "in_progress", "final"
     let runId: String?
     let toolCallId: String?
     let toolName: String?
     let stopReason: String?
+
+    var isOutgoing: Bool {
+        role.lowercased() == "user"
+    }
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id
