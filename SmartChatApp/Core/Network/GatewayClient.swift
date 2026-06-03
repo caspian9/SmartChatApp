@@ -22,7 +22,7 @@ actor GatewayClient {
             commands: [],
             permissions: [:],
             clientId: "smartchat-ios",
-            clientMode: "user",
+            clientMode: "ui",
             clientDisplayName: "SmartChatApp",
             includeDeviceIdentity: false
         )
