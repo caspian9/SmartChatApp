@@ -8,6 +8,7 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
     var port: Int
     var token: String
     var tlsEnabled: Bool
+    var role: GatewayConnectionRole
     var isActive: Bool
     var createdAt: Date
     var updatedAt: Date
@@ -20,6 +21,7 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
         port: Int = 443,
         token: String,
         tlsEnabled: Bool = true,
+        role: GatewayConnectionRole = .operatorAndNode,
         isActive: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -31,6 +33,7 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
         self.port = port
         self.token = token
         self.tlsEnabled = tlsEnabled
+        self.role = role
         self.isActive = isActive
         self.createdAt = createdAt
         self.updatedAt = updatedAt

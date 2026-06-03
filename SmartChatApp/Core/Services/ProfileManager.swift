@@ -44,14 +44,15 @@ final class ProfileManager: ObservableObject {
         }
     }
 
-    func addProfile(name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool) -> GatewayProfile {
+    func addProfile(name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool, role: GatewayConnectionRole) -> GatewayProfile {
         let profile = GatewayProfile(
             name: name,
             colorTag: colorTag,
             host: host,
             port: port,
             token: token,
-            tlsEnabled: tlsEnabled
+            tlsEnabled: tlsEnabled,
+            role: role
         )
         profiles.append(profile)
         saveProfiles()
@@ -59,7 +60,7 @@ final class ProfileManager: ObservableObject {
         return profile
     }
 
-    func updateProfile(id: UUID, name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool) {
+    func updateProfile(id: UUID, name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool, role: GatewayConnectionRole) {
         guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
         profiles[index].name = name
         profiles[index].colorTag = colorTag
@@ -67,6 +68,7 @@ final class ProfileManager: ObservableObject {
         profiles[index].port = port
         profiles[index].token = token
         profiles[index].tlsEnabled = tlsEnabled
+        profiles[index].role = role
         profiles[index].updatedAt = Date()
         saveProfiles()
     }
