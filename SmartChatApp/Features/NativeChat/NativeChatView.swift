@@ -23,7 +23,12 @@ struct NativeChatView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        Text("Messages: \(store.messages.count), Sessions: \(store.sessions.count), Selected: \(store.selectedSession != nil)")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .padding()
+
                         ForEach(store.messages) { message in
                             MessageBubbleView(message: message)
                                 .id(message.id)
@@ -38,9 +43,6 @@ struct NativeChatView: View {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                             scrollToBottom(proxy: proxy)
                         }
-                    }
-                    .onChange(of: store.messages.count) { oldCount, newCount in
-                        // Debug: track message count changes
                     }
                 }
                 .onTapGesture {
