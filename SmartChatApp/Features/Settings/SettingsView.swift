@@ -33,6 +33,7 @@ struct SettingsView: View {
                 }
 
                 DisclosureGroup("Advanced") {
+                    Toggle("Auto-connect on Launch", isOn: $config.autoConnectOnLaunch)
                     Toggle("Gateway Debug Logs", isOn: $config.gatewayDebugLogs)
                         .onChange(of: config.gatewayDebugLogs) { _, newValue in
                             Task {
