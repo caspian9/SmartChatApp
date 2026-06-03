@@ -31,14 +31,9 @@ struct MessageBubbleView: View {
                         .padding(.vertical, 8)
                         .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
                         .cornerRadius(12)
-                        .contextMenu {
-                            Button {
-                                UIPasteboard.general.string = message.text
-                            } label: {
-                                Label("复制", systemImage: "doc.on.doc")
-                            }
+                        .onLongPressGesture {
+                            UIPasteboard.general.string = message.text
                         }
-                        .id(message.id)
                 }
 
                 HStack(spacing: 8) {
