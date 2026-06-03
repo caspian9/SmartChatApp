@@ -11,8 +11,8 @@ SmartChatApp is an iOS AI chat application that connects to OpenClaw Gateway, su
 ## Build Commands
 
 ```bash
-# Generate Xcode project
-cd SmartChatApp && xcodegen generate
+# Generate Xcode project (run from SmartChatApp root)
+xcodegen generate
 
 # Build
 xcodebuild build -scheme SmartChatApp -quiet
@@ -20,7 +20,7 @@ xcodebuild build -scheme SmartChatApp -quiet
 # Test
 xcodebuild test -scheme SmartChatAppTests
 
-# Run (requires Xcode)
+# Open in Xcode
 open SmartChatApp.xcodeproj
 ```
 
@@ -48,11 +48,21 @@ Each feature follows TCA pattern:
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| `OpenClawClient` | `Core/Network/` | Gateway WebSocket connection |
-| `StreamingManager` | `Core/Network/` | SSE event parsing |
-| `CardRegistry` | `Core/Services/` | Interactive card rendering |
-| `ChatFeature` | `Features/Chat/` | Chat state management |
-| `ChatListFeature` | `Features/ChatList/` | Session list management |
+| `OpenClawClient` | `SmartChatApp/Core/Network/` | Gateway WebSocket connection |
+| `StreamingManager` | `SmartChatApp/Core/Network/` | SSE event parsing |
+| `WebSocketManager` | `SmartChatApp/Core/Network/` | Raw WebSocket transport |
+| `CardRegistry` | `SmartChatApp/Core/Services/` | Interactive card rendering |
+| `ChatFeature` | `SmartChatApp/Features/Chat/` | Chat state management |
+| `ChatListFeature` | `SmartChatApp/Features/ChatList/` | Session list management |
+
+### Card Components
+
+| Card | Location | Purpose |
+|------|----------|---------|
+| `MusicCard` | `SmartChatApp/Cards/` | Music playback controls |
+| `VideoCard` | `SmartChatApp/Cards/` | Video playback controls |
+| `ButtonCard` | `SmartChatApp/Cards/` | Action buttons (open URL etc.) |
+| `ImageCard` | `SmartChatApp/Cards/` | Image display with fullscreen |
 
 ## OpenClaw Gateway Protocol
 
@@ -85,18 +95,27 @@ Cards are rendered based on tool call names:
 
 ```
 SmartChatApp/
-├── App/
-├── Core/
-│   ├── Network/     # OpenClawClient, WebSocketManager, StreamingManager
-│   ├── Services/    # CardRegistry, MessageParser
-│   └── Models/      # GatewayModels, DomainModels
-├── Features/
-│   ├── Chat/        # ChatFeature, ChatView, MessageRowView
-│   ├── ChatList/    # ChatListFeature, ChatListView
-│   ├── Connection/  # ConnectionFeature, ConnectionView
-│   └── Settings/    # SettingsFeature, SettingsView
-├── Cards/           # MusicCard, VideoCard, ButtonCard, ImageCard
-└── Design/          # Theme, Typography
+├── project.yml              # XcodeGen configuration
+├── Package.swift            # SPM dependencies
+├── SmartChatApp.xcodeproj/  # Generated Xcode project
+├── SmartChatApp/            # Main source directory
+│   ├── App/
+│   │   └── SmartChatAppApp.swift
+│   ├── Core/
+│   │   ├── Models/         # DomainModels, GatewayModels
+│   │   ├── Network/        # OpenClawClient, WebSocketManager, StreamingManager
+│   │   └── Services/       # CardRegistry, MessageParser
+│   ├── Features/
+│   │   ├── Chat/           # ChatFeature, ChatView, MessageRowView
+│   │   ├── ChatList/       # ChatListFeature, ChatListView
+│   │   ├── Connection/      # ConnectionFeature, ConnectionView
+│   │   └── Settings/       # SettingsFeature, SettingsView
+│   ├── Cards/              # MusicCard, VideoCard, ButtonCard, ImageCard
+│   ├── Design/             # Theme, Typography
+│   └── Resources/          # Assets.xcassets
+├── SmartChatAppTests/      # Unit tests
+├── docs/                   # Specification and plans
+└── CLAUDE.md
 ```
 
 ## Documentation
