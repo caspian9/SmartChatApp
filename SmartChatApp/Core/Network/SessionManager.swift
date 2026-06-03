@@ -76,8 +76,13 @@ actor SessionManager {
     }
 
     func connectWithProfile(_ profile: GatewayProfile) async throws {
-        let url = URL(string: "\(profile.tlsEnabled ? "https" : "http")://\(profile.host):\(profile.port)")!
+        let url = gatewayURL(host: profile.host, port: profile.port, tlsEnabled: profile.tlsEnabled)
         try await connectWithRole(gatewayURL: url, authToken: profile.token, role: profile.role, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
+    }
+
+    func gatewayURL(host: String, port: Int, tlsEnabled: Bool) -> URL {
+        let scheme = tlsEnabled ? "wss" : "ws"
+        return URL(string: "\(scheme)://\(host):\(port)/gateway")!
     }
 
     func connect(gatewayURL: URL, authToken: String) async throws {
