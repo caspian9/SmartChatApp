@@ -46,6 +46,7 @@ struct NativeChatViewModel {
         case appendNewMessages([ChatMessage])
         case loadMoreHistory
         case loadedMoreHistory([ChatMessage], hasMore: Bool)
+        case incrementCacheCounter
     }
 
     @Dependency(\.continuousClock) var clock
@@ -500,6 +501,19 @@ struct NativeChatViewModel {
                 logger.log("SMAlog: loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)")
                 state.messages = messages
                 state.scrollTrigger += 1
+                state.cacheLoadCounter += 1
+                // Precompute markdown synchronously on main actor, then force refresh
+                return .run { [messages] send in
+                    Task {
+                        await MainActor.run {
+                            MarkdownCache.shared.precomputeForMessages(messages)
+                        }
+                        // Force view refresh after cache is populated
+                        await send(.incrementCacheCounter)
+                    }
+                }
+
+            case .incrementCacheCounter:
                 state.cacheLoadCounter += 1
                 return .none
 
