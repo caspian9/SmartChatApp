@@ -92,17 +92,20 @@ struct ProfileListView: View {
                         }
                     }
                 } label: {
-                    if connectingProfileId == profile.id {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
-                    } else {
+                    ZStack {
+                        if connectingProfileId == profile.id {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                        }
                         Text(profile.isActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
+                            .opacity(connectingProfileId == profile.id ? 0 : 1)
                     }
                 }
                 .font(.caption)
                 .foregroundColor(theme.primary)
                 .disabled(connectingProfileId != nil)
                 .buttonStyle(.bordered)
+                .frame(height: 28)
 
                 Button {
                     onEditProfile(profile)
