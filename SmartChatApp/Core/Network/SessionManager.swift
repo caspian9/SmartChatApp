@@ -14,6 +14,7 @@ actor SessionManager {
     private var isConnected = false
     private var connectedDeviceName: String?
     private var reconnectOnLaunch = false
+    private var currentSessionKey: String?
 
     private init() {
         self.nodeSession = GatewayNodeSession()
@@ -108,7 +109,12 @@ actor SessionManager {
     }
 
     func makeTransport(sessionKey: String) -> GatewayChatTransport {
-        GatewayChatTransport(nodeSession: nodeSession, sessionKey: sessionKey)
+        currentSessionKey = sessionKey
+        return GatewayChatTransport(nodeSession: nodeSession, sessionKey: sessionKey)
+    }
+
+    func getCurrentSessionKey() -> String? {
+        currentSessionKey
     }
 
     struct GatewayConfig {

@@ -151,17 +151,22 @@ struct NativeChatViewModel {
                         await MessageCache.shared.appendMessages([msg], for: sessionKey)
                     }
                 }
+                // sessionKey already captured above, use it directly
                 return .run { send in
                     Task {
                         do {
                             try await SessionManager.shared.ensureConnected()
                             let transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
-                            // Start event listening task
+                            // Start event listening task - pass sessionKey to check later
                             Task {
                                 for await evt in transport.events() {
                                     await MainActor.run {
                                         Task {
-                                            await handleTransportEvent(evt, sessionKey: sessionKey, send: send)
+                                            // Only handle events for current session (check via SessionManager)
+                                            let currentKey = await SessionManager.shared.getCurrentSessionKey()
+                                            if currentKey == sessionKey {
+                                                await handleTransportEvent(evt, sessionKey: sessionKey, send: send)
+                                            }
                                         }
                                     }
                                 }
@@ -228,6 +233,14 @@ struct NativeChatViewModel {
                             try await SessionManager.shared.ensureConnected()
                             let transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
                             let history = try await transport.requestHistory(sessionKey: sessionKey)
+
+                            // Check if this is still the current session before updating UI
+                            guard let currentSession = await SessionManager.shared.getCurrentSessionKey(),
+                                  currentSession == sessionKey else {
+                                logger.log("SMAlog: Session changed, discarding history for: \(sessionKeyPreview)")
+                                return
+                            }
+
                             let messageCount = history.messages?.count ?? 0
                             logger.log("SMAlog: Loaded \(messageCount) history messages for session: \(sessionKeyPreview)")
                             let chatMessages: [ChatMessage] = (history.messages ?? []).enumerated().compactMap { index, anyCodable -> ChatMessage? in
