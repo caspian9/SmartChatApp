@@ -64,6 +64,10 @@ actor MessageCache {
     /// Content-based dedup key using content hash
     /// For toolCall/thinking/toolResult: uses first line only (stable across parameter order changes)
     /// For other roles: uses full text
+    /// Includes timestamp and usage so a streaming message that later gains
+    /// final usage tokens isn't collapsed against the earlier streaming copy,
+    /// and so two messages that share role+text but land at different times
+    /// are treated as distinct entries.
     private func dedupKey(for message: OpenClawChatMessage) -> String {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -76,7 +80,12 @@ actor MessageCache {
             }
         }
 
-        let data = "\(message.role)|\(textForHash)".data(using: .utf8) ?? Data()
+        let timestamp = message.timestamp.map { String($0) } ?? "-"
+        let usage = message.usage.map { u in
+            "\(u.input ?? 0),\(u.output ?? 0),\(u.cacheRead ?? 0),\(u.cacheWrite ?? 0),\(u.total ?? 0)"
+        } ?? "-"
+
+        let data = "\(message.role)|\(textForHash)|\(timestamp)|\(usage)".data(using: .utf8) ?? Data()
         let hash = SHA256.hash(data: data)
         return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
