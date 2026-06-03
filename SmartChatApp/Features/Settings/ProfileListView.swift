@@ -7,8 +7,7 @@ struct ProfileListView: View {
     @State private var profileToDelete: GatewayProfile?
 
     // Edit state
-    @State private var isEditing = false
-    @State private var editingProfileId: UUID?
+    @State private var editingProfile: GatewayProfile?
     @State private var editName = ""
     @State private var editHost = ""
     @State private var editPort = "443"
@@ -30,7 +29,7 @@ struct ProfileListView: View {
     }
 
     private func startEditing(_ profile: GatewayProfile) {
-        editingProfileId = profile.id
+        editingProfile = profile
         editName = profile.name
         editHost = profile.host
         editPort = String(profile.port)
@@ -40,16 +39,13 @@ struct ProfileListView: View {
         isConnected = false
         testResult = nil
         testStatus = .idle
-        DispatchQueue.main.async {
-            isEditing = true
-        }
     }
 
     private func saveEdit() {
-        guard let id = editingProfileId,
+        guard let profile = editingProfile,
               let portInt = Int(editPort) else { return }
-        ProfileManager.shared.updateProfile(id: id, name: editName, colorTag: "#10A37F", host: editHost, port: portInt, token: editToken, tlsEnabled: editTlsEnabled)
-        isEditing = false
+        ProfileManager.shared.updateProfile(id: profile.id, name: editName, colorTag: "#10A37F", host: editHost, port: portInt, token: editToken, tlsEnabled: editTlsEnabled)
+        editingProfile = nil
     }
 
     private func testConnection() {
@@ -109,7 +105,7 @@ struct ProfileListView: View {
                 profileList
             }
         }
-        .sheet(isPresented: $isEditing) {
+        .sheet(item: $editingProfile) { profile in
             NavigationStack {
                 Form {
                     Section("Profile") {
@@ -173,9 +169,9 @@ struct ProfileListView: View {
 
                     Section {
                         Button(role: .destructive) {
-                            if let id = editingProfileId {
+                            if let id = editingProfile?.id {
                                 ProfileManager.shared.deleteProfile(id: id)
-                                isEditing = false
+                                editingProfile = nil
                             }
                         } label: {
                             HStack {
@@ -193,7 +189,7 @@ struct ProfileListView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
-                            isEditing = false
+                            editingProfile = nil
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
