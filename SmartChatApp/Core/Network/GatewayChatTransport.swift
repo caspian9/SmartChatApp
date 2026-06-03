@@ -15,8 +15,8 @@ public actor GatewayChatTransport: OpenClawChatTransport {
     public func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         do {
             let responseData = try await nodeSession.request(
-                method: "sessions.history",
-                paramsJSON: "{\"key\": \"\(sessionKey)\"}"
+                method: "chat.history",
+                paramsJSON: "{\"sessionKey\": \"\(sessionKey)\"}"
             )
             return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: responseData)
         } catch {
