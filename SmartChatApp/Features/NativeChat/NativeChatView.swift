@@ -34,7 +34,9 @@ struct NativeChatView: View {
                     }
                     .padding(.vertical, 8)
                     .onChange(of: store.messages.count) { _ in
-                        scrollToBottom(proxy: proxy)
+                        if !store.isRestoringFromCache {
+                            scrollToBottom(proxy: proxy)
+                        }
                     }
                 }
                 .onTapGesture {

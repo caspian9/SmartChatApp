@@ -17,6 +17,7 @@ struct NativeChatViewModel {
         var isLoading: Bool = false
         var isSending: Bool = false
         var error: String?
+        var isRestoringFromCache: Bool = false
     }
 
     enum Action: Equatable {
@@ -29,6 +30,7 @@ struct NativeChatViewModel {
         case sendMessage
         case loadHistory
         case loadedHistory([ChatMessage])
+        case loadedCachedHistory([ChatMessage])
         case receiveMessage(ChatMessage)
         case setError(String?)
         case setSending(Bool)
@@ -44,10 +46,12 @@ struct NativeChatViewModel {
                 if let cached = SessionCache.load(), !cached.isEmpty {
                     logger.log("SMAlog: Loaded \(cached.count) cached sessions")
                     state.sessions = cached
+                    state.isRestoringFromCache = true
                     if state.selectedSession == nil, let first = cached.first {
                         state.selectedSession = first
                         return .send(.loadHistory)
                     }
+                    state.isRestoringFromCache = false
                 }
                 // Then fetch from network
                 state.isLoading = true
@@ -213,7 +217,7 @@ struct NativeChatViewModel {
                                 )
                             }
                             logger.log("SMAlog: Loaded \(chatMessages.count) cached messages for session: \(sessionKeyPreview)")
-                            await send(.loadedHistory(chatMessages))
+                            await send(.loadedCachedHistory(chatMessages))
                         }
 
                         // Then fetch from network
@@ -267,7 +271,16 @@ struct NativeChatViewModel {
                     }
                 }
 
+            case .loadedCachedHistory(let messages):
+                state.messages = messages
+                state.isRestoringFromCache = false
+                return .none
+
             case .loadedHistory(let messages):
+                if state.isRestoringFromCache {
+                    // Don't scroll - user is already viewing cached messages
+                    state.isRestoringFromCache = false
+                }
                 state.messages = messages
                 state.isSending = false
                 return .none
