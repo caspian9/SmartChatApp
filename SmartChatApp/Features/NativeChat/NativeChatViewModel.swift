@@ -316,11 +316,27 @@ struct NativeChatViewModel {
 
             case .createSession:
                 state.isLoading = true
+                // If the user has a session selected, scope the new session
+                // to that session's agent instead of the gateway's default
+                // agent. Keys have the form `agent:<agentId>:<rest>`, so
+                // segment index 1 carries the agent id. If the key doesn't
+                // match the expected shape (e.g. legacy "global"/"unknown"
+                // sentinels), fall through to `nil` and let the gateway
+                // pick its default.
+                let selectedAgentId: String? = {
+                    guard let key = state.selectedSession?.key else { return nil }
+                    let parts = key.split(separator: ":")
+                    guard parts.count >= 2 else { return nil }
+                    let candidate = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    return candidate.isEmpty ? nil : candidate
+                }()
+                logger.log("SMAlog: createSession - using selected agentId: \(selectedAgentId ?? "<default>")")
+                let agentIdCapture = selectedAgentId
                 return .run { send in
                     Task {
                         do {
                             try await SessionManager.shared.ensureConnected()
-                            let sessionKey = try await SessionManager.shared.createSession()
+                            let sessionKey = try await SessionManager.shared.createSession(agentId: agentIdCapture)
                             logger.log("SMAlog: Created session: \(String(sessionKey))")
                             await send(.sessionCreated(sessionKey))
                             await send(.loadSessions)

@@ -335,10 +335,31 @@ actor SessionManager {
         }
     }
 
-    func createSession() async throws -> String {
+    /// Creates a new session on the gateway.
+    ///
+    /// - Parameter agentId: Optional agent id to scope the new session to.
+    ///   When `nil`, the gateway falls back to `resolveDefaultAgentId(cfg)`
+    ///   — its configured default agent. Pass a specific agent id (parsed
+    ///   from a current session key, e.g. `agent:<id>:dashboard:<uuid>`)
+    ///   when the user has an existing session in view and you want the new
+    ///   session to land under the same agent instead of the gateway default.
+    func createSession(agentId: String? = nil) async throws -> String {
+        let paramsJSON: String?
+        if let agentId, !agentId.isEmpty {
+            // Escape the agentId in case it contains JSON-special characters.
+            // agentIds are normalized server-side (lowercased, ascii) so the
+            // escape is defensive — but it costs nothing and keeps the wire
+            // format safe.
+            let escaped = agentId
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            paramsJSON = "{\"agentId\":\"\(escaped)\"}"
+        } else {
+            paramsJSON = nil
+        }
         let responseData = try await operatorSession.request(
             method: "sessions.create",
-            paramsJSON: nil
+            paramsJSON: paramsJSON
         )
 
         struct CreateSessionResponse: Decodable {
