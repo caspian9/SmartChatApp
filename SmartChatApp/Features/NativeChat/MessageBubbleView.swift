@@ -201,25 +201,15 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var bubbleContent: some View {
         if message.text.isEmpty {
-            if message.state == "streaming" {
-                TypingIndicatorView(color: message.isOutgoing ? .white : theme.textSecondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(message.isOutgoing ? theme.primary : theme.cardBackground)
-                    .cornerRadius(12)
-            } else {
-                Text("")
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-            }
+            // Hide the standalone "3 dots" waiting bubble while streaming has not yet produced text.
+            Text("")
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 messageText
-
-                if message.state == "streaming" && !message.isOutgoing {
-                    TypingIndicatorView()
-                        .padding(.top, 4)
-                }
+                // Hide the per-bubble "3 dots" indicator that previously sat under
+                // the streaming response.
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
