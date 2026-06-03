@@ -89,6 +89,18 @@ actor MessageCache {
         }
     }
 
+    func getStats() -> (sessionCount: Int, messageCount: Int) {
+        let keys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(keyPrefix) }
+        var totalMessages = 0
+        for key in keys {
+            if let data = defaults.data(forKey: key),
+               let messages = try? JSONDecoder().decode([OpenClawChatMessage].self, from: data) {
+                totalMessages += messages.count
+            }
+        }
+        return (sessionCount: keys.count, messageCount: totalMessages)
+    }
+
     private func saveToDisk(_ messages: [OpenClawChatMessage], for sessionKey: String) {
         if let data = try? JSONEncoder().encode(messages) {
             defaults.set(data, forKey: storageKey(for: sessionKey))

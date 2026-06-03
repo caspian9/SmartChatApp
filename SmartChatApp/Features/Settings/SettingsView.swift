@@ -9,6 +9,8 @@ struct SettingsView: View {
     @State private var isNodeConnected = false
     @State private var nodeConnectionError: String? = nil
     @State private var connectedDeviceName = ""
+    @State private var sessionCacheCount: Int = 0
+    @State private var messageCacheStats: (sessionCount: Int, messageCount: Int) = (0, 0)
 
     private static let buildDate: Date = {
         return Date()
@@ -156,14 +158,32 @@ struct SettingsView: View {
             }
 
             Section("Cache") {
+                HStack {
+                    Text("Session Cache")
+                    Spacer()
+                    Text("\(sessionCacheCount) sessions")
+                        .foregroundColor(theme.textSecondary)
+                }
+
+                HStack {
+                    Text("Message Cache")
+                    Spacer()
+                    Text("\(messageCacheStats.messageCount) messages (\(messageCacheStats.sessionCount) sessions)")
+                        .foregroundColor(theme.textSecondary)
+                }
+
                 Button("Clear Session Cache") {
                     SessionCache.clear()
+                    sessionCacheCount = 0
                 }
                 .foregroundColor(.red)
 
                 Button("Clear Message Cache") {
                     Task {
                         await MessageCache.shared.clearAll()
+                        await MainActor.run {
+                            messageCacheStats = (0, 0)
+                        }
                     }
                 }
                 .foregroundColor(.red)
@@ -173,6 +193,8 @@ struct SettingsView: View {
                     Task {
                         await MessageCache.shared.clearAll()
                     }
+                    sessionCacheCount = 0
+                    messageCacheStats = (0, 0)
                 }
                 .foregroundColor(.red)
             }
@@ -212,6 +234,19 @@ struct SettingsView: View {
             await checkConnection()
             await SessionManager.shared.setDebugLoggingEnabled(config.gatewayDebugLogs)
             await SessionManager.shared.setDiscoveryDebugLoggingEnabled(config.discoveryDebugLogs)
+            await loadCacheStats()
+        }
+    }
+
+    private func loadCacheStats() async {
+        if let cached = SessionCache.load() {
+            await MainActor.run {
+                sessionCacheCount = cached.count
+            }
+        }
+        let stats = await MessageCache.shared.getStats()
+        await MainActor.run {
+            messageCacheStats = stats
         }
     }
 
