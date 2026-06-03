@@ -210,7 +210,10 @@ struct NativeChatViewModel {
                 return .none
 
             case .receiveMessage(let message):
-                state.messages.append(message)
+                // Deduplicate: only add if message with same ID doesn't exist
+                if !state.messages.contains(where: { $0.id == message.id }) {
+                    state.messages.append(message)
+                }
                 return .none
 
             case .setError(let error):
