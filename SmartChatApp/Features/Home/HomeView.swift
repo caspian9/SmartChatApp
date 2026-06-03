@@ -10,6 +10,8 @@ struct HomeView: View {
     @State private var isConnected = false
     @State private var connectedDeviceName = ""
     @State private var gatewayHost = ""
+    @State private var shouldAutoConnect = false
+    @State private var refreshTimer: Timer?
 
     private var isCompact: Bool {
         horizontalSizeClass == .compact
@@ -83,11 +85,45 @@ struct HomeView: View {
             SettingsView()
         }
         .task {
-            await checkConnectionStatus()
+            await refreshConnectionStatus()
         }
         .onAppear {
-            Task {
-                await checkConnectionStatus()
+            refreshConnectionStatus()
+            startRefreshTimer()
+        }
+        .onDisappear {
+            stopRefreshTimer()
+        }
+    }
+
+    private func startRefreshTimer() {
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            Task { @MainActor in
+                self.refreshConnectionStatus()
+            }
+        }
+    }
+
+    private func stopRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+
+    private func refreshConnectionStatus() {
+        Task {
+            let config = ConfigurationManager.shared
+            let wasConnected = await SessionManager.shared.connectionStatus
+            let deviceName = await SessionManager.shared.deviceName ?? ""
+
+            await MainActor.run {
+                if wasConnected {
+                    isConnected = true
+                    connectedDeviceName = deviceName
+                } else {
+                    isConnected = false
+                    connectedDeviceName = ""
+                }
+                gatewayHost = config.displayURL
             }
         }
     }
@@ -159,59 +195,6 @@ struct HomeView: View {
             .padding(16)
             .background(theme.cardBackground)
             .cornerRadius(12)
-        }
-    }
-
-    private func checkConnectionStatus() async {
-        let config = ConfigurationManager.shared
-
-        // Always save displayURL to state first
-        await MainActor.run {
-            gatewayHost = config.displayURL
-        }
-
-        // If not configured, clear everything
-        guard config.isConfigured else {
-            await MainActor.run {
-                isConnected = false
-                connectedDeviceName = ""
-                gatewayHost = ""
-            }
-            return
-        }
-
-        // Check current connection status from SessionManager
-        let currentlyConnected = await SessionManager.shared.connectionStatus
-
-        if currentlyConnected {
-            // Already connected, update state
-            let deviceName = await SessionManager.shared.deviceName ?? ""
-            await MainActor.run {
-                isConnected = true
-                connectedDeviceName = deviceName
-            }
-        } else {
-            // Not connected
-            await MainActor.run {
-                isConnected = false
-                connectedDeviceName = ""
-            }
-
-            // Only attempt auto-connect if enabled
-            if config.autoConnectOnLaunch {
-                do {
-                    try await SessionManager.shared.ensureConnected()
-                    let connected = await SessionManager.shared.connectionStatus
-                    let deviceName = await SessionManager.shared.deviceName ?? ""
-
-                    await MainActor.run {
-                        isConnected = connected
-                        connectedDeviceName = deviceName
-                    }
-                } catch {
-                    // Connection failed, state already set above
-                }
-            }
         }
     }
 }

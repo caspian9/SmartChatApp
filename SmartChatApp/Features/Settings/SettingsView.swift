@@ -5,7 +5,9 @@ struct SettingsView: View {
     @Environment(\.theme) private var theme
     @StateObject private var config = ConfigurationManager.shared
     @State private var showConnectionSheet = false
-    @State private var isConnected = false
+    @State private var isOperatorConnected = false
+    @State private var isNodeConnected = false
+    @State private var nodeConnectionError: String? = nil
     @State private var connectedDeviceName = ""
 
     private static let buildDate: Date = {
@@ -26,7 +28,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("OpenClaw Gateway") {
+            Section("Gateway") {
                 HStack {
                     Text("Gateway")
                     Spacer()
@@ -35,27 +37,63 @@ struct SettingsView: View {
                         .lineLimit(1)
                 }
 
+                if config.gatewayRole == .operatorAndNode || config.gatewayRole == .operatorOnly {
                 HStack {
-                    Text("Status")
+                    Text("Operator Status")
                     Spacer()
                     HStack(spacing: 6) {
                         Circle()
-                            .fill(isConnected ? Color.green : Color.gray)
+                            .fill(isOperatorConnected ? Color.green : Color.gray)
                             .frame(width: 8, height: 8)
-                        Text(isConnected ? "Connected" : "Disconnected")
-                            .foregroundColor(isConnected ? theme.primary : theme.textSecondary)
+                        Text(isOperatorConnected ? "Connected" : "Disconnected")
+                            .foregroundColor(isOperatorConnected ? theme.primary : theme.textSecondary)
+                    }
+                }
+                }
+
+                if config.gatewayRole == .operatorAndNode || config.gatewayRole == .nodeOnly {
+                HStack {
+                    Text("Node Status")
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(isNodeConnected ? Color.green : Color.gray)
+                            .frame(width: 8, height: 8)
+                        Text(isNodeConnected ? "Connected" : "Disconnected")
+                            .foregroundColor(isNodeConnected ? theme.primary : theme.textSecondary)
                     }
                 }
 
-                if isConnected {
+                if let error = nodeConnectionError, !isNodeConnected {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                }
+
+                HStack {
+                    Text("Role")
+                    Spacer()
+                    Text(config.gatewayRole.rawValue)
+                        .foregroundColor(theme.textSecondary)
+                }
+
+                if isOperatorConnected {
                     HStack {
                         Text("Device ID")
                         Spacer()
-                        Text(connectedDeviceName)
+                        Text(String(connectedDeviceName.prefix(16)))
                             .foregroundColor(theme.textSecondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
+                }
+
+                HStack {
+                    Text("OpenClaw SDK Version")
+                    Spacer()
+                    Text(openClawVersion)
+                        .foregroundColor(theme.textSecondary)
                 }
 
                 Toggle("Auto-connect on launch", isOn: $config.autoConnectOnLaunch)
@@ -64,6 +102,24 @@ struct SettingsView: View {
                     showConnectionSheet = true
                 }
                 .foregroundColor(theme.primary)
+
+                DisclosureGroup("Advanced") {
+                    Toggle("Gateway Debug Logs", isOn: $config.gatewayDebugLogs)
+                        .onChange(of: config.gatewayDebugLogs) { _, newValue in
+                            Task {
+                                await SessionManager.shared.setDebugLoggingEnabled(newValue)
+                            }
+                        }
+                    Toggle("Discovery Debug Logs", isOn: $config.discoveryDebugLogs)
+                        .onChange(of: config.discoveryDebugLogs) { _, newValue in
+                            Task {
+                                await SessionManager.shared.setDiscoveryDebugLoggingEnabled(newValue)
+                            }
+                        }
+                    NavigationLink("Discovery Logs") {
+                        DiscoveryLogsView()
+                    }
+                }
             }
 
             Section("Device") {
@@ -83,20 +139,6 @@ struct SettingsView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-
-                HStack {
-                    Text("Connection Role")
-                    Spacer()
-                    Text("operator")
-                        .foregroundColor(theme.textSecondary)
-                }
-
-                HStack {
-                    Text("OpenClaw SDK Version")
-                    Spacer()
-                    Text(openClawVersion)
-                        .foregroundColor(theme.textSecondary)
-                }
             }
 
             Section("Appearance") {
@@ -104,24 +146,6 @@ struct SettingsView: View {
                     ForEach(AppearanceTheme.allCases, id: \.self) { theme in
                         Text(theme.rawValue).tag(theme)
                     }
-                }
-            }
-
-            Section("Debug") {
-                Toggle("Gateway Debug Logs", isOn: $config.gatewayDebugLogs)
-                    .onChange(of: config.gatewayDebugLogs) { _, newValue in
-                        Task {
-                            await SessionManager.shared.setDebugLoggingEnabled(newValue)
-                        }
-                    }
-                Toggle("Discovery Debug Logs", isOn: $config.discoveryDebugLogs)
-                    .onChange(of: config.discoveryDebugLogs) { _, newValue in
-                        Task {
-                            await SessionManager.shared.setDiscoveryDebugLoggingEnabled(newValue)
-                        }
-                    }
-                NavigationLink("Discovery Logs") {
-                    DiscoveryLogsView()
                 }
             }
 
@@ -143,21 +167,35 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .sheet(isPresented: $showConnectionSheet) {
-            ConnectionConfigSheet(onStatusChange: { connected, deviceName in
-                isConnected = connected
+            ConnectionConfigSheet(onStatusChange: { [self] connected, deviceName in
+                isOperatorConnected = connected
                 connectedDeviceName = deviceName
+                Task {
+                    let nodeStatus = await SessionManager.shared.nodeConnectionStatus
+                    let nodeError = await SessionManager.shared.nodeConnectionErrorMessage
+                    await MainActor.run {
+                        isNodeConnected = nodeStatus
+                        nodeConnectionError = nodeError
+                    }
+                }
             })
         }
         .task {
             await checkConnection()
+            await SessionManager.shared.setDebugLoggingEnabled(config.gatewayDebugLogs)
+            await SessionManager.shared.setDiscoveryDebugLoggingEnabled(config.discoveryDebugLogs)
         }
     }
 
     private func checkConnection() async {
-        let connected = await SessionManager.shared.connectionStatus
+        let operatorConnected = await SessionManager.shared.operatorConnectionStatus
+        let nodeConnected = await SessionManager.shared.nodeConnectionStatus
+        let nodeError = await SessionManager.shared.nodeConnectionErrorMessage
         let deviceName = await SessionManager.shared.deviceName ?? ""
         await MainActor.run {
-            isConnected = connected
+            isOperatorConnected = operatorConnected
+            isNodeConnected = nodeConnected
+            nodeConnectionError = nodeError
             connectedDeviceName = deviceName
         }
     }
@@ -196,6 +234,12 @@ struct ConnectionConfigSheet: View {
                         .keyboardType(.numberPad)
 
                     Toggle("Use TLS/SSL", isOn: $useTLS)
+
+                    Picker("Role", selection: $config.gatewayRole) {
+                        ForEach(GatewayConnectionRole.allCases, id: \.self) { role in
+                            Text(role.rawValue).tag(role)
+                        }
+                    }
                 }
 
                 Section("Authentication") {
@@ -313,7 +357,7 @@ struct ConnectionConfigSheet: View {
         Task {
             do {
                 let manager = SessionManager.shared
-                try await manager.connect(gatewayURL: url, authToken: authToken)
+                try await manager.connectWithRole(gatewayURL: url, authToken: authToken, role: config.gatewayRole)
                 let deviceName = await manager.deviceName ?? "unknown"
 
                 await MainActor.run {

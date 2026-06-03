@@ -24,8 +24,11 @@ public struct DebugLogEntry: Identifiable, Equatable {
 actor SessionManager {
     static let shared = SessionManager()
 
+    private let operatorSession: GatewayNodeSession
     private let nodeSession: GatewayNodeSession
-    private var isConnected = false
+    private var operatorConnected = false
+    private var nodeConnected = false
+    private var nodeConnectionError: String? = nil
     private var connectedDeviceName: String?
     private var reconnectOnLaunch = false
     private var currentSessionKey: String?
@@ -34,15 +37,46 @@ actor SessionManager {
     private var debugLog: [DebugLogEntry] = []
 
     private init() {
+        self.operatorSession = GatewayNodeSession()
         self.nodeSession = GatewayNodeSession()
     }
 
     var connectionStatus: Bool {
-        isConnected
+        operatorConnected
+    }
+
+    var operatorConnectionStatus: Bool {
+        operatorConnected
+    }
+
+    var nodeConnectionStatus: Bool {
+        nodeConnected
+    }
+
+    var nodeConnectionErrorMessage: String? {
+        nodeConnectionError
     }
 
     var deviceName: String? {
         connectedDeviceName
+    }
+
+    func connectWithRole(gatewayURL: URL, authToken: String, role: GatewayConnectionRole) async throws {
+        switch role {
+        case .operatorOnly:
+            try await connect(gatewayURL: gatewayURL, authToken: authToken)
+        case .nodeOnly:
+            try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken)
+        case .operatorAndNode:
+            try await connect(gatewayURL: gatewayURL, authToken: authToken)
+            if !nodeConnected {
+                do {
+                    try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken)
+                } catch {
+                    logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     func connect(gatewayURL: URL, authToken: String) async throws {
@@ -62,7 +96,7 @@ actor SessionManager {
         let sessionBox = WebSocketSessionBox(session: URLSession.shared)
 
         do {
-            try await nodeSession.connect(
+            try await operatorSession.connect(
                 url: gatewayURL,
                 token: authToken,
                 bootstrapToken: nil,
@@ -70,12 +104,12 @@ actor SessionManager {
                 connectOptions: connectOptions,
                 sessionBox: sessionBox,
                 onConnected: {
-                    logger.log("log: Connected to gateway")
+                    logger.log("log: Operator connected to gateway")
                 },
                 onDisconnected: { [weak self] reason in
-                    logger.log("log: Disconnected: \(reason)")
+                    logger.log("log: Operator disconnected: \(reason)")
                     Task { [weak self] in
-                        await self?.setConnected(false)
+                        await self?.setOperatorConnected(false)
                     }
                 },
                 onInvoke: { request in
@@ -87,10 +121,10 @@ actor SessionManager {
                     )
                 }
             )
-            isConnected = true
+            operatorConnected = true
             connectedDeviceName = deviceIdentity.deviceId.prefix(16).description
-            logger.log("log: Connection established, deviceId: \(self.connectedDeviceName ?? "unknown")")
-            appendDebugLog("gateway: Connected to gateway", category: "gateway")
+            logger.log("log: Operator connection established, deviceId: \(self.connectedDeviceName ?? "unknown")")
+            appendDebugLog("gateway: Operator connected to gateway", category: "gateway")
         } catch let error as GatewayConnectAuthError {
             let requestIdStr = error.requestId.map { " (requestId: \($0))" } ?? ""
             let displayError = SessionManagerError.authError(error.message + requestIdStr, error.detailCodeRaw)
@@ -104,16 +138,93 @@ actor SessionManager {
         }
     }
 
-    private func setConnected(_ value: Bool) {
-        isConnected = value
+    func connectNodeRole(gatewayURL: URL, authToken: String) async throws {
+        let deviceIdentity = DeviceIdentityStore.loadOrCreate()
+        let nodeOptions = makeNodeConnectOptions(deviceIdentity: deviceIdentity)
+        let sessionBox = WebSocketSessionBox(session: URLSession.shared)
+
+        do {
+            try await nodeSession.connect(
+                url: gatewayURL,
+                token: authToken,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: nodeOptions,
+                sessionBox: sessionBox,
+                onConnected: {
+                    logger.log("log: Node connected to gateway")
+                },
+                onDisconnected: { [weak self] reason in
+                    logger.log("log: Node disconnected: \(reason)")
+                    Task { [weak self] in
+                        await self?.setNodeConnected(false)
+                    }
+                },
+                onInvoke: { request in
+                    BridgeInvokeResponse(
+                        id: request.id,
+                        ok: true,
+                        payloadJSON: nil,
+                        error: nil
+                    )
+                }
+            )
+            nodeConnected = true
+            nodeConnectionError = nil
+            logger.log("log: Node connection established")
+            appendDebugLog("gateway: Node connected to gateway", category: "gateway")
+        } catch {
+            logger.log("log: Node connection error: \(error.localizedDescription)")
+            nodeConnectionError = error.localizedDescription
+            appendDebugLog("gateway: Node connection error: \(error.localizedDescription)", category: "gateway")
+        }
+    }
+
+    private func makeNodeConnectOptions(deviceIdentity: DeviceIdentity) -> GatewayConnectOptions {
+        GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: nodeCaps(),
+            commands: nodeCommands(),
+            permissions: nodePermissions(),
+            clientId: "openclaw-ios",
+            clientMode: "node",
+            clientDisplayName: deviceIdentity.deviceId.prefix(16).description,
+            includeDeviceIdentity: true
+        )
+    }
+
+    private func nodeCaps() -> [String] {
+        ["canvas", "screen", "device", "talk"]
+    }
+
+    private func nodeCommands() -> [String] {
+        []
+    }
+
+    private func nodePermissions() -> [String: Bool] {
+        [:]
+    }
+
+    private func setOperatorConnected(_ value: Bool) {
+        operatorConnected = value
         if !value {
             connectedDeviceName = nil
-            appendDebugLog("gateway: Disconnected", category: "gateway")
+            appendDebugLog("gateway: Operator disconnected", category: "gateway")
+        }
+    }
+
+    private func setNodeConnected(_ value: Bool) {
+        nodeConnected = value
+        if !value {
+            appendDebugLog("gateway: Node disconnected", category: "gateway")
+        } else {
+            nodeConnectionError = nil
         }
     }
 
     func createSession() async throws -> String {
-        let responseData = try await nodeSession.request(
+        let responseData = try await operatorSession.request(
             method: "sessions.create",
             paramsJSON: nil
         )
@@ -131,7 +242,7 @@ actor SessionManager {
 
     func makeTransport(sessionKey: String) -> GatewayChatTransport {
         currentSessionKey = sessionKey
-        return GatewayChatTransport(nodeSession: nodeSession, sessionKey: sessionKey)
+        return GatewayChatTransport(nodeSession: operatorSession, sessionKey: sessionKey)
     }
 
     func getCurrentSessionKey() -> String? {
@@ -157,8 +268,17 @@ actor SessionManager {
     }
 
     func ensureConnected() async throws {
-        if isConnected {
-            logger.log("log: Already connected, skipping")
+        let role = ConfigurationManager.shared.gatewayRole
+        if role == .operatorOnly && operatorConnected {
+            logger.log("log: Already connected (operator), skipping")
+            return
+        }
+        if role == .nodeOnly && nodeConnected {
+            logger.log("log: Already connected (node), skipping")
+            return
+        }
+        if role == .operatorAndNode && operatorConnected {
+            logger.log("log: Already connected (operator+node), skipping")
             return
         }
         guard let config = getGatewayConfig() else {
@@ -173,14 +293,59 @@ actor SessionManager {
         }
         logger.log("log: Attempting to connect to: \(urlString)")
         appendDebugLog("gateway: Connecting to \(urlString)", category: "gateway")
+
+        switch role {
+        case .operatorOnly:
+            try await connect(gatewayURL: url, authToken: config.authToken)
+        case .nodeOnly:
+            try await connectNodeRole(gatewayURL: url, authToken: config.authToken)
+        case .operatorAndNode:
+            try await connect(gatewayURL: url, authToken: config.authToken)
+            if !nodeConnected {
+                do {
+                    try await connectNodeRole(gatewayURL: url, authToken: config.authToken)
+                } catch {
+                    logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    func reconnect() async throws {
+        await operatorSession.disconnect()
+        await nodeSession.disconnect()
+        operatorConnected = false
+        nodeConnected = false
+
+        guard let config = getGatewayConfig() else {
+            throw SessionManagerError.notConnected
+        }
+        let scheme = config.useTLS ? "wss" : "ws"
+        let urlString = "\(scheme)://\(config.host):\(config.port)/gateway"
+        guard let url = URL(string: urlString) else {
+            throw SessionManagerError.notConnected
+        }
+
+        // Connect operator
         try await connect(gatewayURL: url, authToken: config.authToken)
+
+        // Connect node
+        if !nodeConnected {
+            do {
+                try await connectNodeRole(gatewayURL: url, authToken: config.authToken)
+            } catch {
+                logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
+            }
+        }
     }
 
     func disconnect() async {
         logger.log("log: Disconnecting...")
         appendDebugLog("gateway: Disconnecting...", category: "gateway")
+        await operatorSession.disconnect()
         await nodeSession.disconnect()
-        isConnected = false
+        operatorConnected = false
+        nodeConnected = false
         connectedDeviceName = nil
     }
 
@@ -194,8 +359,8 @@ actor SessionManager {
     }
 
     func checkConnection() async -> Bool {
-        logger.log("log: checkConnection called, isConnected: \(self.isConnected)")
-        if !isConnected {
+        logger.log("log: checkConnection called, operatorConnected: \(self.operatorConnected)")
+        if !operatorConnected {
             logger.log("log: Not connected, attempting reconnect...")
             appendDebugLog("gateway: Not connected, attempting reconnect...", category: "gateway")
             do {

@@ -7,6 +7,12 @@ enum AppearanceTheme: String, CaseIterable {
     case dark = "Dark"
 }
 
+enum GatewayConnectionRole: String, CaseIterable {
+    case operatorAndNode = "operator / node"
+    case operatorOnly = "operator"
+    case nodeOnly = "node"
+}
+
 final class ConfigurationManager: ObservableObject {
     static let shared = ConfigurationManager()
 
@@ -17,6 +23,7 @@ final class ConfigurationManager: ObservableObject {
         static let gatewayPort = "openclaw_gateway_port"
         static let gatewayUseTLS = "openclaw_gateway_use_tls"
         static let authToken = "openclaw_auth_token"
+        static let gatewayRole = "openclaw_gateway_role"
         static let appearanceTheme = "openclaw_appearance_theme"
         static let autoConnectOnLaunch = "openclaw_auto_connect"
         static let deviceDisplayName = "openclaw_device_name"
@@ -45,6 +52,12 @@ final class ConfigurationManager: ObservableObject {
     @Published var authToken: String {
         didSet {
             defaults.set(authToken, forKey: Keys.authToken)
+        }
+    }
+
+    @Published var gatewayRole: GatewayConnectionRole {
+        didSet {
+            defaults.set(gatewayRole.rawValue, forKey: Keys.gatewayRole)
         }
     }
 
@@ -89,6 +102,13 @@ final class ConfigurationManager: ObservableObject {
 
         self.gatewayUseTLS = defaults.object(forKey: Keys.gatewayUseTLS) as? Bool ?? true
         self.authToken = defaults.string(forKey: Keys.authToken) ?? ""
+
+        if let roleRaw = defaults.string(forKey: Keys.gatewayRole),
+           let role = GatewayConnectionRole(rawValue: roleRaw) {
+            self.gatewayRole = role
+        } else {
+            self.gatewayRole = .operatorAndNode
+        }
 
         if let themeRaw = defaults.string(forKey: Keys.appearanceTheme),
            let theme = AppearanceTheme(rawValue: themeRaw) {
