@@ -54,10 +54,7 @@ struct ChatListView: View {
 
     @ViewBuilder
     private func sessionView(for session: OpenClawChatSessionEntry) -> some View {
-        let transport = GatewayChatTransport(
-            nodeSession: GatewayNodeSession(),
-            sessionKey: session.key
-        )
+        let transport = SessionManager.shared.makeTransport(sessionKey: session.key)
         ChatView(sessionKey: session.key, transport: transport)
     }
 

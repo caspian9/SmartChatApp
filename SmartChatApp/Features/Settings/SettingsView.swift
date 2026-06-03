@@ -180,9 +180,9 @@ struct ConnectionConfigSheet: View {
 
         Task {
             do {
-                let client = GatewayClient()
-                try await client.connect(gatewayURL: url, authToken: authToken)
-                try await client.disconnect()
+                let manager = SessionManager.shared
+                try await manager.connect(gatewayURL: url, authToken: authToken)
+                try await manager.disconnect()
 
                 await MainActor.run {
                     isTesting = false

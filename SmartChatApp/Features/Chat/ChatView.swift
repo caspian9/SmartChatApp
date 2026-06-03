@@ -5,7 +5,6 @@ import OpenClawKit
 struct ChatView: View {
     let sessionKey: String
     @State private var viewModel: OpenClawChatViewModel
-    @State private var isDisconnecting = false
     private let transport: any OpenClawChatTransport
 
     init(sessionKey: String, transport: any OpenClawChatTransport) {
@@ -36,32 +35,6 @@ struct ChatView: View {
                     PendingCardsView(toolCalls: viewModel.pendingToolCalls)
                         .padding()
                 }
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: disconnectSession) {
-                    if isDisconnecting {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Text("Disconnect")
-                            .foregroundColor(.red)
-                    }
-                }
-                .disabled(isDisconnecting)
-            }
-        }
-    }
-
-    private func disconnectSession() {
-        isDisconnecting = true
-        Task {
-            if let gatewayTransport = transport as? GatewayChatTransport {
-                await gatewayTransport.disconnect()
-            }
-            await MainActor.run {
-                isDisconnecting = false
             }
         }
     }
