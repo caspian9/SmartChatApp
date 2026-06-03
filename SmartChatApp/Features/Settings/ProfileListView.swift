@@ -11,6 +11,17 @@ struct ProfileListView: View {
 
     private let colorOptions = ["#10A37F", "#3B82F6", "#F97316", "#EF4444", "#8B5CF6"]
 
+    private func colorName(for hex: String) -> String {
+        switch hex {
+        case "#10A37F": return "green"
+        case "#3B82F6": return "blue"
+        case "#F97316": return "orange"
+        case "#EF4444": return "red"
+        case "#8B5CF6": return "purple"
+        default: return "custom"
+        }
+    }
+
     var body: some View {
         Group {
             if profiles.isEmpty {
@@ -63,14 +74,17 @@ struct ProfileListView: View {
                 Circle()
                     .fill(Color(hex: profile.colorTag))
                     .frame(width: 12, height: 12)
+                    .accessibilityLabel("Color: \(colorName(for: profile.colorTag))")
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(profile.name)
                         .font(.subheadline)
                         .foregroundColor(theme.textPrimary)
+                        .lineLimit(1)
                     Text(profile.host)
                         .font(.caption)
                         .foregroundColor(theme.textSecondary)
+                        .lineLimit(1)
                 }
 
                 Spacer()
