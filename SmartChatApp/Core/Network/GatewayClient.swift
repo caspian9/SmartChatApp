@@ -51,8 +51,10 @@ actor GatewayClient {
                 }
             )
         } catch let error as GatewayConnectAuthError {
-            print("Gateway connection error: \(error.message) (requestId: \(error.requestId ?? "nil")), detailCode: \(error.detailCodeRaw ?? "nil")")
-            throw error
+            let requestIdStr = error.requestId.map { " (requestId: \($0))" } ?? ""
+            let displayError = GatewayClientError.authError(error.message + requestIdStr, error.detailCodeRaw)
+            print("Gateway connection error: \(error.message)\(requestIdStr), detailCode: \(error.detailCodeRaw ?? "nil")")
+            throw displayError
         } catch {
             print("Gateway connection error: \(error)")
             throw error
@@ -107,7 +109,19 @@ actor GatewayClient {
     }
 }
 
-enum GatewayClientError: Error {
+enum GatewayClientError: Error, LocalizedError {
     case notConnected
     case invalidResponse
+    case authError(String, String?)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected:
+            return "Not connected to gateway"
+        case .invalidResponse:
+            return "Invalid server response"
+        case .authError(let message, _):
+            return message
+        }
+    }
 }
