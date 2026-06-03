@@ -35,7 +35,6 @@ struct NativeChatViewModel {
         case updateInputText(String)
         case sendMessage
         case loadHistory
-        case loadedHistory([ChatMessage])
         case loadedCachedHistory([ChatMessage], isRestoring: Bool)
         case receiveMessage(ChatMessage)
         case setError(String?)
@@ -43,6 +42,9 @@ struct NativeChatViewModel {
         case scrollToBottom
         case setNeedsScrollToBottom(Bool)
         case incrementScrollTrigger
+        case appendNewMessages([ChatMessage])
+        case loadMoreHistory
+        case loadedMoreHistory([ChatMessage], hasMore: Bool)
     }
 
     @Dependency(\.continuousClock) var clock
@@ -248,12 +250,18 @@ struct NativeChatViewModel {
                 let isRestoring = state.isRestoringFromCache
                 state.isRestoringFromCache = false
 
+                let cachedSessionKey = sessionKey
+                let cachedSessionKeyPreview = sessionKeyPreview
+                let cachedIsRestoring = isRestoring
+                // Capture messages for deduplication before Task
+                let existingIds = Set(state.messages.map { $0.id })
+
                 return .run { send in
                     Task {
-                        logger.log("SMAlog: loadHistory Task started for session: \(sessionKeyPreview)")
+                        logger.log("SMAlog: loadHistory Task started, sessionKey: \(String(cachedSessionKeyPreview))")
                         // Always load cache first (messages already cleared in selectSession when switching)
-                        let cachedMessages = await MessageCache.shared.getMessages(for: sessionKey)
-                        logger.log("SMAlog: cache returned \(cachedMessages.count) messages for session: \(sessionKeyPreview)")
+                        let cachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
+                        logger.log("SMAlog: cache returned \(cachedMessages.count) messages, sessionKey: \(String(cachedSessionKeyPreview))")
                         if !cachedMessages.isEmpty {
                             let chatMessages = cachedMessages.compactMap { msg -> ChatMessage? in
                                 var text = ""
@@ -284,25 +292,25 @@ struct NativeChatViewModel {
                                     stopReason: msg.stopReason
                                 )
                             }
-                            logger.log("SMAlog: Loaded \(chatMessages.count) cached messages for session: \(sessionKeyPreview), isRestoring: \(isRestoring)")
-                            await send(.loadedCachedHistory(chatMessages, isRestoring: isRestoring))
+                            logger.log("SMAlog: Loaded \(chatMessages.count) cached messages for session: \(cachedSessionKeyPreview), isRestoring: \(cachedIsRestoring)")
+                            await send(.loadedCachedHistory(chatMessages, isRestoring: cachedIsRestoring))
                         }
 
                         // Then fetch from network
                         do {
                             try await SessionManager.shared.ensureConnected()
-                            let transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
-                            let history = try await transport.requestHistory(sessionKey: sessionKey)
+                            let transport = await SessionManager.shared.makeTransport(sessionKey: cachedSessionKey)
+                            let history = try await transport.requestHistory(sessionKey: cachedSessionKey)
 
                             // Check if this is still the current session before updating UI
                             guard let currentSession = await SessionManager.shared.getCurrentSessionKey(),
-                                  currentSession == sessionKey else {
-                                logger.log("SMAlog: Session changed, discarding history for: \(sessionKeyPreview)")
+                                  currentSession == cachedSessionKey else {
+                                logger.log("SMAlog: Session changed, discarding history for: \(cachedSessionKeyPreview)")
                                 return
                             }
 
                             let messageCount = history.messages?.count ?? 0
-                            logger.log("SMAlog: Loaded \(messageCount) history messages for session: \(sessionKeyPreview)")
+                            logger.log("SMAlog: Loaded \(messageCount) history messages for session: \(cachedSessionKeyPreview)")
                             let chatMessages: [ChatMessage] = (history.messages ?? []).enumerated().compactMap { index, anyCodable -> ChatMessage? in
                                 guard let msg = try? JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(anyCodable)) else {
                                     print("SMAlog: message[\(index)] failed to decode as OpenClawChatMessage, raw: \(String(describing: anyCodable))")
@@ -413,8 +421,11 @@ struct NativeChatViewModel {
                             logger.log("SMAlog: chatMessages count: \(chatMessages.count)")
                             // Cache the fetched messages
                             let openClawMessages = chatMessages.compactMap { createOpenClawChatMessage(from: $0) }
-                            await MessageCache.shared.setMessages(openClawMessages, for: sessionKey)
-                            await send(.loadedHistory(chatMessages))
+                            await MessageCache.shared.setMessages(openClawMessages, for: cachedSessionKey)
+                            // Find which messages are new (not in current state.messages)
+                            // Note: existingIds is computed from state.messages in the reducer before Task
+                            let newMessages = chatMessages.filter { !existingIds.contains($0.id) }
+                            await send(.appendNewMessages(newMessages))
                         } catch {
                             logger.log("SMAlog: Load history error: \(error.localizedDescription)")
                         }
@@ -429,13 +440,14 @@ struct NativeChatViewModel {
                 logger.log("SMAlog: loadedCachedHistory set needsScrollToBottom=true, messages should update")
                 return .none
 
-            case .loadedHistory(let messages):
-                // Always update messages - the comparison logic was causing issues
-                // where UI didn't update when counts matched
-                logger.log("SMAlog: loadedHistory updating messages, count: \(messages.count)")
-                state.messages = messages
+            case .appendNewMessages(let newMessages):
+                if newMessages.isEmpty {
+                    logger.log("SMAlog: appendNewMessages - no new messages")
+                    return .none
+                }
+                logger.log("SMAlog: appendNewMessages appending \(newMessages.count) messages")
+                state.messages.append(contentsOf: newMessages)
                 state.needsScrollToBottom = true
-                state.isSending = false
                 return .none
 
             case .receiveMessage(let message):
@@ -500,6 +512,9 @@ struct NativeChatViewModel {
 
             case .incrementScrollTrigger:
                 state.scrollTrigger += 1
+                return .none
+
+            case .loadMoreHistory, .loadedMoreHistory:
                 return .none
             }
         }
