@@ -79,25 +79,25 @@ public actor GatewayChatTransport: OpenClawChatTransport {
     {
         self.sessionKey = sessionKey
 
-        var params = [
-            "key": sessionKey,
-            "message": message,
-            "idempotencyKey": idempotencyKey
-        ]
-        if !thinking.isEmpty {
-            params["thinking"] = thinking
+        struct SendParams: Encodable {
+            let key: String
+            let message: String
+            let thinking: String?
+            let idempotencyKey: String
+            let attachments: [OpenClawChatAttachmentPayload]?
         }
 
-        var jsonParts = params.map { "\"\($0.key)\": \"\($0.value)\"" }
-        if !attachments.isEmpty {
-            let attachmentsJSON = try JSONEncoder().encode(attachments)
-            if let attachmentsStr = String(data: attachmentsJSON, encoding: .utf8) {
-                jsonParts.append("\"attachments\": \(attachmentsStr)")
-            }
-        }
+        let params = SendParams(
+            key: sessionKey,
+            message: message,
+            thinking: thinking.isEmpty ? nil : thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments.isEmpty ? nil : attachments
+        )
 
-        let jsonString = "{\(jsonParts.joined(separator: ", "))}"
-        _ = try await nodeSession.request(method: "sessions.send", paramsJSON: jsonString)
+        let paramsData = try JSONEncoder().encode(params)
+        let paramsJSON = String(data: paramsData, encoding: .utf8)
+        _ = try await nodeSession.request(method: "sessions.send", paramsJSON: paramsJSON)
 
         let userMessage = OpenClawChatMessage(
             role: "user",
