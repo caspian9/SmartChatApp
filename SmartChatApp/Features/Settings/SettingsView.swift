@@ -155,11 +155,11 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .sheet(isPresented: $showProfileSheet) {
-            EditProfileSheet(profile: editingProfile) { name, colorTag, host, port, token, tlsEnabled, role in
+            EditProfileSheet(profile: editingProfile) { name, colorTag, host, port, token, tlsEnabled, role, cameraEnabled, locationEnabled, voiceWakeEnabled in
                 if let profile = editingProfile {
-                    ProfileManager.shared.updateProfile(id: profile.id, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled, role: role)
+                    ProfileManager.shared.updateProfile(id: profile.id, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled, role: role, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
                 } else {
-                    _ = ProfileManager.shared.addProfile(name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled, role: role)
+                    _ = ProfileManager.shared.addProfile(name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled, role: role, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
                 }
             } onDelete: { id in
                 ProfileManager.shared.deleteProfile(id: id)

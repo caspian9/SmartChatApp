@@ -9,6 +9,9 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
     var token: String
     var tlsEnabled: Bool
     var role: GatewayConnectionRole
+    var cameraEnabled: Bool
+    var locationEnabled: Bool
+    var voiceWakeEnabled: Bool
     var isActive: Bool
     var createdAt: Date
     var updatedAt: Date
@@ -22,6 +25,9 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
         token: String,
         tlsEnabled: Bool = true,
         role: GatewayConnectionRole = .operatorAndNode,
+        cameraEnabled: Bool = false,
+        locationEnabled: Bool = false,
+        voiceWakeEnabled: Bool = false,
         isActive: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -34,6 +40,9 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
         self.token = token
         self.tlsEnabled = tlsEnabled
         self.role = role
+        self.cameraEnabled = cameraEnabled
+        self.locationEnabled = locationEnabled
+        self.voiceWakeEnabled = voiceWakeEnabled
         self.isActive = isActive
         self.createdAt = createdAt
         self.updatedAt = updatedAt
