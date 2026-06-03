@@ -4,15 +4,17 @@ import OpenClawKit
 
 struct ChatView: View {
     let sessionKey: String
-    @State private var viewModel: OpenClawChatViewModel
+    let sessionEntry: OpenClawChatSessionEntry?
+    @State private var viewModel: ChatViewModel
     private let transport: any OpenClawChatTransport
     private let onAppear: () -> Void
 
-    init(sessionKey: String, transport: any OpenClawChatTransport, onAppear: @escaping () -> Void = {}) {
+    init(sessionKey: String, sessionEntry: OpenClawChatSessionEntry? = nil, transport: any OpenClawChatTransport, onAppear: @escaping () -> Void = {}) {
         self.sessionKey = sessionKey
+        self.sessionEntry = sessionEntry
         self.transport = transport
         self.onAppear = onAppear
-        _viewModel = State(initialValue: OpenClawChatViewModel(
+        _viewModel = State(initialValue: ChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
             onThinkingLevelChanged: nil
@@ -20,71 +22,18 @@ struct ChatView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            OpenClawChatView(
-                viewModel: viewModel,
-                showsSessionSwitcher: false,
-                style: .standard,
-                markdownVariant: .standard,
-                userAccent: Color(hex: "10A37F"),
-                showsAssistantTrace: false
-            )
-            .id(sessionKey)
-
-            if !viewModel.pendingToolCalls.isEmpty {
-                toolCallsOverlay
-            }
-        }
+        OpenClawChatView(
+            viewModel: viewModel,
+            showsSessionSwitcher: false,
+            style: .standard,
+            markdownVariant: .standard,
+            userAccent: Color(hex: "10A37F"),
+            showsAssistantTrace: true
+        )
         .onAppear { onAppear() }
         .task {
-            await refreshIncrementally()
+            try? await transport.setActiveSessionKey(sessionKey)
+            viewModel.load()
         }
-    }
-
-    private var toolCallsOverlay: some View {
-        VStack {
-            Spacer()
-            VStack(spacing: 8) {
-                ForEach(viewModel.pendingToolCalls) { call in
-                    PendingToolCallView(call: call)
-                }
-            }
-            .padding(.horizontal)
-            .padding(.bottom, 60)
-        }
-    }
-
-    private func refreshIncrementally() async {
-        // Fetch sessions first so connectionPill shows correct name immediately
-        await viewModel.refreshSessions(limit: 50)
-        viewModel.load()
-    }
-}
-
-struct PendingToolCallView: View {
-    let call: OpenClawChatPendingToolCall
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
-                .tint(.white)
-
-            Text(displayName)
-                .font(.subheadline)
-                .foregroundColor(.white)
-                .lineLimit(1)
-
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color.white.opacity(0.15))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var displayName: String {
-        let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
-        return "\(display.emoji) \(display.label)"
     }
 }
