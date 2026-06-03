@@ -88,10 +88,6 @@ struct NativeChatView: View {
         .onAppear {
             store.send(.loadSessions)
         }
-        .task {
-            // Ensure connection is established before loading
-            try? await SessionManager.shared.ensureConnected()
-        }
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy) {

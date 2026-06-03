@@ -44,6 +44,7 @@ struct NativeChatViewModel {
         Reduce { state, action in
             switch action {
             case .loadSessions:
+                logger.log("SMAlog: loadSessions called")
                 // First load from cache
                 if let cached = SessionCache.load(), !cached.isEmpty {
                     logger.log("SMAlog: Loaded \(cached.count) cached sessions")
@@ -51,9 +52,12 @@ struct NativeChatViewModel {
                     state.isRestoringFromCache = true
                     if state.selectedSession == nil, let first = cached.first {
                         state.selectedSession = first
+                        logger.log("SMAlog: Auto-selected first session: \(String(first.key.prefix(12)))")
                         return .send(.loadHistory)
                     }
                     state.isRestoringFromCache = false
+                } else {
+                    logger.log("SMAlog: No cached sessions found")
                 }
                 // Then fetch from network
                 state.isLoading = true
