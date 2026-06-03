@@ -21,15 +21,7 @@ struct NativeChatView: View {
     }
 
     var body: some View {
-        // Body re-eval log. The .loadedSessions reducer's
-        // "REDUCER loadedSessions AFTER" log fires only when the reducer
-        // actually runs. If we see "REDUCER loadedSessions AFTER state.sessions=8"
-        // followed shortly by a body re-eval log with sessions=8, the
-        // reducer-to-view pipeline is healthy. If we see the reducer
-        // log but no body re-eval with the new count, the view is
-        // observing a different store than the one being updated.
-        let _ = logger.log("SMAlog: NativeChatView body re-eval sessions=\(store.sessions.count) messages=\(store.messages.count) selectedSession=\(store.selectedSession?.key.prefix(8).description ?? "nil")")
-        return content
+        content
             .background(theme.background)
             .navigationTitle("NativeChat")
             .navigationBarTitleDisplayMode(.inline)

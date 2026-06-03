@@ -70,16 +70,6 @@ struct NativeChatViewModel {
     private static let loadHistoryLock = NSLock()
     private static var inFlightLoadHistory: String? = nil
 
-    // Static guard to prevent multiple concurrent loadSessions .run tasks.
-    // The 5-10 inits + 3 onAppears pattern from device logs means a single
-    // user entry can fire .loadSessions 3+ times. Each spawns its own .run
-    // task; 4 of those 5 stores are deallocated by the time the network
-    // returns 600ms later, so 4 of the .loadedSessions dispatches land on
-    // dead stores. The alive store is left at state.sessions = [].
-    // Dedupe so only one .run task runs per user entry.
-    private static let loadSessionsLock = NSLock()
-    private static var loadSessionsInFlight: Bool = false
-
     var body: some Reducer<State, Action> {
         Reduce { state, action in
             switch action {
@@ -95,22 +85,6 @@ struct NativeChatViewModel {
                     logger.log("SMAlog: loadSessions skipped - no selected profile")
                     return .none
                 }
-
-                // Static dedupe: if a previous .loadSessions .run task is
-                // still in flight, skip the network call. The in-flight
-                // task's .loadedSessions dispatch will update the alive
-                // store (or, if its store was deallocated, a subsequent
-                // .loadSessions from the user will pick it up via the
-                // selectSession path which also calls .loadSessions).
-                Self.loadSessionsLock.lock()
-                if Self.loadSessionsInFlight {
-                    Self.loadSessionsLock.unlock()
-                    logger.log("SMAlog: loadSessions dedup - run task in flight, skipping")
-                    return .none
-                }
-                Self.loadSessionsInFlight = true
-                Self.loadSessionsLock.unlock()
-
                 let profileIdCapture = profileId
                 // First load from cache for fast display
                 if let cached = SessionCache.load(for: profileId), !cached.isEmpty {
@@ -162,39 +136,20 @@ struct NativeChatViewModel {
                                     await send(.loadedSessions([]))
                                 }
                             }
-                            // Release the in-flight guard after the dispatch
-                            // so the next legitimate .loadSessions (e.g. from
-                            // selectSession or switchProfile) can run.
-                            Self.loadSessionsLock.lock()
-                            Self.loadSessionsInFlight = false
-                            Self.loadSessionsLock.unlock()
                         }
                     }
                 )
 
             case .loadedSessions(let sessions):
-                // Inline diagnostic at the top of the reducer. We
-                // previously used a `[loadedSessions DIAG]` prefix but
-                // that string never showed up in device Console.app
-                // captures even when "Loaded 8 sessions" (logged just
-                // before this dispatch) did — likely a filter quirk.
-                // Using the same SMAlog: format here so a single search
-                // for "SMAlog" or "loadedSessions" picks it up.
-                let prevSessionsCount = state.sessions.count
-                let prevSelectedKeyForLog = state.selectedSession?.key.prefix(12).description ?? "nil"
-                logger.log("SMAlog: REDUCER loadedSessions CALLED count=\(sessions.count) prevState_sessions=\(prevSessionsCount) prevState_selectedKey=\(prevSelectedKeyForLog)")
                 let prevSelectedKey = state.selectedSession?.key
                 let prevSelectedModel = state.selectedSession?.model
                 let prevSelectedTokens = state.selectedSession?.totalTokens
                 let prevSelectedUpdatedAt = state.selectedSession?.updatedAt
-                logger.log("SMAlog: REDUCER loadedSessions prev selected: key=\(String(prevSelectedKey?.prefix(12) ?? "nil")) model=\(prevSelectedModel ?? "nil") tokens=\(prevSelectedTokens ?? -1) updatedAt=\(prevSelectedUpdatedAt ?? -1)")
-                logger.log("SMAlog: REDUCER loadedSessions incoming: count=\(sessions.count) first.model=\(sessions.first?.model ?? "nil") first.tokens=\(sessions.first?.totalTokens ?? -1) first.updatedAt=\(sessions.first?.updatedAt ?? -1)")
+                logger.log("SMAlog: [loadedSessions DIAG] prev selected: key=\(String(prevSelectedKey?.prefix(12) ?? "nil")) model=\(prevSelectedModel ?? "nil") tokens=\(prevSelectedTokens ?? -1) updatedAt=\(prevSelectedUpdatedAt ?? -1)")
+                logger.log("SMAlog: [loadedSessions DIAG] incoming: count=\(sessions.count) first.model=\(sessions.first?.model ?? "nil") first.tokens=\(sessions.first?.totalTokens ?? -1) first.updatedAt=\(sessions.first?.updatedAt ?? -1)")
 
                 state.sessions = sessions
                 state.isLoading = false
-                let afterSessionsCount = state.sessions.count
-                let afterSelectedKey = state.selectedSession?.key.prefix(12).description ?? "nil"
-                logger.log("SMAlog: REDUCER loadedSessions AFTER state.sessions=\(afterSessionsCount) state.selectedSession=\(afterSelectedKey)")
                 if let profileId = state.selectedProfileId {
                     SessionCache.save(sessions, for: profileId)
                 }
@@ -208,7 +163,7 @@ struct NativeChatViewModel {
                     let sameModel = updatedSession.model == prevSelectedModel
                     let sameTokens = updatedSession.totalTokens == prevSelectedTokens
                     let sameUpdatedAt = updatedSession.updatedAt == prevSelectedUpdatedAt
-                    logger.log("SMAlog: REDUCER loadedSessions branch=lastKeyMatch key=\(String(updatedSession.key.prefix(12))) newModel=\(updatedSession.model ?? "nil") newTokens=\(updatedSession.totalTokens ?? -1) newUpdatedAt=\(updatedSession.updatedAt ?? -1) sameKey=\(sameKey ? 1 : 0) sameModel=\(sameModel ? 1 : 0) sameTokens=\(sameTokens ? 1 : 0) sameUpdatedAt=\(sameUpdatedAt ? 1 : 0)")
+                    logger.log("SMAlog: [loadedSessions DIAG] branch=lastKeyMatch key=\(String(updatedSession.key.prefix(12))) newModel=\(updatedSession.model ?? "nil") newTokens=\(updatedSession.totalTokens ?? -1) newUpdatedAt=\(updatedSession.updatedAt ?? -1) sameKey=\(sameKey ? 1 : 0) sameModel=\(sameModel ? 1 : 0) sameTokens=\(sameTokens ? 1 : 0) sameUpdatedAt=\(sameUpdatedAt ? 1 : 0)")
                     // Reload history with updated session info to refresh provider/model/tokens display
                     return .send(.loadHistory)
                 }
@@ -216,7 +171,7 @@ struct NativeChatViewModel {
                 // Auto-select first session if none selected
                 if state.selectedSession == nil, let first = sessions.first {
                     state.selectedSession = first
-                    logger.log("SMAlog: REDUCER loadedSessions branch=autoFirst key=\(String(first.key.prefix(12)))")
+                    logger.log("SMAlog: [loadedSessions DIAG] branch=autoFirst key=\(String(first.key.prefix(12)))")
                     return .send(.loadHistory)
                 }
                 // No branch matched: a selectedSession was set from cache but lastKey
@@ -226,9 +181,9 @@ struct NativeChatViewModel {
                 if let currentKey = prevSelectedKey,
                    let refreshed = sessions.first(where: { $0.key == currentKey }) {
                     state.selectedSession = refreshed
-                    logger.log("SMAlog: REDUCER loadedSessions branch=inPlaceRefresh key=\(String(currentKey.prefix(12))) newModel=\(refreshed.model ?? "nil") newTokens=\(refreshed.totalTokens ?? -1) newUpdatedAt=\(refreshed.updatedAt ?? -1)")
+                    logger.log("SMAlog: [loadedSessions DIAG] branch=inPlaceRefresh key=\(String(currentKey.prefix(12))) newModel=\(refreshed.model ?? "nil") newTokens=\(refreshed.totalTokens ?? -1) newUpdatedAt=\(refreshed.updatedAt ?? -1)")
                 } else {
-                    logger.log("SMAlog: REDUCER loadedSessions branch=noMatch prevKey=\(String(prevSelectedKey?.prefix(12) ?? "nil")) sessionsCount=\(sessions.count)")
+                    logger.log("SMAlog: [loadedSessions DIAG] branch=noMatch prevKey=\(String(prevSelectedKey?.prefix(12) ?? "nil")) sessionsCount=\(sessions.count)")
                 }
                 return .none
 
