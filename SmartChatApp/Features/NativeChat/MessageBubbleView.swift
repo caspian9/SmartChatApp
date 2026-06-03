@@ -4,6 +4,8 @@ struct MessageBubbleView: View {
     @Environment(\.theme) private var theme
     let message: ChatMessage
 
+    @State private var animationOffset: CGFloat = 0
+
     var body: some View {
         HStack {
             if message.isOutgoing {
@@ -14,24 +16,47 @@ struct MessageBubbleView: View {
                 // Show text or placeholder for streaming
                 if message.text.isEmpty {
                     if message.state == "streaming" {
-                        Text("...")
-                            .font(.body)
-                            .foregroundColor(theme.textSecondary)
+                        TypingIndicatorView(color: message.isOutgoing ? .white : theme.textSecondary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
+                            .background(message.isOutgoing ? theme.primary : theme.cardBackground)
+                            .cornerRadius(12)
                     } else {
                         Text("")
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                     }
                 } else {
-                    Text(message.text)
-                        .font(.body)
-                        .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(message.isOutgoing ? theme.primary : theme.cardBackground)
-                        .cornerRadius(12)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(message.text)
+                            .font(.body)
+                            .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+
+                        // Streaming indicator inside bubble - show bouncing dots
+                        if message.state == "streaming" && !message.isOutgoing {
+                            HStack(spacing: 4) {
+                                TypingIndicatorView()
+                                    .padding(.top, 4)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(message.isOutgoing ? theme.primary : theme.cardBackground)
+                    .cornerRadius(12)
+                }
+
+                // Seq badge for AI messages
+                if !message.isOutgoing, let seq = message.seq {
+                    HStack(spacing: 4) {
+                        Text("#\(seq)")
+                            .font(.caption2)
+                            .foregroundColor(theme.textSecondary)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(theme.inputBackground)
+                    .cornerRadius(4)
                 }
 
                 // Action bar
@@ -77,10 +102,6 @@ struct MessageBubbleView: View {
                         Text("●")
                             .font(.caption2)
                             .foregroundColor(.green)
-                    } else if message.state == "streaming" && message.text.isEmpty {
-                        Text("接收中...")
-                            .font(.caption2)
-                            .foregroundColor(theme.textSecondary)
                     }
                 }
             }
@@ -97,6 +118,33 @@ struct MessageBubbleView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: timestamp)
+    }
+}
+
+struct TypingIndicatorView: View {
+    @State private var animationOffset: CGFloat = 0
+    var color: Color = .secondary
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+                    .offset(y: animationOffset(for: index))
+            }
+        }
+        .onAppear {
+            withAnimation(Animation.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                animationOffset = -3
+            }
+        }
+    }
+
+    private func animationOffset(for index: Int) -> CGFloat {
+        let delays: [Double] = [0, 0.15, 0.3]
+        let progress = (animationOffset + 5) / 10
+        return sin(progress * .pi + delays[index]) * 3
     }
 }
 

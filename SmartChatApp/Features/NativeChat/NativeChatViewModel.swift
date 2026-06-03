@@ -349,7 +349,11 @@ struct NativeChatViewModel {
                 if state.needsScrollToBottom {
                     state.needsScrollToBottom = false
                 }
-                state.messages = messages
+                // Only update messages from network if there are messages,
+                // otherwise keep existing (cached) messages
+                if !messages.isEmpty {
+                    state.messages = messages
+                }
                 state.isSending = false
                 return .none
 
