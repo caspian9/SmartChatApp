@@ -152,7 +152,7 @@ struct ProfileListView: View {
                                     Spacer()
                                 }
                             }
-                            .disabled(editHost.isEmpty)
+                            .disabled(isTesting)
                         }
 
                         if let result = testResult {
@@ -194,7 +194,7 @@ struct ProfileListView: View {
                         Button("Save") {
                             saveEdit()
                         }
-                        .disabled(editName.isEmpty || editHost.isEmpty || editToken.isEmpty)
+                        .disabled(editName.isEmpty)
                     }
                 }
             }
