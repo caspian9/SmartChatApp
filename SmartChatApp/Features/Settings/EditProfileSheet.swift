@@ -37,8 +37,8 @@ struct EditProfileSheet: View {
     }
 
     private var isValidHost: Bool {
-        let host = editHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty else { return false }
+        let cleanHost = Self.cleanHost(editHost)
+        guard !cleanHost.isEmpty else { return false }
         // Basic host validation: not empty, no spaces
         // Accept domain format (e.g., api.example.com) or IP format (e.g., 192.168.1.1)
         let domainPattern = "^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?)+$"
@@ -47,11 +47,26 @@ struct EditProfileSheet: View {
         let domainRegex = try? NSRegularExpression(pattern: domainPattern, options: .caseInsensitive)
         let ipRegex = try? NSRegularExpression(pattern: ipPattern, options: .caseInsensitive)
 
-        let range = NSRange(host.startIndex..., in: host)
-        let isDomain = domainRegex?.firstMatch(in: host, options: [], range: range) != nil
-        let isIP = ipRegex?.firstMatch(in: host, options: [], range: range) != nil
+        let range = NSRange(cleanHost.startIndex..., in: cleanHost)
+        let isDomain = domainRegex?.firstMatch(in: cleanHost, options: [], range: range) != nil
+        let isIP = ipRegex?.firstMatch(in: cleanHost, options: [], range: range) != nil
 
         return isDomain || isIP
+    }
+
+    private static func cleanHost(_ input: String) -> String {
+        var host = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip scheme if present
+        if host.hasPrefix("https://") {
+            host = String(host.dropFirst(8))
+        } else if host.hasPrefix("http://") {
+            host = String(host.dropFirst(7))
+        }
+        // Strip trailing slash
+        if host.hasSuffix("/") {
+            host = String(host.dropLast())
+        }
+        return host
     }
 
     private var isNewProfile: Bool {
@@ -96,7 +111,8 @@ struct EditProfileSheet: View {
         testStatus = .testing
 
         let port = Int(editPort) ?? 443
-        let url = SessionManager.shared.gatewayURL(host: editHost, port: port, tlsEnabled: editTlsEnabled)
+        let cleanHost = Self.cleanHost(editHost)
+        let url = SessionManager.shared.gatewayURL(host: cleanHost, port: port, tlsEnabled: editTlsEnabled)
 
         Task {
             do {
@@ -254,7 +270,8 @@ struct EditProfileSheet: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Save") {
                         let port = Int(editPort) ?? 443
-                        onSave(editName, editColorTag, editHost, port, editToken, editTlsEnabled, editRole, editCameraEnabled, editLocationEnabled, editVoiceWakeEnabled)
+                        let cleanHost = Self.cleanHost(editHost)
+                        onSave(editName, editColorTag, cleanHost, port, editToken, editTlsEnabled, editRole, editCameraEnabled, editLocationEnabled, editVoiceWakeEnabled)
                         dismiss()
                     }
                     .disabled(editName.isEmpty)
