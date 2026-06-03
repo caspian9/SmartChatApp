@@ -85,6 +85,11 @@ struct HomeView: View {
         .task {
             await checkConnectionStatus()
         }
+        .onAppear {
+            Task {
+                await checkConnectionStatus()
+            }
+        }
     }
 
     @ViewBuilder
@@ -110,7 +115,8 @@ struct HomeView: View {
             .padding(16)
             .background(theme.cardBackground)
             .cornerRadius(12)
-        } else if ConfigurationManager.shared.isConfigured {
+        } else if ConfigurationManager.shared.autoConnectOnLaunch && ConfigurationManager.shared.isConfigured {
+            // Auto-connect enabled but still connecting
             HStack(spacing: 12) {
                 Circle()
                     .fill(Color.yellow)
@@ -131,12 +137,40 @@ struct HomeView: View {
             .padding(16)
             .background(theme.cardBackground)
             .cornerRadius(12)
+        } else if ConfigurationManager.shared.isConfigured {
+            // Configured but auto-connect disabled or connection failed
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(Color.gray)
+                    .frame(width: 10, height: 10)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Not connected")
+                        .font(.subheadline)
+                        .foregroundColor(theme.textPrimary)
+
+                    Text(gatewayHost)
+                        .font(.caption)
+                        .foregroundColor(theme.textSecondary)
+                }
+
+                Spacer()
+            }
+            .padding(16)
+            .background(theme.cardBackground)
+            .cornerRadius(12)
         }
     }
 
     private func checkConnectionStatus() async {
         let config = ConfigurationManager.shared
 
+        // Always save displayURL to state first
+        await MainActor.run {
+            gatewayHost = config.displayURL
+        }
+
+        // If not configured, clear everything
         guard config.isConfigured else {
             await MainActor.run {
                 isConnected = false
@@ -146,27 +180,37 @@ struct HomeView: View {
             return
         }
 
-        await MainActor.run {
-            isConnected = false
-            connectedDeviceName = ""
-            gatewayHost = config.displayURL
-        }
+        // Check current connection status from SessionManager
+        let currentlyConnected = await SessionManager.shared.connectionStatus
 
-        do {
-            try await SessionManager.shared.ensureConnected()
-            let connected = await SessionManager.shared.connectionStatus
+        if currentlyConnected {
+            // Already connected, update state
             let deviceName = await SessionManager.shared.deviceName ?? ""
-
             await MainActor.run {
-                isConnected = connected
+                isConnected = true
                 connectedDeviceName = deviceName
-                gatewayHost = config.displayURL
             }
-        } catch {
+        } else {
+            // Not connected
             await MainActor.run {
                 isConnected = false
                 connectedDeviceName = ""
-                gatewayHost = config.displayURL
+            }
+
+            // Only attempt auto-connect if enabled
+            if config.autoConnectOnLaunch {
+                do {
+                    try await SessionManager.shared.ensureConnected()
+                    let connected = await SessionManager.shared.connectionStatus
+                    let deviceName = await SessionManager.shared.deviceName ?? ""
+
+                    await MainActor.run {
+                        isConnected = connected
+                        connectedDeviceName = deviceName
+                    }
+                } catch {
+                    // Connection failed, state already set above
+                }
             }
         }
     }
