@@ -7,9 +7,6 @@ struct SmartChatAppApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .onAppear {
-                    ProfileManager.shared.migrateFromLegacyConfig()
-                }
         }
     }
 }
@@ -26,7 +23,7 @@ struct RootView: View {
         .preferredColorScheme(preferredScheme)
         .environment(\.theme, currentTheme)
         .task {
-            if config.autoConnectOnLaunch && config.isConfigured {
+            if config.autoConnectOnLaunch && ProfileManager.shared.activeProfile != nil {
                 try? await SessionManager.shared.ensureConnected()
             }
         }

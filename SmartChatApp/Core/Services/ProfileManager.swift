@@ -110,22 +110,6 @@ final class ProfileManager: ObservableObject {
         }
     }
 
-    func migrateFromLegacyConfig() {
-        guard profiles.isEmpty else { return }
-        let config = ConfigurationManager.shared
-        guard config.isConfigured else { return }
-
-        let profile = addProfile(
-            name: "Default",
-            colorTag: "#10A37F",
-            host: config.gatewayHost,
-            port: config.gatewayPort,
-            token: config.authToken,
-            tlsEnabled: config.gatewayUseTLS
-        )
-        activateProfile(profile)
-    }
-
     func getProfile(id: UUID) -> GatewayProfile? {
         profiles.first(where: { $0.id == id })
     }

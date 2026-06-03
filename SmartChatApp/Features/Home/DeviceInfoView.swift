@@ -2,7 +2,7 @@ import SwiftUI
 
 struct DeviceInfoView: View {
     private var deviceName: String {
-        ConfigurationManager.shared.isConfigured ? "Hai's iPhone" : "Not Connected"
+        ProfileManager.shared.activeProfile != nil ? "Hai's iPhone" : "Not Connected"
     }
 
     var body: some View {

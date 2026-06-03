@@ -19,7 +19,7 @@ struct HomeView: View {
     }
 
     private var hasProfile: Bool {
-        ProfileManager.shared.activeProfile != nil || ConfigurationManager.shared.isConfigured
+        ProfileManager.shared.activeProfile != nil
     }
 
     var body: some View {
@@ -132,11 +132,11 @@ struct HomeView: View {
                     isConnected = false
                     connectedDeviceName = ""
                 }
-                // Use active profile host, or legacy config if no profile
+                // Use active profile host
                 if let activeProfile = ProfileManager.shared.activeProfile {
                     gatewayHost = activeProfile.host
                 } else {
-                    gatewayHost = ConfigurationManager.shared.displayURL
+                    gatewayHost = ""
                 }
             }
         }
