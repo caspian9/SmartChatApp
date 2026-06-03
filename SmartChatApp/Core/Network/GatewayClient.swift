@@ -16,7 +16,7 @@ actor GatewayClient {
         self.activeURL = gatewayURL
 
         let connectOptions = GatewayConnectOptions(
-            role: "user",
+            role: "node",
             scopes: ["chat"],
             caps: ["sessions", "chat"],
             commands: [],
