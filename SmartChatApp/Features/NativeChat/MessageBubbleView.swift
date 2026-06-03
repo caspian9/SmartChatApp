@@ -70,7 +70,7 @@ struct MessageBubbleView: View {
         if textHeight <= maxCollapsedHeight + 20 && cachedLineCount <= 8 {
             return false
         }
-        return textHeight > maxCollapsedHeight
+        return textHeight >= maxCollapsedHeight + 10
     }
 
     var body: some View {
