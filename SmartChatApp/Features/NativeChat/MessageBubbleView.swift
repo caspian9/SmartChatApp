@@ -257,19 +257,16 @@ struct MessageBubbleView: View {
                 Text(message.text)
                     .font(.body)
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                    .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(isExpanded ? nil : maxCollapsedLines)
             }
 
             if shouldCollapse && !isExpanded {
                 Button {
-                    withAnimation {
-                        isExpanded = true
-                    }
+                    isExpanded = true
                 } label: {
                     Text("Show more...")
                         .font(.caption)
-                        .foregroundColor(message.isOutgoing ? .white : theme.primary)
+                        .foregroundColor(message.isOutgoing ? .white.opacity(0.8) : theme.primary)
                 }
                 .padding(.top, 4)
             }

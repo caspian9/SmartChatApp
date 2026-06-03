@@ -14,23 +14,22 @@ final class CollapseStateCache: @unchecked Sendable {
 
     func shouldCollapse(for message: ChatMessage) -> Bool {
         if let cached = cache[message.id] {
-            os_log("SMAlog: [CollapseCache] id=%{public}s hit=true value=%{public}03d", log: collapseLog, type: .debug, String(message.id.prefix(8)), cached ? 1 : 0)
             return cached
         }
         let computed = computeShouldCollapse(for: message)
         cache[message.id] = computed
-        os_log("SMAlog: [CollapseCache] id=%{public}s computed=%{public}03d stored=%{public}03d", log: collapseLog, type: .debug, String(message.id.prefix(8)), computed ? 1 : 0, cache[message.id] ?? false ? 1 : 0)
         return computed
     }
 
-    func precompute(for messages: [ChatMessage]) {
-        os_log("SMAlog: [CollapseCache] precompute count=%{public}d", log: collapseLog, type: .debug, messages.count)
+    func precompute(for messages: [ChatMessage], batchSize: Int = 50) {
+        var computedCount = 0
         for msg in messages {
             if cache[msg.id] == nil {
                 cache[msg.id] = computeShouldCollapse(for: msg)
+                computedCount += 1
             }
         }
-        os_log("SMAlog: [CollapseCache] cacheSize=%{public}d", log: collapseLog, type: .debug, cache.count)
+        os_log("SMAlog: [CollapseCache] precompute processed=%{public}d computed=%{public}d cacheSize=%{public}d", log: collapseLog, type: .debug, messages.count, computedCount, cache.count)
     }
 
     func remove(for messageId: String) {
@@ -51,6 +50,17 @@ final class CollapseStateCache: @unchecked Sendable {
         }
 
         let text = message.text
+        // Fast path: for very long content, estimate and return true without boundingRect
+        let estimatedLineCount = max(1, text.count / 40)
+        if estimatedLineCount >= 4 {
+            let estimatedHeight = CGFloat(estimatedLineCount) * 20
+            // If clearly exceeds threshold, return true without expensive boundingRect
+            if estimatedHeight >= maxCollapsedHeight + 40 {
+                return true
+            }
+        }
+
+        // Use boundingRect for accurate calculation
         let textHeight = text.boundingRect(
             with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
@@ -58,6 +68,8 @@ final class CollapseStateCache: @unchecked Sendable {
         ).height
         let lineHeight: CGFloat = 20
         let lineCount = Int(ceil(textHeight / lineHeight))
+
+        os_log("SMAlog: [CollapseCache] id=%{public}s text_len=%{public}d lines=%{public}d height=%{public}.1f", log: collapseLog, type: .debug, String(message.id.prefix(8)), text.count, lineCount, textHeight)
 
         if lineCount < 4 {
             return false

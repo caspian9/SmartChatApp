@@ -317,7 +317,12 @@ struct NativeChatViewModel {
                                 )
                             }
                             logger.log("SMAlog: Loaded \(chatMessages.count) cached messages for session: \(cachedSessionKeyPreview), isRestoring: \(cachedIsRestoring)")
-                            // Send cached messages to UI even if network fails
+                            // Precompute collapse and markdown states BEFORE sending to UI
+                            await MainActor.run {
+                                MarkdownCache.shared.precomputeForMessages(chatMessages)
+                                CollapseStateCache.shared.precompute(for: chatMessages)
+                            }
+                            // Send cached messages to UI
                             await send(.loadedCachedHistory(chatMessages, isRestoring: cachedIsRestoring))
                         }
 
