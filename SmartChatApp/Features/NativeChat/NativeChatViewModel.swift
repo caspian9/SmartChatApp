@@ -670,10 +670,40 @@ struct NativeChatViewModel {
                     state.scrollTrigger += 1
                     logger.log("SMAlog: updated message: \(message.id), text length: \(existingMessage.text.count), FINAL state: \(existingMessage.state)")
                 } else {
-                    // New message
-                    state.messages.append(message)
-                    state.scrollTrigger += 1
-                    logger.log("SMAlog: receiveMessage new - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)")
+                    // Fallback: id mismatch between streaming (id=runId) and cached
+                    // (id=server-id) can cause a second copy of the same logical
+                    // message to be appended. Match by role+text+timestamp and
+                    // update in place so the display doesn't accumulate duplicates
+                    // while the cache dedup (role|text|timestamp|usage) keeps
+                    // the disk count stable.
+                    let similarIndex = state.messages.firstIndex { existing in
+                        existing.role == message.role &&
+                        existing.text == message.text &&
+                        abs(existing.timestamp.timeIntervalSince(message.timestamp)) < 1.0
+                    }
+                    if let similarIndex = similarIndex {
+                        var existingMessage = state.messages[similarIndex]
+                        os_log("SMAlog: receiveMessage similar-match - newId=%{public}s existingId=%{public}s idx=%{public}d state=%{public}s", log: osLog, type: .debug, String(message.id.prefix(8)), String(existingMessage.id.prefix(8)), similarIndex, message.state)
+                        if !message.text.isEmpty {
+                            existingMessage.text = message.text
+                        }
+                        existingMessage.state = message.state
+                        if message.startedAt != nil { existingMessage.startedAt = message.startedAt }
+                        if message.endedAt != nil { existingMessage.endedAt = message.endedAt }
+                        if message.livenessState != nil { existingMessage.livenessState = message.livenessState }
+                        if message.seq != nil { existingMessage.seq = message.seq }
+                        if message.inputTokens != nil { existingMessage.inputTokens = message.inputTokens }
+                        if message.outputTokens != nil { existingMessage.outputTokens = message.outputTokens }
+                        if message.cacheRead != nil { existingMessage.cacheRead = message.cacheRead }
+                        if message.cacheWrite != nil { existingMessage.cacheWrite = message.cacheWrite }
+                        state.messages[similarIndex] = existingMessage
+                        state.scrollTrigger += 1
+                    } else {
+                        // New message
+                        state.messages.append(message)
+                        state.scrollTrigger += 1
+                        logger.log("SMAlog: receiveMessage new - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)")
+                    }
                 }
                 // When state is final, message reception is complete - reset sending state
                 if message.state == "final" {
