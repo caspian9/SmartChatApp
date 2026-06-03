@@ -162,7 +162,7 @@ struct ProfileListView: View {
                                     Spacer()
                                 }
                             }
-                            .disabled(editHost.isEmpty || editToken.isEmpty || isTesting)
+                            .disabled(editHost.isEmpty)
                         }
 
                         if let result = testResult {
