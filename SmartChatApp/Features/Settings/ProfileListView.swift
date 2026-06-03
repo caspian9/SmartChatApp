@@ -8,11 +8,6 @@ struct ProfileListView: View {
 
     // Edit state
     @State private var editingProfile: GatewayProfile?
-    @State private var editName = ""
-    @State private var editHost = ""
-    @State private var editPort = "443"
-    @State private var editToken = ""
-    @State private var editTlsEnabled = true
     @State private var isTesting = false
     @State private var isConnected = false
     @State private var testResult: String?
@@ -28,75 +23,6 @@ struct ProfileListView: View {
         _showNewProfileSheet = showNewProfileSheet
     }
 
-    private func startEditing(_ profile: GatewayProfile) {
-        editingProfile = profile
-        editName = profile.name
-        editHost = profile.host
-        editPort = String(profile.port)
-        editToken = profile.token
-        editTlsEnabled = profile.tlsEnabled
-        isTesting = false
-        isConnected = false
-        testResult = nil
-        testStatus = .idle
-    }
-
-    private func saveEdit() {
-        guard let profile = editingProfile,
-              let portInt = Int(editPort) else { return }
-        ProfileManager.shared.updateProfile(id: profile.id, name: editName, colorTag: "#10A37F", host: editHost, port: portInt, token: editToken, tlsEnabled: editTlsEnabled)
-        editingProfile = nil
-    }
-
-    private func testConnection() {
-        guard !editHost.isEmpty else { return }
-
-        isTesting = true
-        testResult = nil
-        testStatus = .testing
-
-        let port = Int(editPort) ?? 443
-        let scheme = editTlsEnabled ? "wss" : "ws"
-        let urlString = "\(scheme)://\(editHost):\(port)/gateway"
-
-        guard let url = URL(string: urlString) else {
-            isTesting = false
-            testStatus = .failure
-            testResult = "Invalid URL"
-            return
-        }
-
-        Task {
-            do {
-                try await SessionManager.shared.connectWithRole(gatewayURL: url, authToken: editToken, role: .operatorAndNode)
-                await MainActor.run {
-                    isTesting = false
-                    testStatus = .success
-                    testResult = "Connected"
-                    isConnected = true
-                }
-            } catch {
-                await MainActor.run {
-                    isTesting = false
-                    testStatus = .failure
-                    testResult = "Connection failed: \(error.localizedDescription)"
-                    isConnected = false
-                }
-            }
-        }
-    }
-
-    private func disconnectConnection() {
-        Task {
-            await SessionManager.shared.disconnect()
-            await MainActor.run {
-                isConnected = false
-                testResult = "Disconnected"
-                testStatus = .idle
-            }
-        }
-    }
-
     var body: some View {
         Group {
             if profileManager.profiles.isEmpty {
@@ -106,99 +32,10 @@ struct ProfileListView: View {
             }
         }
         .sheet(item: $editingProfile) { profile in
-            NavigationStack {
-                Form {
-                    Section("Profile") {
-                        TextField("Name", text: $editName)
-                            .foregroundColor(theme.textPrimary)
-                    }
-
-                    Section("Gateway Configuration") {
-                        TextField("Host (e.g., api.openclaw.ai)", text: $editHost)
-                            .foregroundColor(theme.textPrimary)
-                            .textContentType(.URL)
-                            .autocapitalization(.none)
-                            .keyboardType(.URL)
-
-                        TextField("Port", text: $editPort)
-                            .foregroundColor(theme.textPrimary)
-                            .keyboardType(.numberPad)
-
-                        Toggle("Use TLS/SSL", isOn: $editTlsEnabled)
-                            .foregroundColor(theme.textPrimary)
-                    }
-
-                    Section("Authentication") {
-                        SecureField("Auth Token", text: $editToken)
-                            .foregroundColor(theme.textPrimary)
-                            .textContentType(.password)
-                    }
-
-                    Section {
-                        HStack {
-                            Button(action: isConnected ? disconnectConnection : testConnection) {
-                                HStack {
-                                    Spacer()
-                                    if isTesting {
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle())
-                                        Text("Connecting...")
-                                    } else if isConnected {
-                                        Image(systemName: "link.badge.plus")
-                                        Text("Disconnect")
-                                            .foregroundColor(.red)
-                                    } else {
-                                        Image(systemName: "antenna.radiowaves.left.and.right")
-                                        Text("Connect")
-                                    }
-                                    Spacer()
-                                }
-                            }
-                            .disabled(isTesting)
-                        }
-
-                        if let result = testResult {
-                            HStack(spacing: 4) {
-                                Image(systemName: testStatus == TestStatus.success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                Text(result)
-                            }
-                            .font(.subheadline)
-                            .foregroundColor(testStatus == TestStatus.success ? .green : .red)
-                        }
-                    }
-
-                    Section {
-                        Button(role: .destructive) {
-                            if let id = editingProfile?.id {
-                                ProfileManager.shared.deleteProfile(id: id)
-                                editingProfile = nil
-                            }
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Image(systemName: "trash")
-                                Text("Delete Profile")
-                                Spacer()
-                            }
-                            .foregroundColor(.red)
-                        }
-                    }
-                }
-                .navigationTitle("Edit Profile")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") {
-                            editingProfile = nil
-                        }
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("Save") {
-                            saveEdit()
-                        }
-                        .disabled(editName.isEmpty)
-                    }
-                }
+            EditProfileSheet(profile: profile) { name, colorTag, host, port, token, tlsEnabled in
+                ProfileManager.shared.updateProfile(id: profile.id, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+            } onDelete: { id in
+                ProfileManager.shared.deleteProfile(id: id)
             }
         }
         .sheet(isPresented: $showNewProfileSheet) {
@@ -271,15 +108,19 @@ struct ProfileListView: View {
                         .foregroundColor(theme.primary)
                 }
                 .buttonStyle(.bordered)
+
+                Button {
+                    editingProfile = profile
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.caption)
+                        .foregroundColor(theme.primary)
+                }
+                .buttonStyle(.bordered)
             }
             .padding(.vertical, 8)
             .contentShape(Rectangle())
-            .contextMenu {
-                Button {
-                    startEditing(profile)
-                } label: {
-                    Label("Edit", systemImage: "pencil")
-                }
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(role: .destructive) {
                     profileToDelete = profile
                     showDeleteAlert = true
