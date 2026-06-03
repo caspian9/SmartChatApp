@@ -20,12 +20,22 @@ public actor GatewayChatTransport: OpenClawChatTransport {
                 paramsJSON: params
             )
             let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: responseData)
-            if let messages = payload.messages {
-                let decoded = messages.compactMap { msg -> OpenClawChatMessage? in
+
+            if let serverMessages = payload.messages {
+                let decoded = serverMessages.compactMap { msg -> OpenClawChatMessage? in
                     guard let data = try? JSONEncoder().encode(msg) else { return nil }
                     return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
                 }
-                await MessageCache.shared.setMessages(decoded, for: sessionKey)
+
+                let cachedIds = await MessageCache.shared.messageIds(for: sessionKey)
+                let hasNewMessages = decoded.contains { msg in
+                    guard let id = msg.id.uuidString as String? else { return false }
+                    return !cachedIds.contains(id)
+                }
+
+                if hasNewMessages {
+                    await MessageCache.shared.setMessages(decoded, for: sessionKey)
+                }
             }
             return payload
         } catch {
@@ -88,6 +98,27 @@ public actor GatewayChatTransport: OpenClawChatTransport {
 
         let jsonString = "{\(jsonParts.joined(separator: ", "))}"
         _ = try await nodeSession.request(method: "sessions.send", paramsJSON: jsonString)
+
+        let userMessage = OpenClawChatMessage(
+            role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: message,
+                thinking: nil,
+                thinkingSignature: nil,
+                mimeType: nil,
+                fileName: nil,
+                content: nil,
+                id: nil,
+                name: nil,
+                arguments: nil)],
+            timestamp: Date().timeIntervalSince1970 * 1000,
+            toolCallId: nil,
+            toolName: nil,
+            usage: nil,
+            stopReason: nil
+        )
+        await MessageCache.shared.appendMessages([userMessage], for: sessionKey)
 
         let responseJSON = "{\"runId\": \"\(idempotencyKey)\", \"status\": \"started\"}"
         return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: responseJSON.data(using: .utf8)!)
