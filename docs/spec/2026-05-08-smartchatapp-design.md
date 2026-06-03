@@ -1,5 +1,13 @@
 # SmartChatApp iOS 客户端需求文档
 
+> **Status: Historical (2026-05-08).** This document predates the
+> current code by a wide margin. For the authoritative description of
+> SmartChatApp as it exists today, see
+> [`../../CLAUDE.md`](../../CLAUDE.md) and
+> [`../../README.md`](../../README.md). This file is preserved as a
+> record of the original design intent and is not edited as the code
+> evolves.
+
 ## 1. 项目概述
 
 ### 项目名称
