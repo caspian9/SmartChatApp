@@ -7,19 +7,18 @@ struct ChatInputView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack(alignment: .topLeading) {
+            ZStack(alignment: .leading) {
                 if inputText.isEmpty {
                     Text("输入消息...")
                         .foregroundColor(.gray)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 8)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
                 }
                 TextField("", text: $inputText, axis: .vertical)
-                    .textFieldStyle(.plain)
                     .padding(.horizontal, 12)
-                    .padding(.top, 4)
+                    .padding(.vertical, 8)
                     .foregroundColor(.white)
-                    .lineLimit(1...3)
+                    .lineLimit(1...5)
                     .disabled(isSending)
             }
             .background(Color(hex: "2A2A2A"))
