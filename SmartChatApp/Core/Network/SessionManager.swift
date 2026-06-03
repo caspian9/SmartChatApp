@@ -70,14 +70,8 @@ actor SessionManager {
         case .nodeOnly:
             try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
         case .operatorAndNode:
+            try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
             try await connect(gatewayURL: gatewayURL, authToken: authToken)
-            if !nodeConnected {
-                do {
-                    try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
-                } catch {
-                    logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
-                }
-            }
         }
     }
 
@@ -400,14 +394,8 @@ actor SessionManager {
         case .nodeOnly:
             try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
         case .operatorAndNode:
+            try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
             try await connect(gatewayURL: url, authToken: profile.token)
-            if !nodeConnected {
-                do {
-                    try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
-                } catch {
-                    logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
-                }
-            }
         }
     }
 
@@ -430,17 +418,11 @@ actor SessionManager {
             return
         }
 
+        // Connect node first
+        try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
+
         // Connect operator
         try await connect(gatewayURL: url, authToken: profile.token)
-
-        // Connect node
-        if !nodeConnected {
-            do {
-                try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
-            } catch {
-                logger.log("log: Node connection failed (non-fatal): \(error.localizedDescription)")
-            }
-        }
     }
 
     func disconnect() async {
