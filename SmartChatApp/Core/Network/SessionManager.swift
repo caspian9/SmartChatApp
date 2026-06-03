@@ -337,25 +337,34 @@ actor SessionManager {
 
     /// Creates a new session on the gateway.
     ///
-    /// - Parameter agentId: Optional agent id to scope the new session to.
-    ///   When `nil`, the gateway falls back to `resolveDefaultAgentId(cfg)`
-    ///   — its configured default agent. Pass a specific agent id (parsed
-    ///   from a current session key, e.g. `agent:<id>:dashboard:<uuid>`)
-    ///   when the user has an existing session in view and you want the new
-    ///   session to land under the same agent instead of the gateway default.
-    func createSession(agentId: String? = nil) async throws -> String {
-        let paramsJSON: String?
+    /// - Parameters:
+    ///   - agentId: Optional agent id to scope the new session to.
+    ///     When `nil`, the gateway falls back to `resolveDefaultAgentId(cfg)`
+    ///     — its configured default agent. Pass a specific agent id (parsed
+    ///     from a current session key, e.g. `agent:<id>:dashboard:<uuid>`)
+    ///     when the user has an existing session in view and you want the new
+    ///     session to land under the same agent instead of the gateway default.
+    ///   - customKey: Optional full session key to request, e.g.
+    ///     `agent:<agentId>:SmartChatApp:<uuid>`. When provided, the gateway
+    ///     will use this key as-is (after its standard lowercase
+    ///     normalization). The keys's `agentId` portion must match the
+    ///     `agentId` parameter — the gateway rejects mismatches.
+    func createSession(agentId: String? = nil, customKey: String? = nil) async throws -> String {
+        var params: [String: String] = [:]
         if let agentId, !agentId.isEmpty {
-            // Escape the agentId in case it contains JSON-special characters.
-            // agentIds are normalized server-side (lowercased, ascii) so the
-            // escape is defensive — but it costs nothing and keeps the wire
-            // format safe.
-            let escaped = agentId
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-            paramsJSON = "{\"agentId\":\"\(escaped)\"}"
-        } else {
+            params["agentId"] = agentId
+        }
+        if let customKey, !customKey.isEmpty {
+            params["key"] = customKey
+        }
+        let paramsJSON: String?
+        if params.isEmpty {
             paramsJSON = nil
+        } else {
+            // Use the real JSON encoder rather than hand-stringifying — it
+            // handles escaping of `"`, `\`, control characters, etc.
+            let data = try JSONEncoder().encode(params)
+            paramsJSON = String(data: data, encoding: .utf8)
         }
         let responseData = try await operatorSession.request(
             method: "sessions.create",
