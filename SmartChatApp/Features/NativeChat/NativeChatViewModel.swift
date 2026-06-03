@@ -326,6 +326,61 @@ struct NativeChatViewModel {
                                         }
                                     }
                                 }
+                                // Append toolCall content if present (may append to existing text or create new entry)
+                                var hasToolCall = false
+                                var toolCallText = ""
+                                for contentItem in msg.content {
+                                    if contentItem.type == "toolCall", let name = contentItem.name {
+                                        hasToolCall = true
+                                        // Format toolCall info as text
+                                        var callText = "ToolCall: \(name)"
+                                        if let arguments = contentItem.arguments {
+                                            // Format all key-value pairs from arguments
+                                            var argsLines: [String] = []
+                                            if let dict = arguments.value as? [String: AnyCodable] {
+                                                for (key, anyCodable) in dict {
+                                                    let valueStr: String
+                                                    if key == "command", let str = anyCodable.value as? String {
+                                                        valueStr = str
+                                                    } else {
+                                                        valueStr = formatAnyCodableValue(anyCodable.value)
+                                                    }
+                                                    if !valueStr.isEmpty {
+                                                        argsLines.append("\(key): \(valueStr)")
+                                                    }
+                                                }
+                                            } else if let dict = arguments.value as? [String: Any] {
+                                                for (key, value) in dict {
+                                                    let valueStr: String
+                                                    if key == "command", let str = value as? String {
+                                                        valueStr = str
+                                                    } else {
+                                                        valueStr = formatAnyCodableValue(value)
+                                                    }
+                                                    if !valueStr.isEmpty {
+                                                        argsLines.append("\(key): \(valueStr)")
+                                                    }
+                                                }
+                                            }
+                                            if !argsLines.isEmpty {
+                                                callText += "\n" + argsLines.joined(separator: "\n")
+                                            }
+                                        }
+                                        if toolCallText.isEmpty {
+                                            toolCallText = callText
+                                        } else {
+                                            toolCallText += "\n\n" + callText
+                                        }
+                                    }
+                                }
+                                if hasToolCall {
+                                    if text.isEmpty {
+                                        text = toolCallText
+                                        role = "toolCall"
+                                    } else {
+                                        text = text + "\n\n" + toolCallText
+                                    }
+                                }
                                 os_log("SMAlog: history msg[%{public}d] contentItems=%{public}d text_len=%{private}d role=%{public}s", log: osLog, type: .debug, index, msg.content.count, text.count, role)
                                 if text.isEmpty {
                                     os_log("SMAlog: history msg[%{public}d] skipped - empty text, content: %{public}s", log: osLog, type: .debug, index, String(describing: msg.content))
@@ -614,5 +669,50 @@ struct NativeChatViewModel {
             }
         }
         return nil
+    }
+
+    private func formatAnyCodableValue(_ value: Any) -> String {
+        if let str = value as? String {
+            let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return "" }
+            let first = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+            if first.count > 160 { return String(first.prefix(157)) + "…" }
+            return first
+        }
+        if let num = value as? Int { return String(num) }
+        if let num = value as? Double { return String(num) }
+        if let bool = value as? Bool { return bool ? "true" : "false" }
+        if let array = value as? [Any] {
+            let items = array.compactMap { self.formatAnyCodableValue($0) }
+            guard !items.isEmpty else { return "" }
+            let preview = items.prefix(3).joined(separator: ", ")
+            return items.count > 3 ? "\(preview)…" : preview
+        }
+        if let dict = value as? [String: Any] {
+            let keys = ["name", "id", "command", "action", "path", "node", "nodeId"]
+            for key in keys {
+                if let label = dict[key] {
+                    let str = formatAnyCodableValue(label)
+                    if !str.isEmpty { return str }
+                }
+            }
+        }
+        if let dict = value as? [String: AnyCodable] {
+            let keys = ["name", "id", "command", "action", "path", "node", "nodeId"]
+            for key in keys {
+                if let anyCodable = dict[key] {
+                    let formatted = formatAnyCodableValue(anyCodable.value)
+                    if !formatted.isEmpty { return formatted }
+                }
+            }
+            // Generic scan for first non-empty string value
+            for (_, anyCodable) in dict {
+                let formatted = formatAnyCodableValue(anyCodable.value)
+                if !formatted.isEmpty {
+                    return formatted
+                }
+            }
+        }
+        return ""
     }
 }

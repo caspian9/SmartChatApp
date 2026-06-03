@@ -58,6 +58,17 @@ struct MessageBubbleView: View {
                             .cornerRadius(4)
                     }
 
+                    // ToolCall badge
+                    if message.role == "toolCall" {
+                        Text("ToolCall")
+                            .font(.caption2)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange)
+                            .cornerRadius(4)
+                    }
+
                     if let startedAt = message.startedAt {
                         Text(formatTime(startedAt))
                             .font(.caption2)
@@ -162,7 +173,7 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var messageText: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if shouldRenderMarkdown && message.role != "toolResult" {
+            if shouldRenderMarkdown && message.role != "toolResult" && message.role != "thinking" {
                 MarkdownCardView(content: message.text)
                     .frame(minHeight: 30, alignment: .topLeading)
                     .background(
@@ -175,14 +186,20 @@ struct MessageBubbleView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: isExpanded ? nil : maxCollapsedHeight, alignment: .topLeading)
                     .clipped()
+            } else if message.role == "thinking" {
+                ThinkingCardView(content: message.text)
             } else if message.role == "toolResult" {
                 Text(formatJsonText(message.text))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
                     .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if message.role == "thinking" {
-                ThinkingCardView(content: message.text)
+            } else if message.role == "toolCall" {
+                Text(message.text)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+                    .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(message.text)
                     .font(.body)
