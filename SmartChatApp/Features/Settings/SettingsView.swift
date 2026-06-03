@@ -145,46 +145,35 @@ struct ConnectionConfigSheet: View {
                 }
 
                 Section {
-                    if isConnected {
-                        HStack {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 8, height: 8)
-                            Text("Connected: \(connectedDeviceName)")
-                                .foregroundColor(theme.primary)
-                        }
-
-                        Button(action: disconnectConnection) {
-                            HStack {
-                                Spacer()
-                                Text("Disconnect")
-                                    .foregroundColor(.red)
-                                Spacer()
-                            }
-                        }
-                    } else {
-                        Button(action: testConnection) {
+                    HStack {
+                        Button(action: isConnected ? disconnectConnection : testConnection) {
                             HStack {
                                 Spacer()
                                 if isTesting {
                                     ProgressView()
                                         .progressViewStyle(CircularProgressViewStyle())
                                     Text("Connecting...")
+                                } else if isConnected {
+                                    Image(systemName: "link.badge.plus")
+                                    Text("Disconnect")
+                                        .foregroundColor(.red)
                                 } else {
+                                    Image(systemName: "antenna.radiowaves.left.and.right")
                                     Text("Connect")
                                 }
                                 Spacer()
                             }
                         }
                         .disabled(serverHost.isEmpty || authToken.isEmpty || isTesting)
-                    }
 
-                    if let result = testResult {
-                        HStack {
-                            Image(systemName: testStatus == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundColor(testStatus == .success ? theme.primary : .red)
-                            Text(result)
-                                .foregroundColor(testStatus == .success ? theme.primary : .red)
+                        if let result = testResult {
+                            HStack(spacing: 4) {
+                                Image(systemName: testStatus == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                Text(result)
+                            }
+                            .font(.subheadline)
+                            .foregroundColor(testStatus == .success ? .green : .red)
+                            .padding(.leading, 8)
                         }
                     }
                 }
@@ -272,7 +261,7 @@ struct ConnectionConfigSheet: View {
                     connectedDeviceName = deviceName
                     isTesting = false
                     testStatus = .success
-                    testResult = "Connected successfully!"
+                    testResult = "Connected"
                     isConnected = true
                 }
 

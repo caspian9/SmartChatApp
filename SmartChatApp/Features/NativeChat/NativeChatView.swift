@@ -74,7 +74,10 @@ struct NativeChatView: View {
             .onTapGesture { isInputFocused = false }
             .onAppear {
                 logger.log("SMAlog: messageScrollView onAppear, messages: \(store.messages.count)")
-                scheduleScroll(proxy: proxy)
+                // Scroll to bottom immediately without animation
+                if let lastId = store.messages.last?.id {
+                    proxy.scrollTo(lastId, anchor: .bottom)
+                }
             }
             .onChange(of: store.messages.count) { count in
                 logger.log("SMAlog: messages.count changed to \(count)")
@@ -91,6 +94,19 @@ struct NativeChatView: View {
                     logger.log("SMAlog: triggering immediate scroll to \(String(id.prefix(8)))")
                     DispatchQueue.main.async {
                         proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: store.needsScrollToBottom) { needsScroll in
+                if needsScroll {
+                    let lastId = store.messages.last?.id
+                    logger.log("SMAlog: needsScrollToBottom true, lastId: \(lastId?.prefix(8) ?? "nil")")
+                    if let id = lastId {
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(id, anchor: .bottom)
+                        }
+                        // Reset after scrolling
+                        store.send(.setNeedsScrollToBottom(false))
                     }
                 }
             }
