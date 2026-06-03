@@ -5,7 +5,15 @@ import ComposableArchitecture
 struct SmartChatAppApp: App {
     var body: some Scene {
         WindowGroup {
-            Text("Hello, SmartChatApp")
+            NavigationStack {
+                ChatListView(
+                    store: Store(
+                        initialState: ChatListFeature.State(),
+                        reducer: { ChatListFeature() }
+                    )
+                )
+            }
+            .preferredColorScheme(.dark)
         }
     }
 }

@@ -11,6 +11,7 @@ struct ChatListFeature {
 
     enum Action: Equatable {
         case loadSessions
+        case loadedSessions([ChatSession])
         case createSession
         case deleteSession(String)
         case selectSession(ChatSession)
@@ -52,7 +53,4 @@ struct ChatListFeature {
         }
     }
 
-    private func loadedSessions(_ sessions: [ChatSession]) -> Action {
-        .loadedSessions(sessions)
-    }
 }
