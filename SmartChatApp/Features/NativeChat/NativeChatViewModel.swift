@@ -39,7 +39,7 @@ struct NativeChatViewModel {
         case sessionCreated(String)
         case setSelectedProfile(UUID?)
         case switchProfile(UUID)
-        case profileSwitched(UUID)
+        case finishSwitchingGateway
         case updateInputText(String)
         case sendMessage
         case loadHistory
@@ -178,17 +178,41 @@ struct NativeChatViewModel {
                 }
                 let previousProfileId = state.selectedProfileId
                 state.selectedProfileId = newProfileId
-                state.sessions = []
                 state.selectedSession = nil
                 state.messages = []
-                state.isRestoringFromCache = false
-                state.isLoading = true
                 state.isSwitchingGateway = true
                 state.error = nil
                 logger.log("SMAlog: switchProfile from \(previousProfileId?.uuidString.prefix(8) ?? "nil") to \(newProfileId.uuidString.prefix(8))")
+
+                // Load cache immediately for fast display, consistent with loadSessions flow
+                var hasCache = false
+                if let cached = SessionCache.load(for: newProfileId), !cached.isEmpty {
+                    state.sessions = cached
+                    state.isRestoringFromCache = true
+                    let lastKey = UserDefaults.standard.string(forKey: lastSelectedSessionKey(for: newProfileId))
+                    if let key = lastKey, let lastSession = cached.first(where: { $0.key == key }) {
+                        state.selectedSession = lastSession
+                    } else if let first = cached.first {
+                        state.selectedSession = first
+                    }
+                    state.isRestoringFromCache = false
+                    hasCache = true
+                } else {
+                    state.sessions = []
+                    state.isRestoringFromCache = false
+                    state.isLoading = true
+                }
+
                 let profileIdCapture = newProfileId
+                let hadCache = hasCache
                 return .run { send in
                     Task {
+                        // If we have a cached session selected, kick off history load
+                        // so the chat panel isn't empty while we wait for the network switch
+                        if hadCache {
+                            await send(.loadHistory)
+                        }
+
                         let profile = await MainActor.run {
                             ProfileManager.shared.getProfile(id: profileIdCapture)
                         }
@@ -198,14 +222,28 @@ struct NativeChatViewModel {
                             return
                         }
                         await ProfileManager.shared.switchToProfile(profile)
-                        logger.log("SMAlog: switchProfile - active profile switched, loading sessions")
-                        await send(.profileSwitched(profileIdCapture))
+                        logger.log("SMAlog: switchProfile - active profile switched, fetching network sessions")
+
+                        // Fetch from network now that the new gateway is connected
+                        do {
+                            try await SessionManager.shared.ensureConnected()
+                            try await Task.sleep(for: .milliseconds(100))
+                            let transport = await SessionManager.shared.makeTransport(sessionKey: "")
+                            let response = try await transport.listSessions(limit: 50)
+                            await send(.loadedSessions(response.sessions))
+                        } catch {
+                            logger.log("SMAlog: Load sessions after switch error: \(error.localizedDescription)")
+                            // Cache (if any) is already shown, so just clear the loading flag
+                            await send(.setError(error.localizedDescription))
+                        }
+                        await send(.finishSwitchingGateway)
                     }
                 }
 
-            case .profileSwitched:
+            case .finishSwitchingGateway:
                 state.isSwitchingGateway = false
-                return .send(.loadSessions)
+                state.isLoading = false
+                return .none
 
             case .createSession:
                 state.isLoading = true
