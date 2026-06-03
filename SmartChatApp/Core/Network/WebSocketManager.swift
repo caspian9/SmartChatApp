@@ -1,9 +1,16 @@
 import Foundation
 
-actor WebSocketManager {
-    private var webSocketTask: URLWebSocketTask?
+final class WebSocketManager: @unchecked Sendable {
+    private var webSocketTask: URLSessionWebSocketTask?
     private let url: URL
-    private var isConnected = false
+    private var _isConnected = false
+    private let lock = NSLock()
+
+    var isConnected: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isConnected
+    }
 
     init(url: URL) {
         self.url = url
@@ -14,7 +21,9 @@ actor WebSocketManager {
         request.timeoutInterval = 30
         webSocketTask = URLSession.shared.webSocketTask(with: request)
         webSocketTask?.resume()
-        isConnected = true
+        lock.lock()
+        _isConnected = true
+        lock.unlock()
     }
 
     func send(_ frame: String) async throws {
@@ -50,8 +59,10 @@ actor WebSocketManager {
         }
     }
 
-    func disconnect() async {
-        isConnected = false
+    func disconnect() {
+        lock.lock()
+        _isConnected = false
+        lock.unlock()
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
     }

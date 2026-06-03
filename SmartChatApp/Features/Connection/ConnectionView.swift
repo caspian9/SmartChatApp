@@ -5,46 +5,48 @@ struct ConnectionView: View {
     let store: StoreOf<ConnectionFeature>
 
     var body: some View {
-        Form {
-            Section("Server Configuration") {
-                TextField("Gateway URL", text: $store.state.serverURL)
-                    .textContentType(.URL)
-                    .autocapitalization(.none)
-                    .keyboardType(.URL)
+        WithViewStore(store, observe: { $0 }) { viewStore in
+            Form {
+                Section("Server Configuration") {
+                    TextField("Gateway URL", text: viewStore.binding(\.serverURL))
+                        .textContentType(.URL)
+                        .autocapitalization(.none)
+                        .keyboardType(.URL)
 
-                SecureField("Auth Token", text: $store.state.authToken)
-                    .textContentType(.password)
-            }
-
-            Section {
-                if store.state.isConnecting {
-                    HStack {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
-                        Text("Connecting...")
-                            .foregroundColor(.gray)
-                    }
-                } else {
-                    Button(action: { store.send(.connect) }) {
-                        HStack {
-                            Spacer()
-                            Text(store.state.isConnected ? "Disconnect" : "Connect")
-                                .foregroundColor(store.state.isConnected ? .red : Color(hex: "10A37F"))
-                            Spacer()
-                        }
-                    }
-                    .disabled(store.state.serverURL.isEmpty)
+                    SecureField("Auth Token", text: viewStore.binding(\.authToken))
+                        .textContentType(.password)
                 }
-            }
 
-            if let error = store.state.error {
                 Section {
-                    Text(error)
-                        .foregroundColor(.red)
-                        .font(.caption)
+                    if viewStore.isConnecting {
+                        HStack {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                            Text("Connecting...")
+                                .foregroundColor(.gray)
+                        }
+                    } else {
+                        Button(action: { viewStore.send(.connect) }) {
+                            HStack {
+                                Spacer()
+                                Text(viewStore.isConnected ? "Disconnect" : "Connect")
+                                    .foregroundColor(viewStore.isConnected ? .red : Color(hex: "10A37F"))
+                                Spacer()
+                            }
+                        }
+                        .disabled(viewStore.serverURL.isEmpty)
+                    }
+                }
+
+                if let error = viewStore.error {
+                    Section {
+                        Text(error)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                    }
                 }
             }
+            .navigationTitle("Connection")
         }
-        .navigationTitle("Connection")
     }
 }
