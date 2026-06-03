@@ -18,9 +18,23 @@ struct MessageBubbleView: View {
                     .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
                     .cornerRadius(12)
 
-                Text(formatTime(message.timestamp))
-                    .font(.caption2)
-                    .foregroundColor(.gray)
+                HStack(spacing: 8) {
+                    if let startedAt = message.startedAt {
+                        Text(formatTime(startedAt))
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                    if let endedAt = message.endedAt {
+                        Text("→ \(formatTime(endedAt))")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                    if message.livenessState == "working" && message.state == "streaming" {
+                        Text("●")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    }
+                }
             }
 
             if !message.isOutgoing {
@@ -43,8 +57,12 @@ struct ChatMessage: Identifiable, Equatable {
     var text: String
     let timestamp: Date
     let role: String
-    var state: String  // "in_progress", "final"
+    var state: String  // "streaming", "final"
     let runId: String?
+    var seq: Int?
+    var startedAt: Date?
+    var endedAt: Date?
+    var livenessState: String?
     let toolCallId: String?
     let toolName: String?
     let stopReason: String?

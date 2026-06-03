@@ -117,6 +117,10 @@ struct NativeChatViewModel {
                     role: "user",
                     state: "final",
                     runId: nil,
+                    seq: nil,
+                    startedAt: nil,
+                    endedAt: nil,
+                    livenessState: nil,
                     toolCallId: nil,
                     toolName: nil,
                     stopReason: nil
@@ -133,7 +137,7 @@ struct NativeChatViewModel {
                                 for await evt in transport.events() {
                                     await MainActor.run {
                                         Task {
-                                            await handleChatEvent(evt, sessionKey: sessionKey, send: send)
+                                            await handleTransportEvent(evt, sessionKey: sessionKey, send: send)
                                         }
                                     }
                                 }
@@ -193,6 +197,10 @@ struct NativeChatViewModel {
                                     role: msg.role,
                                     state: "final",
                                     runId: nil,
+                                    seq: nil,
+                                    startedAt: nil,
+                                    endedAt: nil,
+                                    livenessState: nil,
                                     toolCallId: msg.toolCallId,
                                     toolName: msg.toolName,
                                     stopReason: msg.stopReason
@@ -219,6 +227,10 @@ struct NativeChatViewModel {
                     var existingMessage = state.messages[existingIndex]
                     existingMessage.text = message.text
                     existingMessage.state = message.state
+                    if message.startedAt != nil { existingMessage.startedAt = message.startedAt }
+                    if message.endedAt != nil { existingMessage.endedAt = message.endedAt }
+                    if message.livenessState != nil { existingMessage.livenessState = message.livenessState }
+                    if message.seq != nil { existingMessage.seq = message.seq }
                     state.messages[existingIndex] = existingMessage
                     logger.log("SMAlog: updated message: \(message.id), text length: \(message.text.count), state: \(message.state)")
                 } else {
@@ -245,8 +257,87 @@ struct NativeChatViewModel {
         }
     }
 
-    private func handleChatEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
+    private func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
         switch event {
+        case .agent(let payload):
+            logger.log("SMAlog: agent event - stream: \(payload.stream), runId: \(payload.runId)")
+            let runId = payload.runId
+            let ts = payload.ts ?? 0
+            let timestamp = Date(timeIntervalSince1970: Double(ts) / 1000)
+            let data = payload.data
+
+            // Extract phase
+            let phase = extractString(from: data, key: "phase")
+            let startedAtMs = extractDouble(from: data, key: "startedAt")
+            let endedAtMs = extractDouble(from: data, key: "endedAt")
+            let livenessState = extractString(from: data, key: "livenessState")
+
+            if phase == "start" {
+                // Start of a new run
+                let message = ChatMessage(
+                    id: runId,
+                    text: "",
+                    timestamp: timestamp,
+                    role: "assistant",
+                    state: "streaming",
+                    runId: runId,
+                    seq: nil,
+                    startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : timestamp,
+                    endedAt: nil,
+                    livenessState: livenessState,
+                    toolCallId: nil,
+                    toolName: nil,
+                    stopReason: nil
+                )
+                await send(.receiveMessage(message))
+                logger.log("SMAlog: agent start - runId: \(runId), startedAt: \(startedAtMs)")
+            } else if phase == "end" {
+                // End of run - update existing message or create final message
+                let message = ChatMessage(
+                    id: runId,
+                    text: "",
+                    timestamp: timestamp,
+                    role: "assistant",
+                    state: "final",
+                    runId: runId,
+                    seq: nil,
+                    startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : nil,
+                    endedAt: endedAtMs > 0 ? Date(timeIntervalSince1970: endedAtMs / 1000) : timestamp,
+                    livenessState: livenessState,
+                    toolCallId: nil,
+                    toolName: nil,
+                    stopReason: nil
+                )
+                await send(.receiveMessage(message))
+                logger.log("SMAlog: agent end - runId: \(runId), endedAt: \(endedAtMs)")
+                // Reset sending state when run ends
+                await send(.setSending(false))
+            } else {
+                // Assistant stream - update text with delta
+                let text = extractString(from: data, key: "text") ?? ""
+                let _ = extractString(from: data, key: "delta")
+
+                if !text.isEmpty {
+                    let message = ChatMessage(
+                        id: runId,
+                        text: text,
+                        timestamp: timestamp,
+                        role: "assistant",
+                        state: "streaming",
+                        runId: runId,
+                        seq: nil,
+                        startedAt: nil,
+                        endedAt: nil,
+                        livenessState: livenessState,
+                        toolCallId: nil,
+                        toolName: nil,
+                        stopReason: nil
+                    )
+                    await send(.receiveMessage(message))
+                    logger.log("SMAlog: agent text - runId: \(runId), text length: \(text.count)")
+                }
+            }
+
         case .chat(let payload):
             logger.log("SMAlog: chat event - state: \(payload.state ?? "nil")")
             if let msgAny = payload.message {
@@ -262,27 +353,51 @@ struct NativeChatViewModel {
                         break
                     }
                 }
-                // Always create/update message - even if text is empty for assistant messages
                 let message = ChatMessage(
                     id: chatMsg.id.uuidString,
                     text: text,
                     timestamp: Date(timeIntervalSince1970: (chatMsg.timestamp ?? 0) / 1000),
                     role: chatMsg.role,
-                    state: payload.state ?? "in_progress",
+                    state: payload.state ?? "final",
                     runId: payload.runId,
+                    seq: nil,
+                    startedAt: nil,
+                    endedAt: nil,
+                    livenessState: nil,
                     toolCallId: chatMsg.toolCallId,
                     toolName: chatMsg.toolName,
                     stopReason: chatMsg.stopReason
                 )
                 await send(.receiveMessage(message))
             }
+
         case .sessionMessage, .tick, .seqGap:
-            // Ignored - only handle .chat events
+            // Ignored
             break
-        case .agent(let payload):
-            logger.log("SMAlog: agent event - stream: \(payload.stream)")
+
         case .health(let ok):
             logger.log("SMAlog: health check: \(ok)")
         }
+    }
+
+    private func extractString(from data: [String: AnyCodable], key: String) -> String? {
+        if let value = data[key] {
+            if let str = value.value as? String {
+                return str
+            }
+        }
+        return nil
+    }
+
+    private func extractDouble(from data: [String: AnyCodable], key: String) -> Double {
+        if let value = data[key] {
+            if let d = value.value as? Double {
+                return d
+            }
+            if let i = value.value as? Int {
+                return Double(i)
+            }
+        }
+        return 0
     }
 }
