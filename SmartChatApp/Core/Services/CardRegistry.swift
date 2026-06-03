@@ -13,6 +13,7 @@ public final class CardRegistry: Observable {
         register(VideoToolResult())
         register(ButtonToolResult())
         register(ImageToolResult())
+        register(MarkdownToolResult())
     }
 
     public func register(_ handler: CardToolResult) {
@@ -51,6 +52,10 @@ public final class CardRegistry: Observable {
             if let imageData = data as? ImageCardData {
                 ImageCardView(data: imageData)
             }
+        case .markdown:
+            if let markdownData = data as? MarkdownCardData {
+                MarkdownCardView(content: markdownData.content)
+            }
         }
     }
 }
@@ -60,6 +65,38 @@ public enum CardType: String {
     case video
     case button
     case image
+    case markdown
+}
+
+public extension CardRegistry {
+    static func containsMarkdown(content: String) -> Bool {
+        let markdownPatterns = [
+            "^#{1,6}\\s",           // Headers (# to ######)
+            "\\*\\*[^*]+\\*\\*",    // Bold (**text**)
+            "\\*[^*]+\\*",          // Italic (*text*)
+            "```",                  // Code blocks
+            "`[^`]+`",              // Inline code
+            "\\[[^\\]]+\\]\\([^)]+\\)", // Links [text](url)
+            "^[\\-\\*]\\s",         // List items (- or *)
+            "^\\d+\\.\\s",          // Numbered lists
+            ">\\s",                 // Blockquotes
+            "\\|.*\\|.*\\|",        // Tables
+        ]
+
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = trimmedContent.components(separatedBy: .newlines)
+
+        for pattern in markdownPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else { continue }
+            for line in lines {
+                let range = NSRange(line.startIndex..., in: line)
+                if regex.firstMatch(in: line, options: [], range: range) != nil {
+                    return true
+                }
+            }
+        }
+        return false
+    }
 }
 
 public protocol CardToolResult {

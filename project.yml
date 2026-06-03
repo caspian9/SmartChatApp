@@ -23,6 +23,9 @@ packages:
     from: "1.9.3"
   OpenClawKit:
     path: /Users/hai/Code/openclaw/apps/shared/OpenClawKit
+  MarkdownDisplayView:
+    url: https://github.com/zjc19891106/MarkdownDisplayView.git
+    from: "1.7.8"
 
 targets:
   SmartChatApp:
@@ -47,6 +50,8 @@ targets:
         product: OpenClawProtocol
       - package: OpenClawKit
         product: OpenClawChatUI
+      - package: MarkdownDisplayView
+        product: MarkdownDisplayView
     info:
       path: SmartChatApp/Info.plist
       properties:
