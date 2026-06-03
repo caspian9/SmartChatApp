@@ -3,24 +3,15 @@ import SwiftData
 
 struct ProfileListView: View {
     @Environment(\.theme) private var theme
-    @Environment(\.modelContext) private var modelContext
     @Query(sort: \GatewayProfile.createdAt) private var profiles: [GatewayProfile]
-    @State private var showEditSheet = false
-    @State private var editingProfile: GatewayProfile?
+    @State private var selectedProfile: GatewayProfile?
     @State private var showDeleteAlert = false
     @State private var profileToDelete: GatewayProfile?
 
-    private let colorOptions = ["#10A37F", "#3B82F6", "#F97316", "#EF4444", "#8B5CF6"]
+    @Binding var showNewProfileSheet: Bool
 
-    private func colorName(for hex: String) -> String {
-        switch hex {
-        case "#10A37F": return "green"
-        case "#3B82F6": return "blue"
-        case "#F97316": return "orange"
-        case "#EF4444": return "red"
-        case "#8B5CF6": return "purple"
-        default: return "custom"
-        }
+    init(showNewProfileSheet: Binding<Bool> = .constant(false)) {
+        _showNewProfileSheet = showNewProfileSheet
     }
 
     var body: some View {
@@ -31,11 +22,14 @@ struct ProfileListView: View {
                 profileList
             }
         }
-        .sheet(isPresented: $showEditSheet) {
-            ProfileEditSheet(profile: editingProfile) { name, colorTag, host, port, token, tlsEnabled in
-                if let profile = editingProfile {
-                    ProfileManager.shared.updateProfile(profile, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
-                }
+        .sheet(item: $selectedProfile) { profile in
+            ProfileEditSheet(profile: profile) { name, colorTag, host, port, token, tlsEnabled in
+                ProfileManager.shared.updateProfile(profile, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+            }
+        }
+        .sheet(isPresented: $showNewProfileSheet) {
+            ProfileEditSheet(profile: nil) { name, colorTag, host, port, token, tlsEnabled in
+                _ = ProfileManager.shared.addProfile(name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
             }
         }
         .alert("Delete Profile", isPresented: $showDeleteAlert) {
@@ -59,8 +53,7 @@ struct ProfileListView: View {
                 .font(.subheadline)
                 .foregroundColor(theme.textSecondary)
             Button {
-                editingProfile = nil
-                showEditSheet = true
+                showNewProfileSheet = true
             } label: {
                 Label("Add Profile", systemImage: "plus")
             }
@@ -75,7 +68,6 @@ struct ProfileListView: View {
                 Circle()
                     .fill(Color(hex: profile.colorTag))
                     .frame(width: 12, height: 12)
-                    .accessibilityLabel("Color: \(colorName(for: profile.colorTag))")
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(profile.name)
@@ -110,8 +102,7 @@ struct ProfileListView: View {
             .contentShape(Rectangle())
             .contextMenu {
                 Button {
-                    editingProfile = profile
-                    showEditSheet = true
+                    selectedProfile = profile
                 } label: {
                     Label("Edit", systemImage: "pencil")
                 }

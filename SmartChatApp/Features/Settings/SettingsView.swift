@@ -4,6 +4,7 @@ import UIKit
 struct SettingsView: View {
     @Environment(\.theme) private var theme
     @StateObject private var config = ConfigurationManager.shared
+    @State private var showNewProfile = false
     @State private var sessionCacheCount: Int = 0
     @State private var messageCacheStats: (sessionCount: Int, messageCount: Int) = (0, 0)
 
@@ -25,8 +26,8 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Gateway") {
-                ProfileListView()
+            Section {
+                ProfileListView(showNewProfileSheet: $showNewProfile)
 
                 DisclosureGroup("Advanced") {
                     Toggle("Gateway Debug Logs", isOn: $config.gatewayDebugLogs)
@@ -43,6 +44,18 @@ struct SettingsView: View {
                         }
                     NavigationLink("Discovery Logs") {
                         DiscoveryLogsView()
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Gateway")
+                    Spacer()
+                    Button {
+                        showNewProfile = true
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.blue)
+                            .font(.system(size: 18))
                     }
                 }
             }
