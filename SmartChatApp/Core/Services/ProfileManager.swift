@@ -100,9 +100,7 @@ final class ProfileManager: ObservableObject {
             await SessionManager.shared.disconnect()
         }
         activateProfile(profile)
-        if let profile = profile {
-            await SessionManager.shared.connectWithProfile(profile)
-        }
+        await SessionManager.shared.connectWithProfile(profile)
     }
 
     private func saveContext() {
