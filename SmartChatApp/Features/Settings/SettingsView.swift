@@ -7,10 +7,15 @@ struct SettingsView: View {
     @State private var isConnected = false
     @State private var connectedDeviceName = ""
 
+    private static let buildDate: Date = {
+        // Capture build time at app launch - this becomes the static constant
+        return Date()
+    }()
+
     private var buildDateString: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        return formatter.string(from: Date())
+        return formatter.string(from: Self.buildDate)
     }
 
     var body: some View {
