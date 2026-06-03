@@ -1,12 +1,27 @@
 import SwiftUI
-import SwiftData
 
 struct ProfileListView: View {
     @Environment(\.theme) private var theme
-    @Query(sort: \GatewayProfile.createdAt) private var profiles: [GatewayProfile]
-    @State private var selectedProfile: GatewayProfile?
+    @ObservedObject private var profileManager = ProfileManager.shared
     @State private var showDeleteAlert = false
     @State private var profileToDelete: GatewayProfile?
+
+    // Edit state
+    @State private var isEditing = false
+    @State private var editingProfileId: UUID?
+    @State private var editName = ""
+    @State private var editHost = ""
+    @State private var editPort = "443"
+    @State private var editToken = ""
+    @State private var editTlsEnabled = true
+    @State private var isTesting = false
+    @State private var isConnected = false
+    @State private var testResult: String?
+    @State private var testStatus: TestStatus = .idle
+
+    enum TestStatus {
+        case idle, testing, success, failure
+    }
 
     @Binding var showNewProfileSheet: Bool
 
@@ -14,17 +29,168 @@ struct ProfileListView: View {
         _showNewProfileSheet = showNewProfileSheet
     }
 
+    private func startEditing(_ profile: GatewayProfile) {
+        editingProfileId = profile.id
+        editName = profile.name
+        editHost = profile.host
+        editPort = String(profile.port)
+        editToken = profile.token
+        editTlsEnabled = profile.tlsEnabled
+        isEditing = true
+        checkConnectionStatus()
+    }
+
+    private func checkConnectionStatus() {
+        Task {
+            let connected = await SessionManager.shared.connectionStatus
+            await MainActor.run {
+                isConnected = connected
+            }
+        }
+    }
+
+    private func saveEdit() {
+        guard let id = editingProfileId,
+              let portInt = Int(editPort) else { return }
+        ProfileManager.shared.updateProfile(id: id, name: editName, colorTag: "#10A37F", host: editHost, port: portInt, token: editToken, tlsEnabled: editTlsEnabled)
+        isEditing = false
+    }
+
+    private func testConnection() {
+        guard !editHost.isEmpty else { return }
+
+        isTesting = true
+        testResult = nil
+        testStatus = .testing
+
+        let port = Int(editPort) ?? 443
+        let scheme = editTlsEnabled ? "wss" : "ws"
+        let urlString = "\(scheme)://\(editHost):\(port)/gateway"
+
+        guard let url = URL(string: urlString) else {
+            isTesting = false
+            testStatus = .failure
+            testResult = "Invalid URL"
+            return
+        }
+
+        Task {
+            do {
+                try await SessionManager.shared.connectWithRole(gatewayURL: url, authToken: editToken, role: .operatorAndNode)
+                await MainActor.run {
+                    isTesting = false
+                    testStatus = .success
+                    testResult = "Connected"
+                    isConnected = true
+                }
+            } catch {
+                await MainActor.run {
+                    isTesting = false
+                    testStatus = .failure
+                    testResult = "Connection failed: \(error.localizedDescription)"
+                    isConnected = false
+                }
+            }
+        }
+    }
+
+    private func disconnectConnection() {
+        Task {
+            await SessionManager.shared.disconnect()
+            await MainActor.run {
+                isConnected = false
+                testResult = "Disconnected"
+                testStatus = .idle
+            }
+        }
+    }
+
     var body: some View {
         Group {
-            if profiles.isEmpty {
+            if profileManager.profiles.isEmpty {
                 emptyState
             } else {
                 profileList
             }
         }
-        .sheet(item: $selectedProfile) { profile in
-            ProfileEditSheet(profile: profile) { name, colorTag, host, port, token, tlsEnabled in
-                ProfileManager.shared.updateProfile(profile, name: name, colorTag: colorTag, host: host, port: port, token: token, tlsEnabled: tlsEnabled)
+        .sheet(isPresented: $isEditing) {
+            NavigationStack {
+                Form {
+                    Section("Profile") {
+                        TextField("Name", text: $editName)
+                            .foregroundColor(theme.textPrimary)
+                    }
+
+                    Section("Gateway Configuration") {
+                        TextField("Host (e.g., api.openclaw.ai)", text: $editHost)
+                            .foregroundColor(theme.textPrimary)
+                            .textContentType(.URL)
+                            .autocapitalization(.none)
+                            .keyboardType(.URL)
+
+                        TextField("Port", text: $editPort)
+                            .foregroundColor(theme.textPrimary)
+                            .keyboardType(.numberPad)
+
+                        Toggle("Use TLS/SSL", isOn: $editTlsEnabled)
+                            .foregroundColor(theme.textPrimary)
+                    }
+
+                    Section("Authentication") {
+                        SecureField("Auth Token", text: $editToken)
+                            .foregroundColor(theme.textPrimary)
+                            .textContentType(.password)
+                    }
+
+                    Section {
+                        HStack {
+                            Button(action: isConnected ? disconnectConnection : testConnection) {
+                                HStack {
+                                    Spacer()
+                                    if isTesting {
+ ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle())
+                                        Text("Connecting...")
+                                    } else if isConnected {
+                                        Image(systemName: "link.badge.plus")
+                                        Text("Disconnect")
+                                            .foregroundColor(.red)
+                                    } else {
+                                        Image(systemName: "antenna.radiowaves.left.and.right")
+                                        Text("Connect")
+                                    }
+                                    Spacer()
+                                }
+                            }
+                            .disabled(editHost.isEmpty || editToken.isEmpty || isTesting)
+                        }
+
+                        if let result = testResult {
+                            HStack(spacing: 4) {
+                                Image(systemName: testStatus == TestStatus.success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                Text(result)
+                            }
+                            .font(.subheadline)
+                            .foregroundColor(testStatus == TestStatus.success ? .green : .red)
+                        }
+                    }
+
+                    Section {
+                        Button("Save") {
+                            saveEdit()
+                        }
+                        .disabled(editName.isEmpty || editHost.isEmpty || editToken.isEmpty)
+                    }
+                }
+                .navigationTitle("Edit Profile")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            isEditing = false
+                        }
+                    }
+                }
             }
         }
         .sheet(isPresented: $showNewProfileSheet) {
@@ -36,7 +202,7 @@ struct ProfileListView: View {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
                 if let profile = profileToDelete {
-                    ProfileManager.shared.deleteProfile(profile)
+                    ProfileManager.shared.deleteProfile(id: profile.id)
                 }
             }
         } message: {
@@ -63,7 +229,7 @@ struct ProfileListView: View {
     }
 
     private var profileList: some View {
-        ForEach(profiles) { profile in
+        ForEach(profileManager.profiles) { profile in
             HStack(spacing: 12) {
                 Circle()
                     .fill(Color(hex: profile.colorTag))
@@ -96,12 +262,13 @@ struct ProfileListView: View {
                         .font(.caption)
                         .foregroundColor(theme.primary)
                 }
+                .buttonStyle(.bordered)
             }
             .padding(.vertical, 8)
             .contentShape(Rectangle())
             .contextMenu {
                 Button {
-                    selectedProfile = profile
+                    startEditing(profile)
                 } label: {
                     Label("Edit", systemImage: "pencil")
                 }

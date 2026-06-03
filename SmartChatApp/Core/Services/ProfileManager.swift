@@ -1,5 +1,4 @@
 import Foundation
-import SwiftData
 import OSLog
 
 private let profileLog = Logger(subsystem: "SmartChatApp", category: "ProfileManager")
@@ -8,34 +7,44 @@ private let profileLog = Logger(subsystem: "SmartChatApp", category: "ProfileMan
 final class ProfileManager: ObservableObject {
     static let shared = ProfileManager()
 
-    var modelContainer: ModelContainer?
+    private let defaults = UserDefaults.standard
+    private let storageKey = "gateway_profiles"
 
     @Published var profiles: [GatewayProfile] = []
     @Published var activeProfile: GatewayProfile?
 
-    private init() {}
-
-    func configure(with container: ModelContainer) {
-        self.modelContainer = container
+    private init() {
         loadProfiles()
     }
 
     func loadProfiles() {
-        guard let context = modelContainer?.mainContext else { return }
+        guard let data = defaults.data(forKey: storageKey) else {
+            profiles = []
+            activeProfile = nil
+            return
+        }
         do {
-            let descriptor = FetchDescriptor<GatewayProfile>(sortBy: [SortDescriptor(\.createdAt)])
-            profiles = try context.fetch(descriptor)
+            profiles = try JSONDecoder().decode([GatewayProfile].self, from: data)
+            profiles.sort { $0.createdAt < $1.createdAt }
             activeProfile = profiles.first(where: { $0.isActive })
             profileLog.log("SMAlog: [ProfileManager] Loaded \(self.profiles.count) profiles, active: \(self.activeProfile?.name ?? "none")")
         } catch {
-            profileLog.log("SMAlog: [ProfileManager] Failed to fetch profiles: \(error.localizedDescription)")
+            profileLog.log("SMAlog: [ProfileManager] Failed to decode profiles: \(error.localizedDescription)")
+            profiles = []
+            activeProfile = nil
+        }
+    }
+
+    private func saveProfiles() {
+        do {
+            let data = try JSONEncoder().encode(profiles)
+            defaults.set(data, forKey: storageKey)
+        } catch {
+            profileLog.log("SMAlog: [ProfileManager] Failed to save profiles: \(error.localizedDescription)")
         }
     }
 
     func addProfile(name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool) -> GatewayProfile {
-        guard let context = modelContainer?.mainContext else {
-            fatalError("ModelContext not initialized")
-        }
         let profile = GatewayProfile(
             name: name,
             colorTag: colorTag,
@@ -44,44 +53,46 @@ final class ProfileManager: ObservableObject {
             token: token,
             tlsEnabled: tlsEnabled
         )
-        context.insert(profile)
-        saveContext()
-        loadProfiles()
+        profiles.append(profile)
+        saveProfiles()
         profileLog.log("SMAlog: [ProfileManager] Added profile: \(name)")
         return profile
     }
 
-    func updateProfile(_ profile: GatewayProfile, name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool) {
-        profile.name = name
-        profile.colorTag = colorTag
-        profile.host = host
-        profile.port = port
-        profile.token = token
-        profile.tlsEnabled = tlsEnabled
-        profile.updatedAt = Date()
-        saveContext()
-        loadProfiles()
+    func updateProfile(id: UUID, name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool) {
+        guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+        profiles[index].name = name
+        profiles[index].colorTag = colorTag
+        profiles[index].host = host
+        profiles[index].port = port
+        profiles[index].token = token
+        profiles[index].tlsEnabled = tlsEnabled
+        profiles[index].updatedAt = Date()
+        saveProfiles()
     }
 
-    func deleteProfile(_ profile: GatewayProfile) {
-        guard let context = modelContainer?.mainContext else { return }
-        let wasActive = profile.isActive
-        context.delete(profile)
-        saveContext()
-        loadProfiles()
+    func deleteProfile(id: UUID) {
+        guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+        let wasActive = profiles[index].isActive
+        profiles.remove(at: index)
+        saveProfiles()
         if wasActive {
-            activateProfile(profiles.first)
+            activeProfile = profiles.first
+            if let active = activeProfile {
+                activateProfile(active)
+            }
         }
     }
 
     func activateProfile(_ profile: GatewayProfile?) {
-        guard let context = modelContainer?.mainContext else { return }
-        for p in profiles {
-            p.isActive = false
+        for i in profiles.indices {
+            profiles[i].isActive = false
         }
-        profile?.isActive = true
+        if let profile = profile, let index = profiles.firstIndex(where: { $0.id == profile.id }) {
+            profiles[index].isActive = true
+        }
         activeProfile = profile
-        saveContext()
+        saveProfiles()
         profileLog.log("SMAlog: [ProfileManager] Activated profile: \(profile?.name ?? "none")")
     }
 
@@ -99,15 +110,6 @@ final class ProfileManager: ObservableObject {
         }
     }
 
-    private func saveContext() {
-        guard let context = modelContainer?.mainContext else { return }
-        do {
-            try context.save()
-        } catch {
-            profileLog.log("SMAlog: [ProfileManager] Failed to save: \(error.localizedDescription)")
-        }
-    }
-
     func migrateFromLegacyConfig() {
         guard profiles.isEmpty else { return }
         let config = ConfigurationManager.shared
@@ -122,5 +124,9 @@ final class ProfileManager: ObservableObject {
             tlsEnabled: config.gatewayUseTLS
         )
         activateProfile(profile)
+    }
+
+    func getProfile(id: UUID) -> GatewayProfile? {
+        profiles.first(where: { $0.id == id })
     }
 }

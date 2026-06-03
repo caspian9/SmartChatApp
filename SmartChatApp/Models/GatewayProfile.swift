@@ -1,9 +1,7 @@
 import Foundation
-import SwiftData
 
-@Model
-final class GatewayProfile {
-    var id: UUID
+struct GatewayProfile: Codable, Identifiable, Equatable {
+    let id: UUID
     var name: String
     var colorTag: String
     var host: String
