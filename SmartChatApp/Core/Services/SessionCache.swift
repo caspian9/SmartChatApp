@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 
 struct CachedSessions: Codable {
     let sessions: [OpenClawChatSessionEntry]
