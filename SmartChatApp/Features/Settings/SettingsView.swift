@@ -7,14 +7,14 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Server") {
-                TextField("Gateway URL", text: $store.state.serverURL)
+                TextField("Gateway URL", text: binding(for: \.serverURL))
                     .textContentType(.URL)
 
-                SecureField("Auth Token", text: $store.state.authToken)
+                SecureField("Auth Token", text: binding(for: \.authToken))
             }
 
             Section("Appearance") {
-                Toggle("Dark Mode", isOn: $store.state.isDarkMode)
+                Toggle("Dark Mode", isOn: binding(for: \.isDarkMode))
             }
 
             Section("About") {
@@ -27,5 +27,20 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+    }
+
+    private func binding<T>(for keyPath: WritableKeyPath<SettingsFeature.State, T>) -> Binding<T> {
+        Binding(
+            get: { store.state[keyPath: keyPath] },
+            set: { newValue in
+                if keyPath == \.serverURL {
+                    store.send(.serverURLChanged(newValue as! String))
+                } else if keyPath == \.authToken {
+                    store.send(.authTokenChanged(newValue as! String))
+                } else if keyPath == \.isDarkMode {
+                    store.send(.darkModeToggled(newValue as! Bool))
+                }
+            }
+        )
     }
 }
