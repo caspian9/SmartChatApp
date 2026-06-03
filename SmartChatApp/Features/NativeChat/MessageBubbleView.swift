@@ -236,25 +236,25 @@ struct MessageBubbleView: View {
                 MarkdownCardView(content: message.text)
             } else if message.role == "thinking" {
                 ThinkingCardView(content: message.text)
-                    .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
+                    .lineLimit(collapseLineLimit)
             } else if message.role == "toolResult" {
                 Text(formatJsonText(message.text))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                    .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
+                    .lineLimit(collapseLineLimit)
             } else if message.role == "toolCall" {
                 Text(message.text)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                    .lineLimit(shouldCollapse ? (isExpanded ? nil : maxCollapsedLines) : nil)
+                    .lineLimit(collapseLineLimit)
             } else {
                 Text(message.text)
                     .font(.body)
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                    .lineLimit(isExpanded ? nil : maxCollapsedLines)
+                    .lineLimit(collapseLineLimit)
             }
 
-            if shouldCollapse && !isExpanded {
+            if shouldCollapse && !isExpanded && message.state != "streaming" {
                 Button {
                     isExpanded = true
                 } label: {
@@ -265,6 +265,18 @@ struct MessageBubbleView: View {
                 .padding(.top, 4)
             }
         }
+    }
+
+    private var collapseLineLimit: Int? {
+        // During streaming, always show the full text so the user can read
+        // the response as it arrives. Collapse only applies after the run ends.
+        if message.state == "streaming" {
+            os_log("SMAlog: [collapseLineLimit] id=%{public}s state=%{public}s -> nil (streaming, full text)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.state)
+            return nil
+        }
+        let limit = isExpanded ? nil : maxCollapsedLines
+        os_log("SMAlog: [collapseLineLimit] id=%{public}s state=%{public}s -> %{public}s (post-streaming)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.state, limit.map(String.init) ?? "nil")
+        return limit
     }
 
     private var shouldShowExpandButton: Bool {
