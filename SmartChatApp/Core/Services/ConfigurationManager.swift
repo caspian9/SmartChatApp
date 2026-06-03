@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 enum AppearanceTheme: String, CaseIterable {
     case system = "System"
@@ -17,6 +18,10 @@ final class ConfigurationManager: ObservableObject {
         static let gatewayUseTLS = "openclaw_gateway_use_tls"
         static let authToken = "openclaw_auth_token"
         static let appearanceTheme = "openclaw_appearance_theme"
+        static let autoConnectOnLaunch = "openclaw_auto_connect"
+        static let deviceDisplayName = "openclaw_device_name"
+        static let gatewayDebugLogs = "openclaw_gateway_debug"
+        static let discoveryDebugLogs = "openclaw_discovery_debug"
     }
 
     @Published var gatewayHost: String {
@@ -49,6 +54,30 @@ final class ConfigurationManager: ObservableObject {
         }
     }
 
+    @Published var autoConnectOnLaunch: Bool {
+        didSet {
+            defaults.set(autoConnectOnLaunch, forKey: Keys.autoConnectOnLaunch)
+        }
+    }
+
+    @Published var deviceDisplayName: String {
+        didSet {
+            defaults.set(deviceDisplayName, forKey: Keys.deviceDisplayName)
+        }
+    }
+
+    @Published var gatewayDebugLogs: Bool {
+        didSet {
+            defaults.set(gatewayDebugLogs, forKey: Keys.gatewayDebugLogs)
+        }
+    }
+
+    @Published var discoveryDebugLogs: Bool {
+        didSet {
+            defaults.set(discoveryDebugLogs, forKey: Keys.discoveryDebugLogs)
+        }
+    }
+
     private init() {
         self.gatewayHost = defaults.string(forKey: Keys.gatewayHost) ?? ""
 
@@ -67,6 +96,11 @@ final class ConfigurationManager: ObservableObject {
         } else {
             self.appearanceTheme = .system
         }
+
+        self.autoConnectOnLaunch = defaults.object(forKey: Keys.autoConnectOnLaunch) as? Bool ?? false
+        self.deviceDisplayName = defaults.string(forKey: Keys.deviceDisplayName) ?? UIDevice.current.name
+        self.gatewayDebugLogs = defaults.object(forKey: Keys.gatewayDebugLogs) as? Bool ?? false
+        self.discoveryDebugLogs = defaults.object(forKey: Keys.discoveryDebugLogs) as? Bool ?? false
     }
 
     func clear() {

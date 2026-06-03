@@ -18,6 +18,12 @@ struct SettingsView: View {
         return formatter.string(from: Self.buildDate)
     }
 
+    private var openClawVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(version) (\(build))"
+    }
+
     var body: some View {
         Form {
             Section("OpenClaw Gateway") {
@@ -52,10 +58,45 @@ struct SettingsView: View {
                     }
                 }
 
+                Toggle("Auto-connect on launch", isOn: $config.autoConnectOnLaunch)
+
                 Button("Configure Connection") {
                     showConnectionSheet = true
                 }
                 .foregroundColor(theme.primary)
+            }
+
+            Section("Device") {
+                HStack {
+                    Text("Name")
+                    Spacer()
+                    TextField("Device Name", text: $config.deviceDisplayName)
+                        .multilineTextAlignment(.trailing)
+                        .foregroundColor(theme.textSecondary)
+                }
+
+                HStack {
+                    Text("Device ID")
+                    Spacer()
+                    Text(connectedDeviceName.isEmpty ? "—" : String(connectedDeviceName.prefix(16)))
+                        .foregroundColor(theme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                HStack {
+                    Text("Connection Role")
+                    Spacer()
+                    Text("operator")
+                        .foregroundColor(theme.textSecondary)
+                }
+
+                HStack {
+                    Text("OpenClaw SDK Version")
+                    Spacer()
+                    Text(openClawVersion)
+                        .foregroundColor(theme.textSecondary)
+                }
             }
 
             Section("Appearance") {
@@ -63,6 +104,24 @@ struct SettingsView: View {
                     ForEach(AppearanceTheme.allCases, id: \.self) { theme in
                         Text(theme.rawValue).tag(theme)
                     }
+                }
+            }
+
+            Section("Debug") {
+                Toggle("Gateway Debug Logs", isOn: $config.gatewayDebugLogs)
+                    .onChange(of: config.gatewayDebugLogs) { _, newValue in
+                        Task {
+                            await SessionManager.shared.setDebugLoggingEnabled(newValue)
+                        }
+                    }
+                Toggle("Discovery Debug Logs", isOn: $config.discoveryDebugLogs)
+                    .onChange(of: config.discoveryDebugLogs) { _, newValue in
+                        Task {
+                            await SessionManager.shared.setDiscoveryDebugLoggingEnabled(newValue)
+                        }
+                    }
+                NavigationLink("Discovery Logs") {
+                    DiscoveryLogsView()
                 }
             }
 
