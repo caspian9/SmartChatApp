@@ -6,9 +6,11 @@ struct ChatView: View {
     let sessionKey: String
     @State private var viewModel: OpenClawChatViewModel
     @State private var isDisconnecting = false
+    private let transport: any OpenClawChatTransport
 
     init(sessionKey: String, transport: any OpenClawChatTransport) {
         self.sessionKey = sessionKey
+        self.transport = transport
         _viewModel = State(initialValue: OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
@@ -55,8 +57,8 @@ struct ChatView: View {
     private func disconnectSession() {
         isDisconnecting = true
         Task {
-            if let transport = viewModel.transport as? GatewayChatTransport {
-                await transport.disconnect()
+            if let gatewayTransport = transport as? GatewayChatTransport {
+                await gatewayTransport.disconnect()
             }
             await MainActor.run {
                 isDisconnecting = false
