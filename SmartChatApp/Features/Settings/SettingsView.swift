@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import OpenClawKit
 
 struct SettingsView: View {
     @Environment(\.theme) private var theme
@@ -77,6 +78,13 @@ struct SettingsView: View {
                     Text("System")
                     Spacer()
                     Text(UIDevice.current.systemName + " " + UIDevice.current.systemVersion)
+                        .foregroundColor(theme.textSecondary)
+                }
+
+                HStack {
+                    Text("Device ID")
+                    Spacer()
+                    Text(String(DeviceIdentityStore.loadOrCreate().deviceId.prefix(16)))
                         .foregroundColor(theme.textSecondary)
                 }
             }
