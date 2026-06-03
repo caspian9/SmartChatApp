@@ -235,11 +235,11 @@ struct MessageBubbleView: View {
                             }
                         }
                     )
-                    .frame(maxWidth: .infinity, maxHeight: isExpanded ? nil : maxCollapsedHeight, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, maxHeight: isExpanded ? nil : safeHeight, alignment: .topLeading)
                     .clipped()
             } else if message.role == "thinking" {
                 ThinkingCardView(content: message.text)
-                    .frame(maxWidth: .infinity, maxHeight: isExpanded ? nil : maxCollapsedHeight, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, maxHeight: isExpanded ? nil : safeHeight, alignment: .topLeading)
                     .clipped()
             } else if message.role == "toolResult" {
                 Text(formatJsonText(message.text))
@@ -281,6 +281,10 @@ struct MessageBubbleView: View {
 
     private var shouldCollapse: Bool {
         CollapseStateCache.shared.shouldCollapse(for: message)
+    }
+
+    private var safeHeight: CGFloat {
+        CollapseStateCache.shared.safeCollapseHeight(for: message) ?? maxCollapsedHeight
     }
 
     private var lineCount: Int {

@@ -8,36 +8,90 @@ private let collapseLog = OSLog(subsystem: "SmartChatApp", category: "CollapseSt
 final class CollapseStateCache: @unchecked Sendable {
     static let shared = CollapseStateCache()
 
-    private var cache: [String: Bool] = [:]  // messageId -> shouldCollapse
+    private var shouldCollapseCache: [String: Bool] = [:]  // messageId -> shouldCollapse
+    private var safeHeightCache: [String: CGFloat] = [:]  // messageId -> safeCollapseHeight
 
     private let maxCollapsedHeight: CGFloat = 150
 
     func shouldCollapse(for message: ChatMessage) -> Bool {
-        if let cached = cache[message.id] {
+        if let cached = shouldCollapseCache[message.id] {
             return cached
         }
         let computed = computeShouldCollapse(for: message)
-        cache[message.id] = computed
+        shouldCollapseCache[message.id] = computed
         return computed
+    }
+
+    /// Returns safe collapse height - the height at which no line is cut mid-way
+    /// Only meaningful if shouldCollapse is true, returns nil otherwise
+    func safeCollapseHeight(for message: ChatMessage) -> CGFloat? {
+        if let cached = safeHeightCache[message.id] {
+            return cached
+        }
+        // Only compute if text is non-empty
+        guard !message.text.isEmpty else { return nil }
+
+        // Compute the safe height using boundingRect methodology
+        let text = message.text
+        let maxWidth = UIScreen.main.bounds.width * 0.65
+
+        // For markdown: variable line heights, find last incomplete row boundary
+        // Simulate line-by-line rendering to find safe cutoff
+        let lineHeight: CGFloat = 18  // Consistent line height for plain text fallback
+        let spacing: CGFloat = 4  // VStack spacing
+
+        // Use boundingRect to find approximate total height
+        let totalHeight = text.boundingRect(
+            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        ).height
+
+        // Calculate how many lines fit within maxCollapsedHeight + tolerance
+        // Use 1 buffer row to ensure we don't cut mid-text
+        let availableLines = maxCollapsedHeight / lineHeight
+        let safeLines = min(floor(availableLines), 8)  // Max 8 lines, round down
+
+        // Calculate final height aligning to line boundary
+        var safeHeight: CGFloat = 0
+        if safeLines >= 1 {
+            safeHeight = lineHeight * safeLines + spacing * (safeLines - 1)
+        } else {
+            safeHeight = maxCollapsedHeight
+        }
+
+        // Cap at maxCollapsedHeight + tolerance for safety
+        let maxAllowed = maxCollapsedHeight + 20
+        if safeHeight > maxAllowed {
+            safeHeight = maxAllowed
+        }
+
+        safeHeightCache[message.id] = safeHeight
+        os_log("SMAlog: [CollapseCache safeHeight] id=%{public}s totalHeight=%{public}.1f safeHeight=%{public}.1f lines=%{public}.1f",
+               log: collapseLog, type: .debug, String(message.id.prefix(8)), totalHeight, safeHeight, safeLines)
+
+        return safeHeight
     }
 
     func precompute(for messages: [ChatMessage], batchSize: Int = 50) {
         var computedCount = 0
         for msg in messages {
-            if cache[msg.id] == nil {
-                cache[msg.id] = computeShouldCollapse(for: msg)
+            if shouldCollapseCache[msg.id] == nil {
+                shouldCollapseCache[msg.id] = computeShouldCollapse(for: msg)
                 computedCount += 1
             }
         }
-        os_log("SMAlog: [CollapseCache] precompute processed=%{public}d computed=%{public}d cacheSize=%{public}d", log: collapseLog, type: .debug, messages.count, computedCount, cache.count)
+        os_log("SMAlog: [CollapseCache] precompute processed=%{public}d computed=%{public}d cacheSize=%{public}d", log: collapseLog, type: .debug, messages.count, computedCount, shouldCollapseCache.count)
     }
 
     func remove(for messageId: String) {
-        cache.removeValue(forKey: messageId)
+        shouldCollapseCache.removeValue(forKey: messageId)
+        safeHeightCache.removeValue(forKey: messageId)
     }
 
     func clear() {
-        cache.removeAll()
+        shouldCollapseCache.removeAll()
+        safeHeightCache.removeAll()
     }
 
     private func computeShouldCollapse(for message: ChatMessage) -> Bool {
