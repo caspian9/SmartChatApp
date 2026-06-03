@@ -9,20 +9,18 @@ struct ChatListView: View {
 
     var body: some View {
         List {
+            if isLoading && sessions.isEmpty {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+                .listRowBackground(Color(hex: "1E1E1E"))
+            }
+
             ForEach(sessions) { session in
                 NavigationLink(destination: sessionView(for: session)) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(session.displayName ?? String(session.key.prefix(8)))
-                            .font(.headline)
-                            .foregroundColor(.white)
-
-                        if let updatedAt = session.updatedAt {
-                            Text(formatDate(updatedAt))
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
-                    }
-                    .padding(.vertical, 8)
+                    SessionRowView(session: session)
                 }
                 .listRowBackground(Color(hex: "1E1E1E"))
             }
@@ -32,6 +30,9 @@ struct ChatListView: View {
         }
         .listStyle(.plain)
         .background(Color.black)
+        .refreshable {
+            await loadSessionsAsync()
+        }
         .navigationTitle("Chats")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
@@ -50,6 +51,17 @@ struct ChatListView: View {
             }
         }
         .onAppear { loadSessions() }
+    }
+
+    private func loadSessionsAsync() async {
+        do {
+            try await SessionManager.shared.ensureConnected()
+            let transport = SessionManager.shared.makeTransport(sessionKey: "")
+            let response = try await transport.listSessions(limit: 50)
+            sessions = response.sessions
+        } catch {
+            print("Failed to load sessions: \(error)")
+        }
     }
 
     @ViewBuilder
@@ -100,6 +112,65 @@ struct ChatListView: View {
                 print("Failed to create session: \(error)")
             }
         }
+    }
+}
+
+struct SessionRowView: View {
+    let session: OpenClawChatSessionEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(session.displayName ?? String(session.key.prefix(8)))
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                Spacer()
+
+                if let model = session.model {
+                    Text(model)
+                        .font(.caption2)
+                        .foregroundColor(Color(hex: "10A37F"))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(hex: "10A37F").opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+
+            HStack(spacing: 12) {
+                if let updatedAt = session.updatedAt {
+                    Text(formatDate(updatedAt))
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                if let inputTokens = session.inputTokens, let outputTokens = session.outputTokens {
+                    Text("\(inputTokens + outputTokens) tokens")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                if let thinkingLevel = session.thinkingLevel, thinkingLevel != "off" {
+                    Text("💭 \(thinkingLevel)")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
+            if session.abortedLastRun == true {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                    Text("Run interrupted")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+            }
+        }
+        .padding(.vertical, 6)
     }
 
     private func formatDate(_ timestamp: Double) -> String {
