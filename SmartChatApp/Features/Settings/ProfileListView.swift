@@ -36,11 +36,13 @@ struct ProfileListView: View {
         editPort = String(profile.port)
         editToken = profile.token
         editTlsEnabled = profile.tlsEnabled
-        isEditing = true
         isTesting = false
         isConnected = false
         testResult = nil
         testStatus = .idle
+        DispatchQueue.main.async {
+            isEditing = true
+        }
     }
 
     private func saveEdit() {
