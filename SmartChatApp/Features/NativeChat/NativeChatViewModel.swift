@@ -4,6 +4,7 @@ import OpenClawChatUI
 
 @Reducer
 struct NativeChatViewModel {
+    @ObservableState
     struct State: Equatable {
         var sessions: [OpenClawChatSessionEntry] = []
         var selectedSession: OpenClawChatSessionEntry?

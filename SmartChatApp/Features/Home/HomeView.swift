@@ -1,7 +1,9 @@
 import SwiftUI
+import ComposableArchitecture
 
 struct HomeView: View {
     @State private var showChatList = false
+    @State private var showNativeChat = false
 
     var body: some View {
         VStack(spacing: 40) {
@@ -12,7 +14,7 @@ struct HomeView: View {
                     title: "Native Chat",
                     icon: "bubble.left.and.bubble.right",
                     action: {
-                        // TODO: Navigate to NativeChatView
+                        showNativeChat = true
                     }
                 )
 
@@ -34,6 +36,13 @@ struct HomeView: View {
         .navigationTitle("SmartChatApp")
         .navigationDestination(isPresented: $showChatList) {
             ChatListView()
+        }
+        .navigationDestination(isPresented: $showNativeChat) {
+            NativeChatView(
+                store: StoreOf<NativeChatViewModel>(initialState: NativeChatViewModel.State()) {
+                    NativeChatViewModel()
+                }
+            )
         }
     }
 }
