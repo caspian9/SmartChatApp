@@ -40,6 +40,16 @@ struct NativeChatViewModel {
         Reduce { state, action in
             switch action {
             case .loadSessions:
+                // First load from cache
+                if let cached = SessionCache.load(), !cached.isEmpty {
+                    logger.log("SMAlog: Loaded \(cached.count) cached sessions")
+                    state.sessions = cached
+                    if state.selectedSession == nil, let first = cached.first {
+                        state.selectedSession = first
+                        return .send(.loadHistory)
+                    }
+                }
+                // Then fetch from network
                 state.isLoading = true
                 state.error = nil
                 return .run { send in
@@ -60,6 +70,7 @@ struct NativeChatViewModel {
             case .loadedSessions(let sessions):
                 state.sessions = sessions
                 state.isLoading = false
+                SessionCache.save(sessions)
                 if let first = sessions.first {
                     let firstKeyPreview = String(first.key.prefix(12))
                     logger.log("SMAlog: first session key: \(firstKeyPreview), surface: \(first.surface ?? "nil")")
