@@ -177,8 +177,8 @@ struct ConnectionConfigSheet: View {
 
         Task {
             do {
-                let client = OpenClawClient(gatewayURL: url)
-                _ = try await client.connect(authToken: authToken)
+                let client = GatewayClient()
+                _ = try await client.connect(gatewayURL: url, authToken: authToken)
                 await client.disconnect()
 
                 await MainActor.run {

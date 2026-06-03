@@ -2,11 +2,9 @@ import SwiftUI
 import ComposableArchitecture
 
 struct ConnectionView: View {
+    @StateObject private var store = StoreOf<ConnectionFeature>(ConnectionFeature())
     @State private var serverURL: String = ""
     @State private var authToken: String = ""
-    @State private var isConnecting: Bool = false
-    @State private var isConnected: Bool = false
-    @State private var errorMessage: String?
 
     var body: some View {
         Form {
@@ -15,13 +13,19 @@ struct ConnectionView: View {
                     .textContentType(.URL)
                     .autocapitalization(.none)
                     .keyboardType(.URL)
+                    .onChange(of: serverURL) { _, newValue in
+                        store.send(.serverURLChanged(newValue))
+                    }
 
                 SecureField("Auth Token", text: $authToken)
                     .textContentType(.password)
+                    .onChange(of: authToken) { _, newValue in
+                        store.send(.authTokenChanged(newValue))
+                    }
             }
 
             Section {
-                if isConnecting {
+                if store.isConnecting {
                     HStack {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle())
@@ -29,11 +33,13 @@ struct ConnectionView: View {
                             .foregroundColor(.gray)
                     }
                 } else {
-                    Button(action: connect) {
+                    Button(action: {
+                        store.send(.connect)
+                    }) {
                         HStack {
                             Spacer()
-                            Text(isConnected ? "Disconnect" : "Connect")
-                                .foregroundColor(isConnected ? .red : Color(hex: "10A37F"))
+                            Text(store.isConnected ? "Disconnect" : "Connect")
+                                .foregroundColor(store.isConnected ? .red : Color(hex: "10A37F"))
                             Spacer()
                         }
                     }
@@ -41,7 +47,7 @@ struct ConnectionView: View {
                 }
             }
 
-            if let error = errorMessage {
+            if let error = store.error {
                 Section {
                     Text(error)
                         .foregroundColor(.red)
@@ -50,20 +56,5 @@ struct ConnectionView: View {
             }
         }
         .navigationTitle("Connection")
-    }
-
-    private func connect() {
-        guard !serverURL.isEmpty else {
-            errorMessage = "Server URL is required"
-            return
-        }
-        isConnecting = true
-        errorMessage = nil
-
-        Task {
-            try? await Task.sleep(for: .seconds(1))
-            isConnecting = false
-            isConnected = true
-        }
     }
 }
