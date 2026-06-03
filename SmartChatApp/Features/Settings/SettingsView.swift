@@ -155,6 +155,28 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Cache") {
+                Button("Clear Session Cache") {
+                    SessionCache.clear()
+                }
+                .foregroundColor(.red)
+
+                Button("Clear Message Cache") {
+                    Task {
+                        await MessageCache.shared.clearAll()
+                    }
+                }
+                .foregroundColor(.red)
+
+                Button("Clear All Caches") {
+                    SessionCache.clear()
+                    Task {
+                        await MessageCache.shared.clearAll()
+                    }
+                }
+                .foregroundColor(.red)
+            }
+
             Section("About") {
                 HStack {
                     Text("Version")
