@@ -111,7 +111,7 @@ final class ConfigurationManager: ObservableObject {
         self.deviceDisplayName = defaults.string(forKey: Keys.deviceDisplayName) ?? UIDevice.current.name
         self.gatewayDebugLogs = defaults.object(forKey: Keys.gatewayDebugLogs) as? Bool ?? false
         self.discoveryDebugLogs = defaults.object(forKey: Keys.discoveryDebugLogs) as? Bool ?? false
-        self.cameraEnabled = defaults.object(forKey: Keys.cameraEnabled) as? Bool ?? true
+        self.cameraEnabled = defaults.object(forKey: Keys.cameraEnabled) as? Bool ?? false
         self.locationEnabled = defaults.object(forKey: Keys.locationEnabled) as? Bool ?? false
         self.voiceWakeEnabled = defaults.object(forKey: Keys.voiceWakeEnabled) as? Bool ?? false
 
