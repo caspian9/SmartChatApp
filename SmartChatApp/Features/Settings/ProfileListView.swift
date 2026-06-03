@@ -7,6 +7,7 @@ struct ProfileListView: View {
     @State private var profileToDelete: GatewayProfile?
     @State private var isConnected = false
     @State private var connectingProfileId: UUID?
+    @State private var failedProfileId: UUID?
 
     @Binding var showNewProfileSheet: Bool
     let onEditProfile: (GatewayProfile) -> Void
@@ -79,26 +80,43 @@ struct ProfileListView: View {
                                 isConnected = false
                             } else {
                                 connectingProfileId = profile.id
-                                try? await SessionManager.shared.connectWithProfile(profile)
+                                do {
+                                    try await SessionManager.shared.connectWithProfile(profile)
+                                    isConnected = await SessionManager.shared.connectionStatus
+                                } catch {
+                                    failedProfileId = profile.id
+                                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                    failedProfileId = nil
+                                }
                                 connectingProfileId = nil
-                                isConnected = await SessionManager.shared.connectionStatus
                             }
                         } else {
                             connectingProfileId = profile.id
                             ProfileManager.shared.activateProfile(profile)
-                            try? await SessionManager.shared.connectWithProfile(profile)
+                            do {
+                                try await SessionManager.shared.connectWithProfile(profile)
+                                isConnected = await SessionManager.shared.connectionStatus
+                            } catch {
+                                failedProfileId = profile.id
+                                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                failedProfileId = nil
+                            }
                             connectingProfileId = nil
-                            isConnected = await SessionManager.shared.connectionStatus
                         }
                     }
                 } label: {
                     ZStack {
-                        if connectingProfileId == profile.id {
+                        if connectingProfileId == profile.id && failedProfileId != profile.id {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle())
                         }
-                        Text(profile.isActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
-                            .opacity(connectingProfileId == profile.id ? 0 : 1)
+                        if failedProfileId == profile.id {
+                            Text("Failed")
+                                .foregroundColor(.red)
+                        }
+                        let isThisActive = profileManager.activeProfile?.id == profile.id
+                        Text(isThisActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
+                            .opacity(connectingProfileId == profile.id || failedProfileId == profile.id ? 0 : 1)
                     }
                 }
                 .font(.caption)
