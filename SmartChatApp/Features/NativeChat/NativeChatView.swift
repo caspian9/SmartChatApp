@@ -40,6 +40,12 @@ struct NativeChatView: View {
                             }
                         }
                     }
+                    .onChange(of: store.streamingText) { _ in
+                        // Scroll to bottom when streaming text updates
+                        withAnimation {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
                 }
                 .onTapGesture {
                     isInputFocused = false

@@ -129,8 +129,10 @@ struct NativeChatViewModel {
                 )
                 state.messages.append(message)
                 state.inputText = ""
+                // Capture streaming text value before escaping closure
+                let initialStreamingText = state.streamingText
                 // Start listening for events before sending
-                return .run { [self] send in
+                return .run { send in
                     Task {
                         do {
                             try await SessionManager.shared.ensureConnected()
@@ -140,7 +142,7 @@ struct NativeChatViewModel {
                                 for await evt in transport.events() {
                                     await MainActor.run {
                                         Task {
-                                            await handleEvent(evt, sessionKey: sessionKey, send: send)
+                                            await handleEvent(evt, sessionKey: sessionKey, send: send, currentStreamingText: initialStreamingText)
                                         }
                                     }
                                 }
@@ -238,29 +240,8 @@ struct NativeChatViewModel {
                 return .none
 
             case .updateStreamingText(let text):
-                // If we have a streaming message ID, update it; otherwise create one
-                if let streamingId = state.streamingMessageId {
-                    // Update existing streaming message
-                    if let index = state.messages.firstIndex(where: { $0.id == streamingId }) {
-                        state.messages[index] = ChatMessage(
-                            id: streamingId,
-                            text: text,
-                            isOutgoing: false,
-                            timestamp: state.messages[index].timestamp
-                        )
-                    }
-                } else {
-                    // Create new streaming message
-                    let streamingId = UUID().uuidString
-                    let message = ChatMessage(
-                        id: streamingId,
-                        text: text,
-                        isOutgoing: false,
-                        timestamp: Date()
-                    )
-                    state.messages.append(message)
-                    state.streamingMessageId = streamingId
-                }
+                // Only update streamingText state for UI display
+                // Do NOT add to messages array during streaming
                 state.streamingText = text
                 return .none
 
@@ -287,7 +268,7 @@ struct NativeChatViewModel {
         }
     }
 
-    private func handleEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
+    private func handleEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>, currentStreamingText: String) async {
         switch event {
         case .chat(let payload):
             logger.log("SMAlog: chat event received")
@@ -306,12 +287,16 @@ struct NativeChatViewModel {
                     }
                 }
                 if !text.isEmpty {
+                    // If we have accumulated streaming text, use that instead of the event text
+                    let finalText = currentStreamingText.isEmpty ? text : currentStreamingText
                     let message = ChatMessage(
                         id: chatMsg.id.uuidString,
-                        text: text,
+                        text: finalText,
                         isOutgoing: isOutgoing,
                         timestamp: Date(timeIntervalSince1970: (chatMsg.timestamp ?? 0) / 1000)
                     )
+                    // Clear streaming state when chat event completes
+                    await send(.clearStreamingText)
                     await send(.receiveMessage(message))
                 }
             }
@@ -327,20 +312,23 @@ struct NativeChatViewModel {
                     }
                 }
                 if !text.isEmpty {
+                    // If we have accumulated streaming text, use that instead
+                    let finalText = currentStreamingText.isEmpty ? text : currentStreamingText
                     let message = ChatMessage(
                         id: msg.id.uuidString,
-                        text: text,
+                        text: finalText,
                         isOutgoing: isOutgoing,
                         timestamp: Date(timeIntervalSince1970: (msg.timestamp ?? 0) / 1000)
                     )
+                    // Clear streaming state when session message event completes
+                    await send(.clearStreamingText)
                     await send(.receiveMessage(message))
                 }
             }
         case .agent(let payload):
             logger.log("SMAlog: agent event - stream: \(payload.stream)")
-            // Handle streaming text from agent events - send to reducer
+            // Handle streaming text from agent events - only update streamingText
             if payload.stream == "assistant", let text = payload.data["text"]?.value as? String {
-                // Forward streaming text to reducer - reducer manages streaming state
                 await send(.updateStreamingText(text))
             }
         case .tick:
