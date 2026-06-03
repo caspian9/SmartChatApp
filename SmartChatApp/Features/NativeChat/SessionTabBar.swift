@@ -2,6 +2,7 @@ import SwiftUI
 import OpenClawChatUI
 
 struct SessionTabBar: View {
+    @Environment(\.theme) private var theme
     let sessions: [OpenClawChatSessionEntry]
     @Binding var selectedSession: OpenClawChatSessionEntry?
 
@@ -21,11 +22,12 @@ struct SessionTabBar: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
-        .background(Color(hex: "1E1E1E"))
+        .background(theme.cardBackground)
     }
 }
 
 struct SessionTab: View {
+    @Environment(\.theme) private var theme
     let session: OpenClawChatSessionEntry
     let isSelected: Bool
     let action: () -> Void
@@ -34,10 +36,10 @@ struct SessionTab: View {
         Button(action: action) {
             Text(session.displayName ?? String(session.key.prefix(8)))
                 .font(.caption)
-                .foregroundColor(isSelected ? .white : .gray)
+                .foregroundColor(isSelected ? .white : theme.textSecondary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(isSelected ? Color(hex: "10A37F") : Color(hex: "2A2A2A"))
+                .background(isSelected ? theme.primary : theme.inputBackground)
                 .cornerRadius(16)
         }
         .buttonStyle(PlainButtonStyle())

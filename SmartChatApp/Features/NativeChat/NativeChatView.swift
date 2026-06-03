@@ -2,6 +2,7 @@ import SwiftUI
 import ComposableArchitecture
 
 struct NativeChatView: View {
+    @Environment(\.theme) private var theme
     @StateObject private var store = StoreOf<NativeChatViewModel>(initialState: NativeChatViewModel.State()) {
         NativeChatViewModel()
     }
@@ -65,7 +66,7 @@ struct NativeChatView: View {
             )
             .focused($isInputFocused)
         }
-        .background(Color.black)
+        .background(theme.background)
         .navigationTitle("NativeChat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -74,7 +75,7 @@ struct NativeChatView: View {
                     store.send(.createSession)
                 }) {
                     Image(systemName: "plus")
-                        .foregroundColor(Color(hex: "10A37F"))
+                        .foregroundColor(theme.primary)
                 }
             }
         }

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MessageBubbleView: View {
+    @Environment(\.theme) private var theme
     let message: ChatMessage
 
     var body: some View {
@@ -15,7 +16,7 @@ struct MessageBubbleView: View {
                     if message.state == "streaming" {
                         Text("...")
                             .font(.body)
-                            .foregroundColor(.gray)
+                            .foregroundColor(theme.textSecondary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                     } else {
@@ -26,10 +27,10 @@ struct MessageBubbleView: View {
                 } else {
                     Text(message.text)
                         .font(.body)
-                        .foregroundColor(.white)
+                        .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(message.isOutgoing ? Color(hex: "10A37F") : Color(hex: "1E1E1E"))
+                        .background(message.isOutgoing ? theme.primary : theme.cardBackground)
                         .cornerRadius(12)
                 }
 
@@ -40,7 +41,7 @@ struct MessageBubbleView: View {
                     } label: {
                         Image(systemName: "doc.on.doc")
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(theme.textSecondary)
                     }
 
                     Button {
@@ -48,7 +49,7 @@ struct MessageBubbleView: View {
                     } label: {
                         Image(systemName: "arrowshape.turn.up.right")
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(theme.textSecondary)
                     }
 
                     Button {
@@ -56,7 +57,7 @@ struct MessageBubbleView: View {
                     } label: {
                         Image(systemName: "star")
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(theme.textSecondary)
                     }
                 }
                 .padding(.top, 2)
@@ -65,12 +66,12 @@ struct MessageBubbleView: View {
                     if let startedAt = message.startedAt {
                         Text(formatTime(startedAt))
                             .font(.caption2)
-                            .foregroundColor(.gray)
+                            .foregroundColor(theme.textSecondary)
                     }
                     if let endedAt = message.endedAt {
                         Text("→ \(formatTime(endedAt))")
                             .font(.caption2)
-                            .foregroundColor(.gray)
+                            .foregroundColor(theme.textSecondary)
                     }
                     if message.livenessState == "working" && message.state == "streaming" {
                         Text("●")
@@ -79,7 +80,7 @@ struct MessageBubbleView: View {
                     } else if message.state == "streaming" && message.text.isEmpty {
                         Text("接收中...")
                             .font(.caption2)
-                            .foregroundColor(.gray)
+                            .foregroundColor(theme.textSecondary)
                     }
                 }
             }
