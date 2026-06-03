@@ -20,6 +20,10 @@
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>SmartChatApp needs access to your location at all times to provide continuous location-based services.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>SmartChatApp needs access to your location to provide location-based services.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
