@@ -3,6 +3,7 @@ import ComposableArchitecture
 
 struct NativeChatView: View {
     let store: StoreOf<NativeChatViewModel>
+    @FocusState private var isInputFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,13 +21,46 @@ struct NativeChatView: View {
                 )
             }
 
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(store.messages) { message in
-                        MessageBubbleView(message: message)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(store.messages) { message in
+                            MessageBubbleView(message: message)
+                                .id(message.id)
+                                .onTapGesture {
+                                    isInputFocused = false
+                                }
+                        }
+                        // Show streaming message
+                        if !store.streamingText.isEmpty {
+                            MessageBubbleView(
+                                message: ChatMessage(
+                                    id: "streaming",
+                                    text: store.streamingText,
+                                    isOutgoing: false,
+                                    timestamp: Date()
+                                )
+                            )
+                            .id("streaming")
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    .onChange(of: store.messages.count) { _ in
+                        if let lastMessage = store.messages.last {
+                            withAnimation {
+                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                            }
+                        }
+                    }
+                    .onChange(of: store.streamingText) { _ in
+                        withAnimation {
+                            proxy.scrollTo("streaming", anchor: .bottom)
+                        }
                     }
                 }
-                .padding(.vertical, 8)
+                .onTapGesture {
+                    isInputFocused = false
+                }
             }
 
             ChatInputView(
@@ -34,17 +68,28 @@ struct NativeChatView: View {
                     get: { store.inputText },
                     set: { store.send(.updateInputText($0)) }
                 ),
+                isSending: store.isSending,
                 onSend: {
                     store.send(.sendMessage)
                 }
             )
+            .focused($isInputFocused)
         }
         .background(Color.black)
         .navigationTitle("NativeChat")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: {
+                    store.send(.createSession)
+                }) {
+                    Image(systemName: "plus")
+                        .foregroundColor(Color(hex: "10A37F"))
+                }
+            }
+        }
         .onAppear {
             store.send(.loadSessions)
-            store.send(.loadHistory)
         }
     }
 }

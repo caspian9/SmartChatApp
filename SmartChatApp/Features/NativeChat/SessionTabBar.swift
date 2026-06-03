@@ -41,5 +41,6 @@ struct SessionTab: View {
                 .cornerRadius(16)
         }
         .buttonStyle(PlainButtonStyle())
+        .accessibilityLabel("Session: \(String(session.key.prefix(12)))")
     }
 }
