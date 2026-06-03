@@ -233,6 +233,8 @@ struct MessageBubbleView: View {
                 let shouldMd = shouldRenderMarkdown
                 if shouldMd {
                     MarkdownCardView(content: message.text)
+                        .frame(height: shouldCollapse && !isExpanded ? maxCollapsedHeight : nil, alignment: .top)
+                        .clipped()
                 } else if message.role == "thinking" {
                     ThinkingCardView(content: message.text)
                         .lineLimit(collapseLineLimit)
@@ -292,8 +294,10 @@ struct MessageBubbleView: View {
     }
 
     private var shouldCollapse: Bool {
-        // Assistant + Markdown messages don't collapse, show fully
-        if message.role == "assistant" && shouldRenderMarkdown {
+        // Fresh messages (arrived in this chat session) stay fully expanded.
+        // Collapse only applies to history messages loaded when the user
+        // re-enters the native chat page.
+        if message.isFresh {
             return false
         }
         return CollapseStateCache.shared.shouldCollapse(for: message)
@@ -369,6 +373,10 @@ struct ChatMessage: Identifiable, Equatable {
     let toolCallId: String?
     let toolName: String?
     let stopReason: String?
+    /// True for messages that arrived in the current chat session (sent
+    /// by the user or streamed from the agent). False for messages loaded
+    /// from history.
+    var isFresh: Bool = false
 
     var isOutgoing: Bool {
         role.lowercased() == "user"
@@ -383,6 +391,7 @@ struct ChatMessage: Identifiable, Equatable {
         lhs.seq == rhs.seq &&
         lhs.startedAt == rhs.startedAt &&
         lhs.endedAt == rhs.endedAt &&
-        lhs.livenessState == rhs.livenessState
+        lhs.livenessState == rhs.livenessState &&
+        lhs.isFresh == rhs.isFresh
     }
 }
