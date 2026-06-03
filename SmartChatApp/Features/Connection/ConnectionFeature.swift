@@ -1,5 +1,6 @@
+import SwiftUI
 import ComposableArchitecture
-import Foundation
+import OpenClawKit
 
 @Reducer
 struct ConnectionFeature {
@@ -41,8 +42,18 @@ struct ConnectionFeature {
                 state.isConnecting = true
                 state.error = nil
                 return .run { send in
-                    try await clock.sleep(for: .seconds(1))
-                    await send(.connectionSucceeded)
+                    do {
+                        guard let url = URL(string: state.serverURL) else {
+                            await send(.connectionFailed("Invalid URL"))
+                            return
+                        }
+                        let client = GatewayClient()
+                        _ = try await client.connect(gatewayURL: url, authToken: state.authToken)
+                        await client.disconnect()
+                        await send(.connectionSucceeded)
+                    } catch {
+                        await send(.connectionFailed(error.localizedDescription))
+                    }
                 }
 
             case .disconnect:

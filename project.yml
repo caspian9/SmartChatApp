@@ -44,6 +44,8 @@ targets:
         product: ComposableArchitecture
       - package: OpenClawKit
         product: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawProtocol
     info:
       path: SmartChatApp/Info.plist
       properties:
