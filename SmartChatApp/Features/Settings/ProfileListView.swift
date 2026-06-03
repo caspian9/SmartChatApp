@@ -56,7 +56,8 @@ struct ProfileListView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(profile.name)
-                        .font(.subheadline)
+                        .font(.body)
+                        .fontWeight(.medium)
                         .foregroundColor(theme.textPrimary)
                         .lineLimit(1)
                     Text(profile.host)
