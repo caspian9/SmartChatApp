@@ -293,14 +293,13 @@ struct NativeChatViewModel {
                     await send(.receiveMessage(message))
                 }
             }
-        case .sessionMessage, .agent, .tick, .health, .seqGap:
-            // Only handle .chat events, ignore others but log for debugging
-            if case .agent(let payload) = event {
-                logger.log("SMAlog: agent event - stream: \(payload.stream)")
-            } else if case .health(let ok) = event {
-                logger.log("SMAlog: health check: \(ok)")
-            }
+        case .sessionMessage, .tick, .seqGap:
+            // Ignored - only handle .chat events
             break
+        case .agent(let payload):
+            logger.log("SMAlog: agent event - stream: \(payload.stream)")
+        case .health(let ok):
+            logger.log("SMAlog: health check: \(ok)")
         }
     }
 }
