@@ -176,10 +176,20 @@ struct ProfileListView: View {
                     }
 
                     Section {
-                        Button("Save") {
-                            saveEdit()
+                        Button(role: .destructive) {
+                            if let id = editingProfileId {
+                                ProfileManager.shared.deleteProfile(id: id)
+                                isEditing = false
+                            }
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Image(systemName: "trash")
+                                Text("Delete Profile")
+                                Spacer()
+                            }
+                            .foregroundColor(.red)
                         }
-                        .disabled(editName.isEmpty || editHost.isEmpty || editToken.isEmpty)
                     }
                 }
                 .navigationTitle("Edit Profile")
@@ -189,6 +199,12 @@ struct ProfileListView: View {
                         Button("Cancel") {
                             isEditing = false
                         }
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Save") {
+                            saveEdit()
+                        }
+                        .disabled(editName.isEmpty || editHost.isEmpty || editToken.isEmpty)
                     }
                 }
             }
