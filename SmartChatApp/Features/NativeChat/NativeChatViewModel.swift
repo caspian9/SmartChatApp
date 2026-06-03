@@ -359,7 +359,33 @@ struct NativeChatViewModel {
 
             case .sessionCreated(let sessionKey):
                 logger.log("SMAlog: Session created callback: \(sessionKey)")
-                return .none
+                state.isLoading = false
+                // Build a minimal entry from the new key. The next loadSessions
+                // (already dispatched by .createSession's run block) will
+                // replace this with the full entry (model, tokens, etc.) via
+                // .loadedSessions' in-place refresh on matching key.
+                let newEntry = OpenClawChatSessionEntry(
+                    key: sessionKey,
+                    kind: nil,
+                    displayName: nil,
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: nil,
+                    sessionId: nil,
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: nil,
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: nil,
+                    model: nil,
+                    contextTokens: nil
+                )
+                return .send(.selectSession(newEntry))
 
             case .updateInputText(let text):
                 state.inputText = text
