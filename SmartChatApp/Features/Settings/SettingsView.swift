@@ -67,17 +67,16 @@ struct SettingsView: View {
 
             Section("Device") {
                 HStack {
-                    Text("Name")
+                    Text("Model")
                     Spacer()
-                    TextField("Device Name", text: $config.deviceDisplayName)
-                        .multilineTextAlignment(.trailing)
+                    Text(UIDevice.current.model)
                         .foregroundColor(theme.textSecondary)
                 }
 
                 HStack {
-                    Text("Device ID")
+                    Text("System")
                     Spacer()
-                    Text("—")
+                    Text(UIDevice.current.systemName + " " + UIDevice.current.systemVersion)
                         .foregroundColor(theme.textSecondary)
                 }
             }
