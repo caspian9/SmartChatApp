@@ -277,6 +277,11 @@ struct EditProfileSheet: View {
                     .disabled(editName.isEmpty)
                 }
             }
+            .task {
+                if let profile = profile, profile.isActive {
+                    isConnected = await SessionManager.shared.connectionStatus
+                }
+            }
         }
     }
 }
