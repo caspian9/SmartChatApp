@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct HomeView: View {
+    @State private var showChatList = false
+
     var body: some View {
         VStack(spacing: 40) {
             Spacer()
@@ -18,7 +20,7 @@ struct HomeView: View {
                     title: "Chat List",
                     icon: "list.bullet",
                     action: {
-                        // Navigation handled by NavigationLink in wrapped view
+                        showChatList = true
                     }
                 )
             }
@@ -30,5 +32,8 @@ struct HomeView: View {
         .padding()
         .background(Color.black)
         .navigationTitle("SmartChatApp")
+        .navigationDestination(isPresented: $showChatList) {
+            ChatListView()
+        }
     }
 }
