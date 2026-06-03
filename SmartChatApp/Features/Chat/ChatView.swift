@@ -29,6 +29,7 @@ struct ChatView: View {
                 userAccent: Color(hex: "10A37F"),
                 showsAssistantTrace: false
             )
+            .id(sessionKey)
 
             // Overlay cards for pending tool calls
             if !viewModel.pendingToolCalls.isEmpty {
