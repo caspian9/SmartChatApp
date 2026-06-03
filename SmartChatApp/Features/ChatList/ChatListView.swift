@@ -5,7 +5,6 @@ import OpenClawKit
 struct ChatListView: View {
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
-    @State private var isRefreshing = false
     @State private var showError = false
 
     var body: some View {
@@ -24,9 +23,6 @@ struct ChatListView: View {
                     SessionRowView(session: session)
                 }
                 .listRowBackground(Color(hex: "1E1E1E"))
-            }
-            .onDelete { indexSet in
-                // Handle delete if supported
             }
         }
         .listStyle(.plain)
@@ -51,13 +47,13 @@ struct ChatListView: View {
                 }
             }
         }
-        .onAppear {
+        .task {
             loadFromCacheThenRefresh()
         }
     }
 
     private func loadFromCacheThenRefresh() {
-        // 1. 先加载缓存显示
+        // Load from cache first for instant display
         if let cached = SessionCache.load() {
             sessions = cached
             isLoading = false
@@ -65,7 +61,7 @@ struct ChatListView: View {
             isLoading = true
         }
 
-        // 2. 后台刷新网络数据
+        // Refresh from network in background
         Task {
             await refreshFromNetwork()
         }
@@ -84,7 +80,6 @@ struct ChatListView: View {
         } catch {
             await MainActor.run {
                 isLoading = false
-                // 网络失败时保持缓存数据，静默处理
             }
         }
     }
