@@ -1,28 +1,34 @@
 import SwiftUI
-import ComposableArchitecture
 
 struct ChatView: View {
-    let store: StoreOf<ChatFeature>
-    @FocusState private var isInputFocused: Bool
+    @State private var session: ChatSession
+    @State private var inputText: String = ""
+    @State private var isStreaming: Bool = false
+    @State private var streamingContent: String = ""
+    @State private var isConnected: Bool = false
+
+    init(session: ChatSession) {
+        _session = State(initialValue: session)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(store.state.session.messages) { message in
+                        ForEach(session.messages) { message in
                             MessageRowView(message: message)
                                 .id(message.id)
                         }
 
-                        if store.state.isStreaming && !store.state.streamingContent.isEmpty {
+                        if isStreaming && !streamingContent.isEmpty {
                             HStack(alignment: .top, spacing: 12) {
                                 Image(systemName: "brain")
                                     .foregroundColor(.purple)
                                     .frame(width: 30, height: 30)
                                     .background(Circle().fill(Color.purple.opacity(0.2)))
 
-                                Text(store.state.streamingContent)
+                                Text(streamingContent)
                                     .font(.body)
                                     .foregroundColor(.white)
                             }
@@ -32,8 +38,8 @@ struct ChatView: View {
                     }
                     .padding(.horizontal)
                 }
-                .onChange(of: store.state.session.messages.count) { _, _ in
-                    if let lastMessage = store.state.session.messages.last {
+                .onChange(of: session.messages.count) { _, _ in
+                    if let lastMessage = session.messages.last {
                         withAnimation {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
@@ -45,23 +51,51 @@ struct ChatView: View {
                 .background(Color.gray.opacity(0.3))
 
             InputBarView(
-                text: $store.state.inputText,
-                isStreaming: store.state.isStreaming,
-                onSend: { store.send(.sendMessage) },
-                onAbort: { store.send(.abortStreaming) }
+                text: $inputText,
+                isStreaming: isStreaming,
+                onSend: sendMessage,
+                onAbort: abortStreaming
             )
         }
         .background(Color.black)
-        .navigationTitle(store.state.session.title)
+        .navigationTitle(session.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button(action: { store.send(.connect) }) {
-                    Image(systemName: store.state.isConnected ? "wifi" : "wifi.slash")
-                        .foregroundColor(store.state.isConnected ? Color(hex: "10A37F") : .red)
+                Button(action: toggleConnection) {
+                    Image(systemName: isConnected ? "wifi" : "wifi.slash")
+                        .foregroundColor(isConnected ? Color(hex: "10A37F") : .red)
                 }
             }
         }
+    }
+
+    private func sendMessage() {
+        let userMessage = Message(role: .user, content: inputText)
+        session.messages.append(userMessage)
+        inputText = ""
+        isStreaming = true
+        streamingContent = ""
+
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            let assistantMessage = Message(
+                role: .assistant,
+                content: "This is a mock response. Connect to OpenClaw Gateway for real responses."
+            )
+            session.messages.append(assistantMessage)
+            isStreaming = false
+            streamingContent = ""
+        }
+    }
+
+    private func abortStreaming() {
+        isStreaming = false
+        streamingContent = ""
+    }
+
+    private func toggleConnection() {
+        isConnected.toggle()
     }
 }
 
