@@ -96,11 +96,15 @@ final class ProfileManager: ObservableObject {
     }
 
     func switchToProfile(_ profile: GatewayProfile) async {
-        if SessionManager.shared.isConnected {
+        if await SessionManager.shared.connectionStatus {
             await SessionManager.shared.disconnect()
         }
         activateProfile(profile)
-        await SessionManager.shared.connectWithProfile(profile)
+        do {
+            try await SessionManager.shared.connectWithProfile(profile)
+        } catch {
+            profileLog.log("SMAlog: [ProfileManager] Failed to connect: \(error.localizedDescription)")
+        }
     }
 
     private func saveContext() {

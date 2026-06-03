@@ -3,6 +3,7 @@ import OpenClawKit
 import OpenClawProtocol
 import OpenClawChatUI
 import UIKit
+import SwiftData
 import os.log
 
 private let logger = Logger(subsystem: "SmartChatApp", category: "SessionManager")

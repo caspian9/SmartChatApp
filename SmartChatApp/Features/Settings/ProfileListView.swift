@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct ProfileListView: View {
     @Environment(\.theme) private var theme
