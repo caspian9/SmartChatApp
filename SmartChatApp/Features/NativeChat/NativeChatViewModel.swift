@@ -308,7 +308,8 @@ struct NativeChatViewModel {
                     livenessState: nil,
                     toolCallId: nil,
                     toolName: nil,
-                    stopReason: nil
+                    stopReason: nil,
+                    isFresh: true
                 )
                 state.messages.append(message)
                 state.inputText = ""
@@ -679,7 +680,7 @@ struct NativeChatViewModel {
                     let similarIndex = state.messages.firstIndex { existing in
                         existing.role == message.role &&
                         existing.text == message.text &&
-                        abs(existing.timestamp.timeIntervalSince(message.timestamp)) < 1.0
+                        abs(existing.timestamp.timeIntervalSince(message.timestamp)) < 60.0
                     }
                     if let similarIndex = similarIndex {
                         var existingMessage = state.messages[similarIndex]
@@ -812,7 +813,8 @@ struct NativeChatViewModel {
                     livenessState: livenessState,
                     toolCallId: nil,
                     toolName: nil,
-                    stopReason: nil
+                    stopReason: nil,
+                    isFresh: true
                 )
                 await send(.receiveMessage(message))
                 logger.log("SMAlog: agent start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs), data keys: \(data.keys.map { $0 })")
@@ -863,7 +865,8 @@ struct NativeChatViewModel {
                     cacheWrite: cacheWrite,
                     toolCallId: nil,
                     toolName: nil,
-                    stopReason: nil
+                    stopReason: nil,
+                    isFresh: true
                 )
                 await send(.receiveMessage(message))
                 logger.log("SMAlog: agent end - runId: \(runId), seq: \(seq ?? -1), endedAt: \(endedAtMs)")
@@ -895,7 +898,8 @@ struct NativeChatViewModel {
                         livenessState: livenessState,
                         toolCallId: nil,
                         toolName: nil,
-                        stopReason: nil
+                        stopReason: nil,
+                        isFresh: true
                     )
                     await send(.receiveMessage(message))
                     logger.log("SMAlog: agent text - runId: \(runId), seq: \(seq ?? -1), text length: \(text.count)")
