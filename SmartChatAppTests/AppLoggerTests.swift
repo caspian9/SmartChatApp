@@ -115,4 +115,16 @@ final class AppLoggerTests: XCTestCase {
         await Task.yield()
         XCTAssertEqual(AppLogger.shared.entries.first?.level, .warning)
     }
+
+    func test_log_fromBackgroundActor_entersBuffer() async {
+        AppLogger.shared.setEnabled(.network, true)
+        // Detached task: explicitly NOT on the main actor.
+        await Task.detached {
+            AppLogger.log("from background", category: .network)
+        }.value
+        // Yield to let the buffer-append Task run on main actor.
+        await Task.yield()
+        await Task.yield()
+        XCTAssertEqual(AppLogger.shared.entries.first?.message, "from background")
+    }
 }
