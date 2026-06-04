@@ -1,11 +1,19 @@
 import SwiftUI
 import UIKit
 
+private let isoFormatter: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+
 struct DebugLogsView: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var logger = AppLogger.shared
     @State private var enabledChips: Set<LogCategory> = Set(LogCategory.allCases)
     @State private var searchText: String = ""
+    @State private var isPaused: Bool = false
+    @State private var frozenEntries: [LogEntry] = []
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -14,11 +22,19 @@ struct DebugLogsView: View {
     }()
 
     private var displayEntries: [LogEntry] {
-        logger.entries.filter { entry in
+        let source = isPaused ? frozenEntries : logger.entries
+        return source.filter { entry in
             guard enabledChips.contains(entry.category) else { return false }
             if searchText.isEmpty { return true }
             return entry.message.localizedCaseInsensitiveContains(searchText)
         }
+    }
+
+    private func copyFormatted() {
+        let text = displayEntries
+            .map { "\(isoFormatter.string(from: $0.ts)) [\($0.category.displayName)] \($0.message)" }
+            .joined(separator: "\n")
+        UIPasteboard.general.string = text
     }
 
     var body: some View {
@@ -29,6 +45,21 @@ struct DebugLogsView: View {
         }
         .navigationTitle("Debug Logs")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button(isPaused ? "Resume" : "Pause") {
+                    if isPaused {
+                        isPaused = false
+                        frozenEntries = []
+                    } else {
+                        frozenEntries = logger.entries
+                        isPaused = true
+                    }
+                }
+                Button("Copy") { copyFormatted() }
+                    .disabled(displayEntries.isEmpty)
+            }
+        }
     }
 
     private var chipsBar: some View {
