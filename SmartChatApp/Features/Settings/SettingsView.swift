@@ -170,8 +170,7 @@ struct SettingsView: View {
                 Toggle("Markdown Logs", isOn: $config.logsMarkdown)
 
                 NavigationLink("Debug Logs Viewer") {
-                    // TODO: DebugLogsView() — replaced in Task 5
-                    Text("Debug Logs Viewer placeholder")
+                    DebugLogsView()
                 }
 
                 Button("Clear Logs") {
