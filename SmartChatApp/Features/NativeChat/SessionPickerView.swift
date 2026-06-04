@@ -1,8 +1,5 @@
 import SwiftUI
 import OpenClawChatUI
-import OSLog
-
-private let logger = Logger(subsystem: "SmartChatApp", category: "SessionPickerView")
 
 struct SessionPickerView: View {
     @Environment(\.theme) private var theme
@@ -253,7 +250,7 @@ struct SessionPickerView: View {
         .padding(.vertical, 8)
         .background(theme.cardBackground)
         .onAppear {
-            logger.log("SMAlog: SessionPickerView onAppear, sessions: \(self.sessions.count)")
+            AppLogger.log("SessionPickerView onAppear, sessions: \(self.sessions.count)", category: .nativeChat)
             if let session = selectedSession {
                 selectedAgentId = extractAgentId(from: session.key)
                 selectedChannel = extractChannel(from: session.key)
