@@ -211,9 +211,8 @@ App supports three appearance modes: `.system`, `.light`, `.dark`
 ```
 SmartChatApp/
 ├── Makefile                # Build automation (make build, make install)
-├── project.yml              # XcodeGen configuration (source of truth for Info.plist)
-├── Package.swift            # SPM dependencies
-├── SmartChatApp.xcodeproj/  # Generated Xcode project
+├── project.yml              # XcodeGen configuration (source of truth for Info.plist + SPM packages)
+├── SmartChatApp.xcodeproj/  # Generated Xcode project (regenerate via xcodegen)
 ├── SmartChatApp/            # Main source directory
 │   ├── App/
 │   │   └── SmartChatAppApp.swift
