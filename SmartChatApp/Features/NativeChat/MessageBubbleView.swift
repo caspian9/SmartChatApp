@@ -1,7 +1,4 @@
 import SwiftUI
-import OSLog
-
-private let bubbleLog = OSLog(subsystem: "SmartChatApp.MessageBubble", category: "debug")
 
 struct ViewHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -40,7 +37,8 @@ struct MessageBubbleView: View {
             lastTextForCollapse = message.text
             cachedLineCount = computeLineCount()
             cachedShouldCollapse = computeShouldCollapse()
-            os_log("SMAlog: [collapse] id=%{public}s text_len=%{public}d lines=%{public}d height=%{public}.1f collapse=%{public}03d", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.text.count, cachedLineCount, message.text.boundingRect(with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height, cachedShouldCollapse ? 1 : 0)
+            let _bubbleHeight = message.text.boundingRect(with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height
+            AppLogger.log("[collapse] id=\(String(message.id.prefix(8))) text_len=\(message.text.count) lines=\(cachedLineCount) height=\(String(format: "%.1f", _bubbleHeight)) collapse=\(cachedShouldCollapse ? 1 : 0)", category: .nativeChat)
         }
     }
 
@@ -58,13 +56,13 @@ struct MessageBubbleView: View {
         ).height
         let lineHeight: CGFloat = 20
         let count = Int(ceil(textHeight / lineHeight))
-        os_log("SMAlog: [computeLineCount] id=%{public}s text_len=%{public}d height=%{public}.1f count=%{public}d", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.text.count, textHeight, count)
+        AppLogger.log("[computeLineCount] id=\(String(message.id.prefix(8))) text_len=\(message.text.count) height=\(String(format: "%.1f", textHeight)) count=\(count)", category: .nativeChat)
         return count
     }
 
     private func computeShouldCollapse() -> Bool {
         if message.seq != nil {
-            os_log("SMAlog: [computeShouldCollapse] id=%{public}s result=000 reason=seq", log: bubbleLog, type: .debug, String(message.id.prefix(8)))
+            AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) result=000 reason=seq", category: .nativeChat)
             return false
         }
         let textHeight = message.text.boundingRect(
@@ -72,17 +70,17 @@ struct MessageBubbleView: View {
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             context: nil
         ).height
-        os_log("SMAlog: [computeShouldCollapse] id=%{public}s seq=nil lines=%{public}d height=%{public}.1f threshold=%{public}.1f", log: bubbleLog, type: .debug, String(message.id.prefix(8)), cachedLineCount, textHeight, maxCollapsedHeight + 10)
+        AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) seq=nil lines=\(cachedLineCount) height=\(String(format: "%.1f", textHeight)) threshold=\(String(format: "%.1f", maxCollapsedHeight + 10))", category: .nativeChat)
         if cachedLineCount < 4 {
-            os_log("SMAlog: [computeShouldCollapse] id=%{public}s result=000 reason=lines<4 (count=%{public}d)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), cachedLineCount)
+            AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) result=000 reason=lines<4 (count=\(cachedLineCount))", category: .nativeChat)
             return false
         }
         if textHeight <= maxCollapsedHeight + 20 && cachedLineCount <= 8 {
-            os_log("SMAlog: [computeShouldCollapse] id=%{public}s result=000 reason=within_tolerance", log: bubbleLog, type: .debug, String(message.id.prefix(8)))
+            AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) result=000 reason=within_tolerance", category: .nativeChat)
             return false
         }
         let result = textHeight >= maxCollapsedHeight + 10
-        os_log("SMAlog: [computeShouldCollapse] id=%{public}s result=%{public}03d", log: bubbleLog, type: .debug, String(message.id.prefix(8)), result ? 1 : 0)
+        AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) result=\(result ? 1 : 0)", category: .nativeChat)
         return result
     }
 
@@ -307,17 +305,17 @@ struct MessageBubbleView: View {
         // full text. Collapse only applies to history messages that were
         // already huge when the user opened the chat.
         if message.state == "streaming" || message.isFresh {
-            os_log("SMAlog: [collapseLineLimit] id=%{public}s state=%{public}s isFresh=%{public}03d -> nil (full text)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.state, message.isFresh ? 1 : 0)
+            AppLogger.log("[collapseLineLimit] id=\(String(message.id.prefix(8))) state=\(message.state) isFresh=\(message.isFresh ? 1 : 0) -> nil (full text)", category: .nativeChat)
             return nil
         }
         let limit = isExpanded ? nil : maxCollapsedLines
-        os_log("SMAlog: [collapseLineLimit] id=%{public}s state=%{public}s isFresh=%{public}03d -> %{public}s (history)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.state, message.isFresh ? 1 : 0, limit.map(String.init) ?? "nil")
+        AppLogger.log("[collapseLineLimit] id=\(String(message.id.prefix(8))) state=\(message.state) isFresh=\(message.isFresh ? 1 : 0) -> \(limit.map(String.init) ?? "nil") (history)", category: .nativeChat)
         return limit
     }
 
     private var shouldShowExpandButton: Bool {
         let should = message.isOutgoing == false && !message.text.isEmpty && shouldCollapse && !isExpanded
-        os_log("SMAlog: [shouldShowExpandButton] id=%{public}s should=%{public}03d", log: bubbleLog, type: .debug, String(message.id.prefix(8)), should ? 1 : 0)
+        AppLogger.log("[shouldShowExpandButton] id=\(String(message.id.prefix(8))) should=\(should ? 1 : 0)", category: .nativeChat)
         return should
     }
 

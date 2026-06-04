@@ -1,8 +1,5 @@
 import SwiftUI
 import ComposableArchitecture
-import OSLog
-
-private let logger = Logger(subsystem: "SmartChatApp", category: "NativeChatView")
 
 struct NativeChatView: View {
     @Environment(\.theme) private var theme
@@ -17,7 +14,7 @@ struct NativeChatView: View {
     @State private var cacheLoadTriggerCount: Int = 0
 
     init() {
-        logger.log("SMAlog: NativeChatView init")
+        AppLogger.log("NativeChatView init", category: .nativeChat)
     }
 
     var body: some View {
@@ -27,7 +24,7 @@ struct NativeChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarItem }
             .onAppear {
-                logger.log("SMAlog: NativeChatView onAppear called")
+                AppLogger.log("NativeChatView onAppear called", category: .nativeChat)
                 if store.selectedProfileId == nil {
                     store.send(.setSelectedProfile(profileManager.activeProfile?.id))
                 }
@@ -111,10 +108,10 @@ struct NativeChatView: View {
             // history load) to position the viewport deliberately.
             .onTapGesture { isInputFocused = false }
             .onAppear {
-                logger.log("SMAlog: messageScrollView onAppear, messages: \(store.messages.count)")
+                AppLogger.log("messageScrollView onAppear, messages: \(store.messages.count)", category: .nativeChat)
             }
             .onChange(of: store.messages.count) { count in
-                logger.log("SMAlog: messages.count changed to \(count)")
+                AppLogger.log("messages.count changed to \(count)", category: .nativeChat)
                 if !isUserScrolling {
                     scheduleScroll(proxy: proxy)
                 }
@@ -123,9 +120,9 @@ struct NativeChatView: View {
                 guard newValue != triggerCount else { return }
                 triggerCount = newValue
                 let lastId = store.messages.last?.id
-                logger.log("SMAlog: scrollTrigger changed to \(newValue), lastId: \(lastId?.prefix(8) ?? "nil")")
+                AppLogger.log("scrollTrigger changed to \(newValue), lastId: \(lastId?.prefix(8) ?? "nil")", category: .nativeChat)
                 if let id = lastId {
-                    logger.log("SMAlog: triggering immediate scroll to \(String(id.prefix(8)))")
+                    AppLogger.log("triggering immediate scroll to \(String(id.prefix(8)))", category: .nativeChat)
                     DispatchQueue.main.async {
                         proxy.scrollTo(id, anchor: .bottom)
                     }
@@ -135,7 +132,7 @@ struct NativeChatView: View {
                 guard newValue != cacheLoadTriggerCount else { return }
                 cacheLoadTriggerCount = newValue
                 let lastId = store.messages.last?.id
-                logger.log("SMAlog: cacheLoadCounter changed to \(newValue), lastId: \(lastId?.prefix(8) ?? "nil")")
+                AppLogger.log("cacheLoadCounter changed to \(newValue), lastId: \(lastId?.prefix(8) ?? "nil")", category: .nativeChat)
                 if let id = lastId {
                     // Multi-poll scroll: history-load bubbles render through
                     // UIViewRepresentable (MarkdownCardView) which measures
@@ -149,7 +146,7 @@ struct NativeChatView: View {
                     // cacheLoadCounter never fires during streaming, so
                     // this does not reintroduce the send-time scroll
                     // stutter.
-                    logger.log("SMAlog: cacheLoadCounter triggering multi-poll scroll to \(String(id.prefix(8)))")
+                    AppLogger.log("cacheLoadCounter triggering multi-poll scroll to \(String(id.prefix(8)))", category: .nativeChat)
                     for delay in [0.0, 0.2, 0.5, 1.0, 2.0] {
                         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                             proxy.scrollTo(id, anchor: .bottom)
@@ -160,14 +157,14 @@ struct NativeChatView: View {
             .onChange(of: store.needsScrollToBottom) { needsScroll in
                 if needsScroll {
                     let lastId = store.messages.last?.id
-                    logger.log("SMAlog: needsScrollToBottom true, lastId: \(lastId?.prefix(8) ?? "nil")")
+                    AppLogger.log("needsScrollToBottom true, lastId: \(lastId?.prefix(8) ?? "nil")", category: .nativeChat)
                     if let id = lastId {
                         proxy.scrollTo(id, anchor: .bottom)
                     }
                 }
             }
             .onChange(of: store.isSending) { isSending in
-                logger.log("SMAlog: isSending changed to \(isSending)")
+                AppLogger.log("isSending changed to \(isSending)", category: .nativeChat)
                 if !isSending {
                     isUserScrolling = false
                     // isSending false means the chat input flipped from
@@ -186,7 +183,7 @@ struct NativeChatView: View {
                 }
             }
             .onChange(of: isInputFocused) { focused in
-                logger.log("SMAlog: isInputFocused changed to \(focused)")
+                AppLogger.log("isInputFocused changed to \(focused)", category: .nativeChat)
                 if !isUserScrolling {
                     scheduleScroll(proxy: proxy)
                 }
@@ -197,7 +194,7 @@ struct NativeChatView: View {
     private func scheduleScroll(proxy: ScrollViewProxy) {
         let lastId = store.messages.last?.id
         guard let id = lastId else { return }
-        logger.log("SMAlog: scheduleScroll to \(String(id.prefix(8))), isUserScrolling: \(isUserScrolling)")
+        AppLogger.log("scheduleScroll to \(String(id.prefix(8))), isUserScrolling: \(isUserScrolling)", category: .nativeChat)
         // Single delayed scroll. The 5-poll variant was originally to catch
         // delayed layout, but combined with SwiftUI's scroll animation it
         // produced a visible up-down stutter when the keyboard dismissed
