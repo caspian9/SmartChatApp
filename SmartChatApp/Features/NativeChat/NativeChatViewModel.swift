@@ -1,12 +1,7 @@
 import ComposableArchitecture
 import Foundation
 import OpenClawChatUI
-import OSLog
 import OpenClawKit
-import os
-
-private let logger = Logger(subsystem: "SmartChatApp", category: "NativeChatViewModel")
-private let osLog = OSLog(subsystem: "SmartChatApp.NativeChatViewModel", category: "debug")
 
 private func lastSelectedSessionKey(for profileId: UUID) -> String {
     "lastSelectedSession_\(profileId.uuidString)"
@@ -80,15 +75,15 @@ struct NativeChatViewModel {
                 return .none
 
             case .loadSessions:
-                logger.log("SMAlog: loadSessions called")
+                AppLogger.log("loadSessions called", category: .nativeChat)
                 guard let profileId = state.selectedProfileId else {
-                    logger.log("SMAlog: loadSessions skipped - no selected profile")
+                    AppLogger.log("loadSessions skipped - no selected profile", category: .nativeChat, level: .warning)
                     return .none
                 }
                 let profileIdCapture = profileId
                 // First load from cache for fast display
                 if let cached = SessionCache.load(for: profileId), !cached.isEmpty {
-                    logger.log("SMAlog: Loaded \(cached.count) cached sessions for profile \(profileIdCapture.uuidString.prefix(8))")
+                    AppLogger.log("Loaded \(cached.count) cached sessions for profile \(profileIdCapture.uuidString.prefix(8))", category: .nativeChat)
                     state.sessions = cached
                     state.isRestoringFromCache = true
 
@@ -96,15 +91,15 @@ struct NativeChatViewModel {
                     let lastKey = UserDefaults.standard.string(forKey: lastSelectedSessionKey(for: profileIdCapture))
                     if let key = lastKey, let lastSession = cached.first(where: { $0.key == key }) {
                         state.selectedSession = lastSession
-                        logger.log("SMAlog: restored last selected session: \(String(lastSession.key.prefix(12)))")
+                        AppLogger.log("restored last selected session: \(String(lastSession.key.prefix(12)))", category: .nativeChat)
                     } else if state.selectedSession == nil, let first = cached.first {
                         // Auto-select first session if none selected and no restore
                         state.selectedSession = first
-                        logger.log("SMAlog: Auto-selected first session: \(String(first.key.prefix(12)))")
+                        AppLogger.log("Auto-selected first session: \(String(first.key.prefix(12)))", category: .nativeChat)
                     }
                     state.isRestoringFromCache = false
                 } else {
-                    logger.log("SMAlog: No cached sessions found for profile \(profileIdCapture.uuidString.prefix(8))")
+                    AppLogger.log("No cached sessions found for profile \(profileIdCapture.uuidString.prefix(8))", category: .nativeChat)
                 }
                 // Then fetch from network (even on cache hit) so the
                 // selected session's totals/timestamps reflect the latest
@@ -121,10 +116,10 @@ struct NativeChatViewModel {
                                 try await Task.sleep(for: .milliseconds(100))
                                 let transport = await SessionManager.shared.makeTransport(sessionKey: "")
                                 let response = try await transport.listSessions(limit: 50)
-                                logger.log("SMAlog: Loaded \(response.sessions.count) sessions")
+                                AppLogger.log("Loaded \(response.sessions.count) sessions", category: .nativeChat)
                                 await send(.loadedSessions(response.sessions))
                             } catch {
-                                logger.log("SMAlog: Load sessions error: \(error.localizedDescription)")
+                                AppLogger.log("Load sessions error: \(error.localizedDescription)", category: .nativeChat, level: .error)
                                 try? await Task.sleep(for: .milliseconds(500))
                                 do {
                                     try await SessionManager.shared.ensureConnected()
@@ -132,7 +127,7 @@ struct NativeChatViewModel {
                                     let response = try await transport.listSessions(limit: 50)
                                     await send(.loadedSessions(response.sessions))
                                 } catch {
-                                    logger.log("SMAlog: Load sessions retry failed: \(error.localizedDescription)")
+                                    AppLogger.log("Load sessions retry failed: \(error.localizedDescription)", category: .nativeChat, level: .error)
                                     await send(.loadedSessions([]))
                                 }
                             }
@@ -145,8 +140,8 @@ struct NativeChatViewModel {
                 let prevSelectedModel = state.selectedSession?.model
                 let prevSelectedTokens = state.selectedSession?.totalTokens
                 let prevSelectedUpdatedAt = state.selectedSession?.updatedAt
-                logger.log("SMAlog: [loadedSessions DIAG] prev selected: key=\(String(prevSelectedKey?.prefix(12) ?? "nil")) model=\(prevSelectedModel ?? "nil") tokens=\(prevSelectedTokens ?? -1) updatedAt=\(prevSelectedUpdatedAt ?? -1)")
-                logger.log("SMAlog: [loadedSessions DIAG] incoming: count=\(sessions.count) first.model=\(sessions.first?.model ?? "nil") first.tokens=\(sessions.first?.totalTokens ?? -1) first.updatedAt=\(sessions.first?.updatedAt ?? -1)")
+                AppLogger.log("[loadedSessions DIAG] prev selected: key=\(String(prevSelectedKey?.prefix(12) ?? "nil")) model=\(prevSelectedModel ?? "nil") tokens=\(prevSelectedTokens ?? -1) updatedAt=\(prevSelectedUpdatedAt ?? -1)", category: .nativeChat)
+                AppLogger.log("[loadedSessions DIAG] incoming: count=\(sessions.count) first.model=\(sessions.first?.model ?? "nil") first.tokens=\(sessions.first?.totalTokens ?? -1) first.updatedAt=\(sessions.first?.updatedAt ?? -1)", category: .nativeChat)
 
                 state.sessions = sessions
                 state.isLoading = false
@@ -163,7 +158,7 @@ struct NativeChatViewModel {
                     let sameModel = updatedSession.model == prevSelectedModel
                     let sameTokens = updatedSession.totalTokens == prevSelectedTokens
                     let sameUpdatedAt = updatedSession.updatedAt == prevSelectedUpdatedAt
-                    logger.log("SMAlog: [loadedSessions DIAG] branch=lastKeyMatch key=\(String(updatedSession.key.prefix(12))) newModel=\(updatedSession.model ?? "nil") newTokens=\(updatedSession.totalTokens ?? -1) newUpdatedAt=\(updatedSession.updatedAt ?? -1) sameKey=\(sameKey ? 1 : 0) sameModel=\(sameModel ? 1 : 0) sameTokens=\(sameTokens ? 1 : 0) sameUpdatedAt=\(sameUpdatedAt ? 1 : 0)")
+                    AppLogger.log("[loadedSessions DIAG] branch=lastKeyMatch key=\(String(updatedSession.key.prefix(12))) newModel=\(updatedSession.model ?? "nil") newTokens=\(updatedSession.totalTokens ?? -1) newUpdatedAt=\(updatedSession.updatedAt ?? -1) sameKey=\(sameKey ? 1 : 0) sameModel=\(sameModel ? 1 : 0) sameTokens=\(sameTokens ? 1 : 0) sameUpdatedAt=\(sameUpdatedAt ? 1 : 0)", category: .nativeChat)
                     // Reload history with updated session info to refresh provider/model/tokens display
                     return .send(.loadHistory)
                 }
@@ -171,7 +166,7 @@ struct NativeChatViewModel {
                 // Auto-select first session if none selected
                 if state.selectedSession == nil, let first = sessions.first {
                     state.selectedSession = first
-                    logger.log("SMAlog: [loadedSessions DIAG] branch=autoFirst key=\(String(first.key.prefix(12)))")
+                    AppLogger.log("[loadedSessions DIAG] branch=autoFirst key=\(String(first.key.prefix(12)))", category: .nativeChat)
                     return .send(.loadHistory)
                 }
                 // No branch matched: a selectedSession was set from cache but lastKey
@@ -181,9 +176,9 @@ struct NativeChatViewModel {
                 if let currentKey = prevSelectedKey,
                    let refreshed = sessions.first(where: { $0.key == currentKey }) {
                     state.selectedSession = refreshed
-                    logger.log("SMAlog: [loadedSessions DIAG] branch=inPlaceRefresh key=\(String(currentKey.prefix(12))) newModel=\(refreshed.model ?? "nil") newTokens=\(refreshed.totalTokens ?? -1) newUpdatedAt=\(refreshed.updatedAt ?? -1)")
+                    AppLogger.log("[loadedSessions DIAG] branch=inPlaceRefresh key=\(String(currentKey.prefix(12))) newModel=\(refreshed.model ?? "nil") newTokens=\(refreshed.totalTokens ?? -1) newUpdatedAt=\(refreshed.updatedAt ?? -1)", category: .nativeChat)
                 } else {
-                    logger.log("SMAlog: [loadedSessions DIAG] branch=noMatch prevKey=\(String(prevSelectedKey?.prefix(12) ?? "nil")) sessionsCount=\(sessions.count)")
+                    AppLogger.log("[loadedSessions DIAG] branch=noMatch prevKey=\(String(prevSelectedKey?.prefix(12) ?? "nil")) sessionsCount=\(sessions.count)", category: .nativeChat)
                 }
                 return .none
 
@@ -211,7 +206,7 @@ struct NativeChatViewModel {
                 if let profileId = state.selectedProfileId {
                     UserDefaults.standard.set(session.key, forKey: lastSelectedSessionKey(for: profileId))
                 }
-                logger.log("SMAlog: saved selected session: \(String(session.key.prefix(12)))")
+                AppLogger.log("saved selected session: \(String(session.key.prefix(12)))", category: .nativeChat)
                 if didSwitch {
                     return .merge(
                         .run { _ in
@@ -235,7 +230,7 @@ struct NativeChatViewModel {
                 state.messages = []
                 state.isSwitchingGateway = true
                 state.error = nil
-                logger.log("SMAlog: switchProfile from \(previousProfileId?.uuidString.prefix(8) ?? "nil") to \(newProfileId.uuidString.prefix(8))")
+                AppLogger.log("switchProfile from \(previousProfileId?.uuidString.prefix(8) ?? "nil") to \(newProfileId.uuidString.prefix(8))", category: .nativeChat)
 
                 // Load cache immediately for fast display, consistent with loadSessions flow
                 var hasCache = false
@@ -274,12 +269,12 @@ struct NativeChatViewModel {
                             ProfileManager.shared.getProfile(id: profileIdCapture)
                         }
                         guard let profile = profile else {
-                            logger.log("SMAlog: switchProfile - profile not found")
+                            AppLogger.log("switchProfile - profile not found", category: .nativeChat, level: .warning)
                             await send(.setError("Profile not found"))
                             return
                         }
                         await ProfileManager.shared.switchToProfile(profile)
-                        logger.log("SMAlog: switchProfile - active profile switched, fetching network sessions")
+                        AppLogger.log("switchProfile - active profile switched, fetching network sessions", category: .nativeChat)
 
                         // Fetch from network now that the new gateway is connected
                         do {
@@ -289,7 +284,7 @@ struct NativeChatViewModel {
                             let response = try await transport.listSessions(limit: 50)
                             await send(.loadedSessions(response.sessions))
                         } catch {
-                            logger.log("SMAlog: Load sessions after switch error: \(error.localizedDescription)")
+                            AppLogger.log("Load sessions after switch error: \(error.localizedDescription)", category: .nativeChat, level: .error)
                             // Cache (if any) is already shown, so just clear the loading flag
                             await send(.setError(error.localizedDescription))
                         }
@@ -318,7 +313,7 @@ struct NativeChatViewModel {
                     let candidate = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
                     return candidate.isEmpty ? nil : candidate
                 }()
-                logger.log("SMAlog: createSession - using selected agentId: \(selectedAgentId ?? "<default>")")
+                AppLogger.log("createSession - using selected agentId: \(selectedAgentId ?? "<default>")", category: .nativeChat)
                 let agentIdCapture = selectedAgentId
 
                 // When we have a specific agent, request a custom key of the
@@ -336,7 +331,7 @@ struct NativeChatViewModel {
                     return "agent:\(agent):\(clientLabel):\(UUID().uuidString.lowercased())"
                 }()
                 if let customKey {
-                    logger.log("SMAlog: createSession - requesting custom key: \(customKey)")
+                    AppLogger.log("createSession - requesting custom key: \(customKey)", category: .nativeChat)
                 }
 
                 return .run { send in
@@ -347,18 +342,18 @@ struct NativeChatViewModel {
                                 agentId: agentIdCapture,
                                 customKey: customKey
                             )
-                            logger.log("SMAlog: Created session: \(String(sessionKey))")
+                            AppLogger.log("Created session: \(String(sessionKey))", category: .nativeChat)
                             await send(.sessionCreated(sessionKey))
                             await send(.loadSessions)
                         } catch {
-                            logger.log("SMAlog: Create session error: \(error.localizedDescription)")
+                            AppLogger.log("Create session error: \(error.localizedDescription)", category: .nativeChat, level: .error)
                             await send(.setError(error.localizedDescription))
                         }
                     }
                 }
 
             case .sessionCreated(let sessionKey):
-                logger.log("SMAlog: Session created callback: \(sessionKey)")
+                AppLogger.log("Session created callback: \(sessionKey)", category: .nativeChat)
                 state.isLoading = false
                 // Build a minimal entry from the new key. The next loadSessions
                 // (already dispatched by .createSession's run block) will
@@ -455,9 +450,9 @@ struct NativeChatViewModel {
                                 idempotencyKey: UUID().uuidString,
                                 attachments: []
                             )
-                            logger.log("SMAlog: Message sent, waiting for response...")
+                            AppLogger.log("Message sent, waiting for response...", category: .nativeChat)
                         } catch {
-                            logger.log("SMAlog: Send message error: \(error.localizedDescription)")
+                            AppLogger.log("Send message error: \(error.localizedDescription)", category: .nativeChat, level: .error)
                             await send(.setError(error.localizedDescription))
                             await send(.setSending(false))
                         }
@@ -483,7 +478,7 @@ struct NativeChatViewModel {
                 let alreadyInProgress = Self.inFlightLoadHistory == cachedSessionKey
                 if alreadyInProgress {
                     Self.loadHistoryLock.unlock()
-                    logger.log("SMAlog: [loadHistory] already in progress for \(cachedSessionKeyPreview)")
+                    AppLogger.log("[loadHistory] already in progress for \(cachedSessionKeyPreview)", category: .nativeChat)
                 } else {
                     Self.inFlightLoadHistory = cachedSessionKey
                     Self.loadHistoryLock.unlock()
@@ -493,7 +488,7 @@ struct NativeChatViewModel {
 
                 return .run { [cachedSessionKey, cachedSessionKeyPreview, cachedIsRestoring, taskIdStr] send in
                     Task {
-                        logger.log("SMAlog: [\(taskIdStr)] loadHistory Task started, sessionKey: \(cachedSessionKeyPreview)")
+                        AppLogger.log("[\(taskIdStr)] loadHistory Task started, sessionKey: \(cachedSessionKeyPreview)", category: .nativeChat)
                         defer {
                             Self.loadHistoryLock.lock()
                             if Self.inFlightLoadHistory == cachedSessionKey {
@@ -503,7 +498,7 @@ struct NativeChatViewModel {
                         }
                         // Load cache first and send to UI immediately
                         let cachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
-                        logger.log("SMAlog: cache returned \(cachedMessages.count) messages, sessionKey: \(cachedSessionKeyPreview)")
+                        AppLogger.log("cache returned \(cachedMessages.count) messages, sessionKey: \(cachedSessionKeyPreview)", category: .nativeChat)
                         if !cachedMessages.isEmpty {
                             let chatMessages = cachedMessages.compactMap { msg -> ChatMessage? in
                                 var text = ""
@@ -534,7 +529,7 @@ struct NativeChatViewModel {
                                     stopReason: msg.stopReason
                                 )
                             }
-                            logger.log("SMAlog: Loaded \(chatMessages.count) cached messages for session: \(cachedSessionKeyPreview), isRestoring: \(cachedIsRestoring)")
+                            AppLogger.log("Loaded \(chatMessages.count) cached messages for session: \(cachedSessionKeyPreview), isRestoring: \(cachedIsRestoring)", category: .nativeChat)
                             // Precompute collapse and markdown states BEFORE sending to UI
                             await MainActor.run {
                                 MarkdownCache.shared.precomputeForMessages(chatMessages)
@@ -563,7 +558,7 @@ struct NativeChatViewModel {
                             // repopulate the UI).
 
                             let messageCount = history.messages?.count ?? 0
-                            logger.log("SMAlog: Loaded \(messageCount) history messages for session: \(cachedSessionKeyPreview)")
+                            AppLogger.log("Loaded \(messageCount) history messages for session: \(cachedSessionKeyPreview)", category: .nativeChat)
                             let chatMessages: [ChatMessage] = (history.messages ?? []).enumerated().compactMap { index, anyCodable -> ChatMessage? in
                                 guard let msg = try? JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(anyCodable)) else {
                                     print("SMAlog: message[\(index)] failed to decode as OpenClawChatMessage, raw: \(String(describing: anyCodable))")
@@ -610,15 +605,15 @@ struct NativeChatViewModel {
                                         text = text + "\n\n" + toolCallText
                                     }
                                 }
-                                os_log("SMAlog: history msg[%{public}d] contentItems=%{public}d text_len=%{private}d role=%{public}s", log: osLog, type: .debug, index, msg.content.count, text.count, role)
+                                AppLogger.log("history msg[\(index)] contentItems=\(msg.content.count) text_len=\(text.count) role=\(role)", category: .nativeChat)
                                 if text.isEmpty {
-                                    os_log("SMAlog: history msg[%{public}d] skipped - empty text, content: %{public}s", log: osLog, type: .debug, index, String(describing: msg.content))
+                                    AppLogger.log("history msg[\(index)] skipped - empty text, content: \(String(describing: msg.content))", category: .nativeChat, level: .warning)
                                     return nil
                                 }
                                 let ts = msg.timestamp ?? 0
                                 let msgId = msg.id.uuidString
                                 let textPreview = String(text.prefix(100))
-                                os_log("SMAlog: history msg[%{public}d] role=%{public}s toolName=%{public}s toolCallId=%{public}s text_len=%{public}s text_preview=%{public}s", log: osLog, type: .debug, index, role, msg.toolName ?? "nil", msg.toolCallId ?? "nil", "\(text.count)", textPreview)
+                                AppLogger.log("history msg[\(index)] role=\(role) toolName=\(msg.toolName ?? "nil") toolCallId=\(msg.toolCallId ?? "nil") text_len=\(text.count) text_preview=\(textPreview)", category: .nativeChat)
                                 return ChatMessage(
                                     id: msgId,
                                     text: text,
@@ -639,10 +634,10 @@ struct NativeChatViewModel {
                                     stopReason: msg.stopReason
                                 )
                             }
-                            logger.log("SMAlog: chatMessages count=\(chatMessages.count)")
+                            AppLogger.log("chatMessages count=\(chatMessages.count)", category: .nativeChat)
                             // Cache the fetched messages (setMessages handles deduplication)
                             let openClawMessages = chatMessages.compactMap { createOpenClawChatMessage(from: $0) }
-                            logger.log("SMAlog: openClawMessages count=\(openClawMessages.count)")
+                            AppLogger.log("openClawMessages count=\(openClawMessages.count)", category: .nativeChat)
                             await MessageCache.shared.setMessages(openClawMessages, for: cachedSessionKey)
 
                             // Reload from cache to get accurate message count (cache now has all messages deduplicated)
@@ -676,7 +671,7 @@ struct NativeChatViewModel {
                                     stopReason: msg.stopReason
                                 )
                             }
-                            logger.log("SMAlog: [\(taskIdStr)] finalCachedMessages from cache: \(finalChatMessages.count)")
+                            AppLogger.log("[\(taskIdStr)] finalCachedMessages from cache: \(finalChatMessages.count)", category: .nativeChat)
 
                             // Only update UI if we didn't already show cache, or if there are new messages
                             // This prevents flickering when cache and network return the same data.
@@ -690,16 +685,16 @@ struct NativeChatViewModel {
                                 // New messages were added
                                 await send(.loadedNetworkHistory(sessionKey: cachedSessionKey, messages: finalChatMessages))
                             } else {
-                                logger.log("SMAlog: [\(taskIdStr)] Network returned same messages as cache, skipping UI update")
+                                AppLogger.log("[\(taskIdStr)] Network returned same messages as cache, skipping UI update", category: .nativeChat)
                             }
                         } catch {
-                            logger.log("SMAlog: Load history error: \(error.localizedDescription)")
+                            AppLogger.log("Load history error: \(error.localizedDescription)", category: .nativeChat, level: .error)
                         }
                     }
                 }
 
             case .loadedCachedHistory(let messages, let isRestoring):
-                logger.log("SMAlog: loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)")
+                AppLogger.log("loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)", category: .nativeChat)
                 state.messages = messages
                 state.scrollTrigger += 1
                 state.cacheLoadCounter += 1
@@ -726,10 +721,10 @@ struct NativeChatViewModel {
                 let currentKey = state.selectedSession?.key
                 if currentKey != sessionKey {
                     let currentKeyLog = currentKey ?? "nil"
-                    logger.log("SMAlog: loadedNetworkHistory dropped: session \(String(sessionKey.prefix(8))) is no longer selected (current: \(String(currentKeyLog.prefix(8))))")
+                    AppLogger.log("loadedNetworkHistory dropped: session \(String(sessionKey.prefix(8))) is no longer selected (current: \(String(currentKeyLog.prefix(8))))", category: .nativeChat, level: .warning)
                     return .none
                 }
-                logger.log("SMAlog: loadedNetworkHistory applying \(messages.count) messages for session: \(String(sessionKey.prefix(8)))")
+                AppLogger.log("loadedNetworkHistory applying \(messages.count) messages for session: \(String(sessionKey.prefix(8)))", category: .nativeChat)
                 state.messages = messages
                 state.scrollTrigger += 1
                 state.cacheLoadCounter += 1
@@ -749,10 +744,10 @@ struct NativeChatViewModel {
 
             case .appendNewMessages(let newMessages):
                 if newMessages.isEmpty {
-                    logger.log("SMAlog: appendNewMessages - no new messages")
+                    AppLogger.log("appendNewMessages - no new messages", category: .nativeChat)
                     return .none
                 }
-                logger.log("SMAlog: appendNewMessages appending \(newMessages.count) messages")
+                AppLogger.log("appendNewMessages appending \(newMessages.count) messages", category: .nativeChat)
                 state.messages.append(contentsOf: newMessages)
                 state.needsScrollToBottom = true
                 return .none
@@ -762,13 +757,13 @@ struct NativeChatViewModel {
                 if let existingIndex = state.messages.firstIndex(where: { $0.id == message.id }) {
                     // Update existing message (streaming text update)
                     var existingMessage = state.messages[existingIndex]
-                    logger.log("SMAlog: receiveMessage update - id: \(String(message.id.prefix(8))), existingIndex: \(existingIndex), newText len: \(message.text.count), existingText len: \(existingMessage.text.count), state: \(message.state)")
+                    AppLogger.log("receiveMessage update - id: \(String(message.id.prefix(8))), existingIndex: \(existingIndex), newText len: \(message.text.count), existingText len: \(existingMessage.text.count), state: \(message.state)", category: .nativeChat)
                     // Only update text if new text is not empty (preserve content on end phase)
                     if !message.text.isEmpty {
                         existingMessage.text = message.text
-                        logger.log("SMAlog: receiveMessage updated text, new len: \(existingMessage.text.count), prev state: \(existingMessage.state), new state: \(message.state)")
+                        AppLogger.log("receiveMessage updated text, new len: \(existingMessage.text.count), prev state: \(existingMessage.state), new state: \(message.state)", category: .nativeChat)
                     } else {
-                        logger.log("SMAlog: receiveMessage SKIPPED text update (empty), prev state: \(existingMessage.state), new state: \(message.state)")
+                        AppLogger.log("receiveMessage SKIPPED text update (empty), prev state: \(existingMessage.state), new state: \(message.state)", category: .nativeChat, level: .warning)
                     }
                     existingMessage.state = message.state
                     if message.startedAt != nil { existingMessage.startedAt = message.startedAt }
@@ -781,7 +776,7 @@ struct NativeChatViewModel {
                     if message.cacheWrite != nil { existingMessage.cacheWrite = message.cacheWrite }
                     state.messages[existingIndex] = existingMessage
                     state.scrollTrigger += 1
-                    logger.log("SMAlog: updated message: \(message.id), text length: \(existingMessage.text.count), FINAL state: \(existingMessage.state)")
+                    AppLogger.log("updated message: \(message.id), text length: \(existingMessage.text.count), FINAL state: \(existingMessage.state)", category: .nativeChat)
                 } else {
                     // Fallback: id mismatch between streaming (id=runId) and cached
                     // (id=server-id) can cause a second copy of the same logical
@@ -796,7 +791,7 @@ struct NativeChatViewModel {
                     }
                     if let similarIndex = similarIndex {
                         var existingMessage = state.messages[similarIndex]
-                        os_log("SMAlog: receiveMessage similar-match - newId=%{public}s existingId=%{public}s idx=%{public}d state=%{public}s", log: osLog, type: .debug, String(message.id.prefix(8)), String(existingMessage.id.prefix(8)), similarIndex, message.state)
+                        AppLogger.log("receiveMessage similar-match - newId=\(String(message.id.prefix(8))) existingId=\(String(existingMessage.id.prefix(8))) idx=\(similarIndex) state=\(message.state)", category: .nativeChat)
                         if !message.text.isEmpty {
                             existingMessage.text = message.text
                         }
@@ -820,10 +815,10 @@ struct NativeChatViewModel {
                         // user message), append normally.
                         if let last = state.messages.last, last.state != "final" {
                             state.messages.insert(message, at: state.messages.count - 1)
-                            logger.log("SMAlog: receiveMessage new (inserted before last, lastState=\(last.state)) - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)")
+                            AppLogger.log("receiveMessage new (inserted before last, lastState=\(last.state)) - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)", category: .nativeChat)
                         } else {
                             state.messages.append(message)
-                            logger.log("SMAlog: receiveMessage new (appended) - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)")
+                            AppLogger.log("receiveMessage new (appended) - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)", category: .nativeChat)
                         }
                         state.scrollTrigger += 1
                     }
@@ -902,7 +897,7 @@ struct NativeChatViewModel {
     private func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
         switch event {
         case .agent(let payload):
-            logger.log("SMAlog: agent event - stream=\(payload.stream, privacy: .public) runId=\(payload.runId, privacy: .public) seq=\(payload.seq ?? -1, privacy: .public) ts=\(payload.ts ?? 0, privacy: .public) data=\(summarizeData(payload.data), privacy: .public)")
+            AppLogger.log("agent event - stream=\(payload.stream) runId=\(payload.runId) seq=\(payload.seq ?? -1) ts=\(payload.ts ?? 0) data=\(summarizeData(payload.data))", category: .nativeChat)
             let runId = payload.runId
             let ts = payload.ts ?? 0
             let timestamp = Date(timeIntervalSince1970: Double(ts) / 1000)
@@ -924,7 +919,7 @@ struct NativeChatViewModel {
                     // a typed id; assistant deltas also land on this placeholder
                     // since they share id=runId, so it doubles as the assistant
                     // bubble when text arrives.
-                    logger.log("SMAlog: agent lifecycle start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)")
+                    AppLogger.log("agent lifecycle start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)", category: .nativeChat)
                     await MainActor.run {
                         MarkdownStreamManager.shared.holder(for: runId)
                         MarkdownCache.shared.setNeedsMarkdown(runId, value: true)
@@ -953,13 +948,13 @@ struct NativeChatViewModel {
                     // only the actual lifecycle end reaches here, so the run-level
                     // state (tokens, endedAt, setSending(false)) is correctly tied
                     // to the real terminal signal.
-                    logger.log("SMAlog: agent lifecycle end - runId: \(runId), data keys: \(data.keys.map { $0 })")
+                    AppLogger.log("agent lifecycle end - runId: \(runId), data keys: \(data.keys.map { $0 })", category: .nativeChat)
                     var inputTokens: Int?
                     var outputTokens: Int?
                     var cacheRead: Int?
                     var cacheWrite: Int?
                     if let usage = data["usage"]?.value as? [String: Any] {
-                        logger.log("SMAlog: found usage dict: \(String(describing: usage))")
+                        AppLogger.log("found usage dict: \(String(describing: usage))", category: .nativeChat)
                         if let input = usage["input"] as? Int { inputTokens = input }
                         if let output = usage["output"] as? Int { outputTokens = output }
                         if let cr = usage["cacheRead"] as? Int { cacheRead = cr }
@@ -969,7 +964,7 @@ struct NativeChatViewModel {
                     if outputTokens == nil, let output = data["outputTokens"]?.value as? Int { outputTokens = output }
                     if cacheRead == nil, let cr = data["cacheRead"]?.value as? Int { cacheRead = cr }
                     if cacheWrite == nil, let cw = data["cacheWrite"]?.value as? Int { cacheWrite = cw }
-                    logger.log("SMAlog: agent lifecycle end - tokens: input: \(inputTokens ?? -1), output: \(outputTokens ?? -1), cacheRead: \(cacheRead ?? -1), cacheWrite: \(cacheWrite ?? -1)")
+                    AppLogger.log("agent lifecycle end - tokens: input: \(inputTokens ?? -1), output: \(outputTokens ?? -1), cacheRead: \(cacheRead ?? -1), cacheWrite: \(cacheWrite ?? -1)", category: .nativeChat)
                     // Flush the markdown stream buffer and read the full accumulated
                     // text so it can be persisted. Deltas carry the full cumulative
                     // string per chunk; MarkdownViewTextKit holds the real body until
@@ -979,7 +974,7 @@ struct NativeChatViewModel {
                         MarkdownStreamManager.shared.end(messageId: runId)
                         return MarkdownStreamManager.shared.currentText(for: runId) ?? ""
                     }
-                    logger.log("SMAlog: agent lifecycle end - fullText len: \(fullText.count) for runId: \(runId)")
+                    AppLogger.log("agent lifecycle end - fullText len: \(fullText.count) for runId: \(runId)", category: .nativeChat)
                     let message = ChatMessage(
                         id: runId,
                         text: fullText,
@@ -1018,7 +1013,7 @@ struct NativeChatViewModel {
                 // Without this we render `ABC` + `ABCDE` + `ABCDEF` as
                 // `ABCABCDEABCDEF`. The placeholder at id=runId absorbs this update.
                 let text = extractString(from: data, key: "text") ?? ""
-                logger.log("SMAlog: agent assistant delta - text len: \(text.count)")
+                AppLogger.log("agent assistant delta - text len: \(text.count)", category: .nativeChat)
                 guard !text.isEmpty else { return }
                 await MainActor.run {
                     MarkdownStreamManager.shared.appendCumulative(messageId: runId, cumulative: text)
@@ -1046,7 +1041,7 @@ struct NativeChatViewModel {
                 // placeholder. Use a synthetic id so the message dedups against
                 // itself across deltas and renders as a thinking bubble.
                 let text = extractString(from: data, key: "text") ?? ""
-                logger.log("SMAlog: agent thinking delta - text len: \(text.count)")
+                AppLogger.log("agent thinking delta - text len: \(text.count)", category: .nativeChat)
                 guard !text.isEmpty else { return }
                 let message = ChatMessage(
                     id: "\(runId):thinking",
@@ -1077,13 +1072,13 @@ struct NativeChatViewModel {
                 // path goes through `stream: "item"` and `stream: "command_output"`
                 // below).
                 guard let toolCallId = extractString(from: data, key: "toolCallId") else {
-                    logger.log("SMAlog: agent tool event missing toolCallId, skipping. data keys: \(data.keys.map { $0 })")
+                    AppLogger.log("agent tool event missing toolCallId, skipping. data keys: \(data.keys.map { $0 })", category: .nativeChat, level: .warning)
                     return
                 }
                 let toolName = extractString(from: data, key: "name") ?? ""
                 if phase == "start" {
                     let text = formatToolCallBubbleText(name: toolName, arguments: data["args"])
-                    logger.log("SMAlog: agent tool start - tool: \(toolName), callId: \(toolCallId)")
+                    AppLogger.log("agent tool start - tool: \(toolName), callId: \(toolCallId)", category: .nativeChat)
                     let message = ChatMessage(
                         id: "\(runId):tool:\(toolCallId)",
                         text: text,
@@ -1105,7 +1100,7 @@ struct NativeChatViewModel {
                     // Intermediate state. Refresh the toolCall bubble with the
                     // latest args/progress so the user sees the tool is alive.
                     let text = formatToolCallBubbleText(name: toolName, arguments: data["args"])
-                    logger.log("SMAlog: agent tool update - tool: \(toolName), callId: \(toolCallId), text len: \(text.count)")
+                    AppLogger.log("agent tool update - tool: \(toolName), callId: \(toolCallId), text len: \(text.count)", category: .nativeChat)
                     let message = ChatMessage(
                         id: "\(runId):tool:\(toolCallId)",
                         text: text,
@@ -1127,7 +1122,7 @@ struct NativeChatViewModel {
                     let resultValue = data["result"]?.value
                     let text = formatToolResultText(result: resultValue)
                     let isError = (data["isError"]?.value as? Bool) ?? false
-                    logger.log("SMAlog: agent tool result - tool: \(toolName), callId: \(toolCallId), isError: \(isError), text len: \(text.count)")
+                    AppLogger.log("agent tool result - tool: \(toolName), callId: \(toolCallId), isError: \(isError), text len: \(text.count)", category: .nativeChat)
                     let message = ChatMessage(
                         id: "\(runId):toolResult:\(toolCallId)",
                         text: text,
@@ -1157,7 +1152,7 @@ struct NativeChatViewModel {
                 // metadata (status/error). For command kind, the output
                 // arrives via `stream: "command_output"` events.
                 guard let itemId = extractString(from: data, key: "itemId") else {
-                    logger.log("SMAlog: agent item event missing itemId, skipping. keys: \(data.keys.map { $0 })")
+                    AppLogger.log("agent item event missing itemId, skipping. keys: \(data.keys.map { $0 })", category: .nativeChat, level: .warning)
                     return
                 }
                 let itemPhase = extractString(from: data, key: "phase")
@@ -1169,7 +1164,7 @@ struct NativeChatViewModel {
                 let errorText = extractString(from: data, key: "error")
                 let toolCallId = extractString(from: data, key: "toolCallId")
                 let meta = extractString(from: data, key: "meta")
-                logger.log("SMAlog: agent item - kind: \(kind), phase: \(itemPhase ?? "nil"), itemId: \(itemId), status: \(status ?? "?")")
+                AppLogger.log("agent item - kind: \(kind), phase: \(itemPhase ?? "nil"), itemId: \(itemId), status: \(status ?? "?")", category: .nativeChat)
                 // Build text representation for the toolCall bubble. Use the
                 // shared formatter so live bubbles match the history format
                 // ("ToolCall: <name>" + "key: value" lines per arg). The
@@ -1239,7 +1234,7 @@ struct NativeChatViewModel {
                 // `phase: "delta"`, final on `phase: "end"`). Accumulate into
                 // a toolResult bubble keyed by itemId.
                 guard let itemId = extractString(from: data, key: "itemId") else {
-                    logger.log("SMAlog: agent command_output missing itemId, skipping. keys: \(data.keys.map { $0 })")
+                    AppLogger.log("agent command_output missing itemId, skipping. keys: \(data.keys.map { $0 })", category: .nativeChat, level: .warning)
                     return
                 }
                 let outputPhase = extractString(from: data, key: "phase")
@@ -1247,7 +1242,7 @@ struct NativeChatViewModel {
                 let toolName = extractString(from: data, key: "name") ?? ""
                 let exitCode = extractInt(from: data, key: "exitCode")
                 let durationMs = extractInt(from: data, key: "durationMs")
-                logger.log("SMAlog: agent command_output - phase: \(outputPhase ?? "nil"), itemId: \(itemId), output len: \(output.count), exitCode: \(exitCode.map(String.init) ?? "nil")")
+                AppLogger.log("agent command_output - phase: \(outputPhase ?? "nil"), itemId: \(itemId), output len: \(output.count), exitCode: \(exitCode.map(String.init) ?? "nil")", category: .nativeChat)
                 var resultText = output
                 if outputPhase == "end" {
                     // Append exit info so the bubble shows the command's
@@ -1280,7 +1275,7 @@ struct NativeChatViewModel {
                 await send(.receiveMessage(message))
             default:
                 // plan, approval, patch, compaction, error — not yet surfaced.
-                logger.log("SMAlog: agent UNHANDLED stream=\(payload.stream, privacy: .public) runId=\(payload.runId, privacy: .public) seq=\(payload.seq ?? -1, privacy: .public) data=\(summarizeData(data), privacy: .public)")
+                AppLogger.log("agent UNHANDLED stream=\(payload.stream) runId=\(payload.runId) seq=\(payload.seq ?? -1) data=\(summarizeData(data))", category: .nativeChat)
             }
 
         case .chat(let chat):
@@ -1321,7 +1316,7 @@ struct NativeChatViewModel {
                     blockSummaries = ["string=\"\(str.prefix(100))\""]
                 }
             }
-            logger.log("SMAlog: chat event runId=\(chat.runId ?? "nil", privacy: .public) sessionKey=\(chat.sessionKey ?? "nil", privacy: .public) state=\(chat.state ?? "nil", privacy: .public) role=\(role, privacy: .public) blocks=[\(blockSummaries.joined(separator: " | "), privacy: .public)] errorMessage=\(chat.errorMessage ?? "nil", privacy: .public)")
+            AppLogger.log("chat event runId=\(chat.runId ?? "nil") sessionKey=\(chat.sessionKey ?? "nil") state=\(chat.state ?? "nil") role=\(role) blocks=[\(blockSummaries.joined(separator: " | "))] errorMessage=\(chat.errorMessage ?? "nil")", category: .nativeChat)
 
         case .sessionMessage(let sm):
             // History/event-stream messages are typed OpenClawChatMessage.
@@ -1336,14 +1331,14 @@ struct NativeChatViewModel {
                     blockSummaries.append(parts.joined(separator: " "))
                 }
             }
-            logger.log("SMAlog: sessionMessage messageId=\(sm.messageId ?? "nil", privacy: .public) messageSeq=\(sm.messageSeq ?? -1, privacy: .public) role=\(sm.message?.role ?? "nil", privacy: .public) blocks=[\(blockSummaries.joined(separator: " | "), privacy: .public)]")
+            AppLogger.log("sessionMessage messageId=\(sm.messageId ?? "nil") messageSeq=\(sm.messageSeq ?? -1) role=\(sm.message?.role ?? "nil") blocks=[\(blockSummaries.joined(separator: " | "))]", category: .nativeChat)
 
         case .tick:
-            logger.log("SMAlog: transport tick")
+            AppLogger.log("transport tick", category: .nativeChat)
         case .seqGap:
-            logger.log("SMAlog: transport seqGap (out-of-order event detected)")
+            AppLogger.log("transport seqGap (out-of-order event detected)", category: .nativeChat)
         case .health(let ok):
-            logger.log("SMAlog: transport health ok=\(ok, privacy: .public)")
+            AppLogger.log("transport health ok=\(ok)", category: .nativeChat)
         }
     }
 
