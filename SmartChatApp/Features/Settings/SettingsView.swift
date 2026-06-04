@@ -162,6 +162,23 @@ struct SettingsView: View {
                         .foregroundColor(theme.textSecondary)
                 }
             }
+
+            Section("Debug & Logs") {
+                Toggle("Network Logs", isOn: $config.logsNetwork)
+                Toggle("Cache Logs", isOn: $config.logsCache)
+                Toggle("NativeChat Logs", isOn: $config.logsNativeChat)
+                Toggle("Markdown Logs", isOn: $config.logsMarkdown)
+
+                NavigationLink("Debug Logs Viewer") {
+                    // TODO: DebugLogsView() — replaced in Task 5
+                    Text("Debug Logs Viewer placeholder")
+                }
+
+                Button("Clear Logs") {
+                    AppLogger.shared.clear()
+                }
+                .foregroundColor(.red)
+            }
         }
         .navigationTitle("Settings")
         .sheet(isPresented: $showProfileSheet) {
