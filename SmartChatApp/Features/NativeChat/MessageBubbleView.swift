@@ -219,13 +219,23 @@ struct MessageBubbleView: View {
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 messageText
-                // Skip the trailing 3 dots for assistant streaming markdown —
-                // the `StreamingMarkdownCardView` already signals activity via
-                // its in-place text updates, so the extra dots are redundant.
-                // Keep them for other streaming roles (thinking, toolCall, etc.).
-                if message.state == "streaming" && !message.isOutgoing && message.role != "assistant" {
-                    TypingIndicatorView()
-                        .padding(.top, 4)
+                // Trailing typing dots for non-assistant, non-user streaming
+                // roles (thinking, toolCall, toolResult). The slot is only
+                // emitted for those roles — user and assistant bubbles don't
+                // get an extra 10pt of empty space. Inside the slot, the
+                // Group reserves a fixed 6pt + 4pt top padding so the bubble
+                // height doesn't change when streaming ends and the indicator
+                // disappears.
+                if !message.isOutgoing && message.role != "assistant" {
+                    Group {
+                        if message.state == "streaming" {
+                            TypingIndicatorView()
+                        } else {
+                            Color.clear
+                        }
+                    }
+                    .frame(height: 6)
+                    .padding(.top, 4)
                 }
             }
             .padding(.horizontal, 12)
@@ -293,14 +303,15 @@ struct MessageBubbleView: View {
     }
 
     private var collapseLineLimit: Int? {
-        // During streaming, always show the full text so the user can read
-        // the response as it arrives. Collapse only applies after the run ends.
-        if message.state == "streaming" {
-            os_log("SMAlog: [collapseLineLimit] id=%{public}s state=%{public}s -> nil (streaming, full text)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.state)
+        // During streaming and for fresh (this-session) messages, show the
+        // full text. Collapse only applies to history messages that were
+        // already huge when the user opened the chat.
+        if message.state == "streaming" || message.isFresh {
+            os_log("SMAlog: [collapseLineLimit] id=%{public}s state=%{public}s isFresh=%{public}03d -> nil (full text)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.state, message.isFresh ? 1 : 0)
             return nil
         }
         let limit = isExpanded ? nil : maxCollapsedLines
-        os_log("SMAlog: [collapseLineLimit] id=%{public}s state=%{public}s -> %{public}s (post-streaming)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.state, limit.map(String.init) ?? "nil")
+        os_log("SMAlog: [collapseLineLimit] id=%{public}s state=%{public}s isFresh=%{public}03d -> %{public}s (history)", log: bubbleLog, type: .debug, String(message.id.prefix(8)), message.state, message.isFresh ? 1 : 0, limit.map(String.init) ?? "nil")
         return limit
     }
 

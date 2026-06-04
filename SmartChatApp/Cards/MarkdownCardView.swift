@@ -7,7 +7,18 @@ import MarkdownDisplayView
 struct MarkdownCardView: View {
     let content: String
 
+    /// Match the width that `StreamingMarkdownCardView` uses, so the view-tree
+    /// swap at the end of streaming doesn't shift the bubble horizontally.
+    /// Without an explicit width, the static bubble's width is determined by
+    /// `MarkdownViewTextKit`'s intrinsic content size, which is usually narrower
+    /// than the streaming bubble's full-width frame — producing a visible
+    /// layout jump when `isAssistantStreaming` flips to false.
+    /// The 16*2 is the HStack padding around the bubble; the 12*2 is the
+    /// bubble's own horizontal padding.
+    static let bubbleChromeWidth: CGFloat = 16 * 2 + 12 * 2
+
     var body: some View {
+        let contentWidth = UIScreen.main.bounds.width - Self.bubbleChromeWidth
         if #available(iOS 15.0, *) {
             MarkdownViewRepresentable(
                 markdown: content,
@@ -15,9 +26,11 @@ struct MarkdownCardView: View {
                     UIApplication.shared.open(url)
                 }
             )
+            .frame(width: contentWidth, alignment: .topLeading)
         } else {
             Text(content)
                 .font(.body)
+                .frame(width: contentWidth, alignment: .topLeading)
         }
     }
 }
@@ -51,19 +64,14 @@ struct StreamingMarkdownCardView: View {
     let content: String
     @State private var height: CGFloat = 0
 
-    /// Match the width a static `MarkdownCardView` naturally fills inside
-    /// a `MessageBubbleView`: screen width minus the outer HStack padding
-    /// (16 × 2) and the bubble's own horizontal padding (12 × 2). The
-    /// previous 0.7 multiplier left the streaming bubble visibly narrower
-    /// than history bubbles for the same content.
-    private static let bubbleChromeWidth: CGFloat = 16 * 2 + 12 * 2
-
     var body: some View {
         StreamingMarkdownRepresentable(messageId: messageId, height: $height)
             // Give the view an explicit width so it can compute a non-zero height.
             // MarkdownViewTextKit's intrinsicContentSize is 0 when content is empty,
-            // which traps it at 0x0 inside SwiftUI's layout.
-            .frame(width: UIScreen.main.bounds.width - Self.bubbleChromeWidth,
+            // which traps it at 0x0 inside SwiftUI's layout. Width matches
+            // `MarkdownCardView.bubbleChromeWidth` so the streaming → static
+            // view swap doesn't shift the bubble.
+            .frame(width: UIScreen.main.bounds.width - MarkdownCardView.bubbleChromeWidth,
                    height: max(height, 1),
                    alignment: .topLeading)
     }
