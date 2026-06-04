@@ -1,10 +1,7 @@
 import Foundation
 import OpenClawKit
 import OpenClawChatUI
-import OSLog
 import CryptoKit
-
-private let osLog = OSLog(subsystem: "SmartChatApp", category: "MessageCache")
 
 actor MessageCache {
     static let shared = MessageCache()
@@ -20,11 +17,11 @@ actor MessageCache {
 
     func getMessages(for sessionKey: String) -> [OpenClawChatMessage] {
         if let cached = cache[sessionKey] {
-            os_log("SMAlog: [MessageCache getMessages] sessionKey=%{public}s returning=%{public}d from_memory", log: osLog, type: .debug, String(sessionKey.prefix(8)), cached.count)
+            AppLogger.log("[MessageCache getMessages] sessionKey=\(String(sessionKey.prefix(8))) returning=\(cached.count) from_memory", category: .cache)
             return cached
         }
         let messages = loadFromDisk(for: sessionKey)
-        os_log("SMAlog: [MessageCache getMessages] sessionKey=%{public}s returning=%{public}d from_disk", log: osLog, type: .debug, String(sessionKey.prefix(8)), messages.count)
+        AppLogger.log("[MessageCache getMessages] sessionKey=\(String(sessionKey.prefix(8))) returning=\(messages.count) from_disk", category: .cache)
         cache[sessionKey] = messages
         return messages
     }
@@ -58,14 +55,14 @@ actor MessageCache {
             }
         }
 
-        os_log("SMAlog: [MessageCache setMessages] sessionKey=%{public}s original=%{public}d added=%{public}d replaced=%{public}d skippedEmpty=%{public}d totalInput=%{public}d", log: osLog, type: .debug, String(sessionKey.prefix(8)), originalCount, added, replaced, skippedEmpty, messages.count)
+        AppLogger.log("[MessageCache setMessages] sessionKey=\(String(sessionKey.prefix(8))) original=\(originalCount) added=\(added) replaced=\(replaced) skippedEmpty=\(skippedEmpty) totalInput=\(messages.count)", category: .cache)
 
         allMessages.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
         if allMessages.count > maxLocalMessages {
             allMessages = Array(allMessages.suffix(maxLocalMessages))
         }
 
-        os_log("SMAlog: [MessageCache setMessages] final allMessages.count=%{public}d", log: osLog, type: .debug, allMessages.count)
+        AppLogger.log("[MessageCache setMessages] final allMessages.count=\(allMessages.count)", category: .cache)
 
         cache[sessionKey] = allMessages
         saveToDisk(allMessages, for: sessionKey)
@@ -124,7 +121,7 @@ actor MessageCache {
     func appendMessages(_ newMessages: [OpenClawChatMessage], for sessionKey: String) {
         var existing = cache[sessionKey] ?? loadFromDisk(for: sessionKey)
         let originalCount = existing.count
-        os_log("SMAlog: [MessageCache appendMessages] sessionKey=%{public}s existing.count=%{public}d newMessages.count=%{public}d", log: osLog, type: .debug, String(sessionKey.prefix(8)), existing.count, newMessages.count)
+        AppLogger.log("[MessageCache appendMessages] sessionKey=\(String(sessionKey.prefix(8))) existing.count=\(existing.count) newMessages.count=\(newMessages.count)", category: .cache)
         var added = 0
         var replaced = 0
         var skippedEmpty = 0
@@ -143,7 +140,7 @@ actor MessageCache {
             }
         }
         let trimmed = Array(existing.suffix(maxLocalMessages))
-        os_log("SMAlog: [MessageCache appendMessages] original=%{public}d added=%{public}d replaced=%{public}d skippedEmpty=%{public}d final count=%{public}d", log: osLog, type: .debug, originalCount, added, replaced, skippedEmpty, trimmed.count)
+        AppLogger.log("[MessageCache appendMessages] original=\(originalCount) added=\(added) replaced=\(replaced) skippedEmpty=\(skippedEmpty) final count=\(trimmed.count)", category: .cache)
         cache[sessionKey] = trimmed
         saveToDisk(trimmed, for: sessionKey)
     }
@@ -168,14 +165,14 @@ actor MessageCache {
     }
 
     func clearAll() {
-        os_log("SMAlog: [MessageCache clearAll] START", log: osLog, type: .debug)
+        AppLogger.log("[MessageCache clearAll] START", category: .cache)
         cache.removeAll()
         let keys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(keyPrefix) }
-        os_log("SMAlog: [MessageCache clearAll] found %d keys to remove", log: osLog, type: .debug, keys.count)
+        AppLogger.log("[MessageCache clearAll] found \(keys.count) keys to remove", category: .cache)
         for key in keys {
             defaults.removeObject(forKey: key)
         }
-        os_log("SMAlog: [MessageCache clearAll] DONE", log: osLog, type: .debug)
+        AppLogger.log("[MessageCache clearAll] DONE", category: .cache)
     }
 
     func getStats() -> (sessionCount: Int, messageCount: Int) {
