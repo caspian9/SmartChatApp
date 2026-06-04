@@ -5,6 +5,7 @@ struct DebugLogsView: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var logger = AppLogger.shared
     @State private var enabledChips: Set<LogCategory> = Set(LogCategory.allCases)
+    @State private var searchText: String = ""
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -13,12 +14,17 @@ struct DebugLogsView: View {
     }()
 
     private var displayEntries: [LogEntry] {
-        logger.entries.filter { enabledChips.contains($0.category) }
+        logger.entries.filter { entry in
+            guard enabledChips.contains(entry.category) else { return false }
+            if searchText.isEmpty { return true }
+            return entry.message.localizedCaseInsensitiveContains(searchText)
+        }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             chipsBar
+            searchBar
             scrollList
         }
         .navigationTitle("Debug Logs")
@@ -52,6 +58,27 @@ struct DebugLogsView: View {
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search", text: $searchText)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.gray.opacity(0.1))
     }
 
     private var scrollList: some View {
