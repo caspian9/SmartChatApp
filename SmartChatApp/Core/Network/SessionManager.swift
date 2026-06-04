@@ -4,9 +4,6 @@ import OpenClawProtocol
 import OpenClawChatUI
 import UIKit
 import SwiftData
-import os.log
-
-private let logger = Logger(subsystem: "SmartChatApp", category: "SessionManager")
 
 public struct DebugLogEntry: Identifiable, Equatable {
     public var id = UUID()
@@ -110,10 +107,10 @@ actor SessionManager {
                 connectOptions: connectOptions,
                 sessionBox: sessionBox,
                 onConnected: {
-                    logger.log("log: Operator connected to gateway")
+                    AppLogger.log("Operator connected to gateway", category: .network)
                 },
                 onDisconnected: { [weak self] reason in
-                    logger.log("log: Operator disconnected: \(reason)")
+                    AppLogger.log("Operator disconnected: \(reason)", category: .network)
                     Task { [weak self] in
                         await self?.setOperatorConnected(false)
                     }
@@ -129,18 +126,18 @@ actor SessionManager {
             )
             operatorConnected = true
             connectedDeviceName = deviceIdentity.deviceId.prefix(16).description
-            logger.log("log: Operator connection established, deviceId: \(self.connectedDeviceName ?? "unknown")")
+            AppLogger.log("Operator connection established, deviceId: \(self.connectedDeviceName ?? "unknown")", category: .network)
             appendDebugLog("gateway: Operator connected to gateway", category: "gateway")
             appendDebugLog("gateway: Operator caps: \(connectOptions.caps.joined(separator: ", "))", category: "gateway")
             appendDebugLog("gateway: Operator commands: \(connectOptions.commands.joined(separator: ", "))", category: "gateway")
         } catch let error as GatewayConnectAuthError {
             let requestIdStr = error.requestId.map { " (requestId: \($0))" } ?? ""
             let displayError = SessionManagerError.authError(error.message + requestIdStr, error.detailCodeRaw)
-            logger.log("log: Auth error: \(error.message)\(requestIdStr)")
+            AppLogger.log("Auth error: \(error.message)\(requestIdStr)", category: .network, level: .error)
             appendDebugLog("gateway: Auth error: \(error.message)\(requestIdStr)", category: "gateway")
             throw displayError
         } catch {
-            logger.log("log: Connection error: \(error.localizedDescription)")
+            AppLogger.log("Connection error: \(error.localizedDescription)", category: .network, level: .error)
             appendDebugLog("gateway: Connection error: \(error.localizedDescription)", category: "gateway")
             throw error
         }
@@ -160,10 +157,10 @@ actor SessionManager {
                 connectOptions: nodeOptions,
                 sessionBox: sessionBox,
                 onConnected: {
-                    logger.log("log: Node connected to gateway")
+                    AppLogger.log("Node connected to gateway", category: .network)
                 },
                 onDisconnected: { [weak self] reason in
-                    logger.log("log: Node disconnected: \(reason)")
+                    AppLogger.log("Node disconnected: \(reason)", category: .network)
                     Task { [weak self] in
                         await self?.setNodeConnected(false)
                     }
@@ -183,14 +180,14 @@ actor SessionManager {
             )
             nodeConnected = true
             nodeConnectionError = nil
-            logger.log("log: Node connection established")
+            AppLogger.log("Node connection established", category: .network)
             let caps = nodeCaps(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
             let commands = nodeCommands(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
             appendDebugLog("gateway: Node connected to gateway", category: "gateway")
             appendDebugLog("gateway: Node caps: \(caps.joined(separator: ", "))", category: "gateway")
             appendDebugLog("gateway: Node commands: \(commands.joined(separator: ", "))", category: "gateway")
         } catch {
-            logger.log("log: Node connection error: \(error.localizedDescription)")
+            AppLogger.log("Node connection error: \(error.localizedDescription)", category: .network, level: .error)
             nodeConnectionError = error.localizedDescription
             appendDebugLog("gateway: Node connection error: \(error.localizedDescription)", category: "gateway")
         }
@@ -395,32 +392,32 @@ actor SessionManager {
         // Use active profile
         let activeProfile = await MainActor.run { ProfileManager.shared.activeProfile }
         guard let profile = activeProfile else {
-            logger.log("log: No active profile available")
+            AppLogger.log("No active profile available", category: .network)
             appendDebugLog("gateway: No active profile", category: "gateway")
             return
         }
 
         let role = profile.role
         if role == .operatorOnly && operatorConnected {
-            logger.log("log: Already connected (operator), skipping")
+            AppLogger.log("Already connected (operator), skipping", category: .network)
             return
         }
         if role == .nodeOnly && nodeConnected {
-            logger.log("log: Already connected (node), skipping")
+            AppLogger.log("Already connected (node), skipping", category: .network)
             return
         }
         if role == .operatorAndNode && operatorConnected {
-            logger.log("log: Already connected (operator+node), skipping")
+            AppLogger.log("Already connected (operator+node), skipping", category: .network)
             return
         }
 
         let scheme = profile.tlsEnabled ? "wss" : "ws"
         let urlString = "\(scheme)://\(profile.host):\(profile.port)/gateway"
         guard let url = URL(string: urlString) else {
-            logger.log("log: Invalid profile URL")
+            AppLogger.log("Invalid profile URL", category: .network, level: .error)
             return
         }
-        logger.log("log: Attempting to connect to: \(urlString)")
+        AppLogger.log("Attempting to connect to: \(urlString)", category: .network)
         appendDebugLog("gateway: Connecting to \(urlString)", category: "gateway")
 
         switch role {
@@ -442,14 +439,14 @@ actor SessionManager {
 
         let activeProfile = await MainActor.run { ProfileManager.shared.activeProfile }
         guard let profile = activeProfile else {
-            logger.log("log: No active profile for reconnect")
+            AppLogger.log("No active profile for reconnect", category: .network)
             return
         }
 
         let scheme = profile.tlsEnabled ? "wss" : "ws"
         let urlString = "\(scheme)://\(profile.host):\(profile.port)/gateway"
         guard let url = URL(string: urlString) else {
-            logger.log("log: Invalid profile URL for reconnect")
+            AppLogger.log("Invalid profile URL for reconnect", category: .network, level: .error)
             return
         }
 
@@ -461,7 +458,7 @@ actor SessionManager {
     }
 
     func disconnect() async {
-        logger.log("log: Disconnecting...")
+        AppLogger.log("Disconnecting...", category: .network)
         appendDebugLog("gateway: Disconnecting...", category: "gateway")
         await operatorSession.disconnect()
         await nodeSession.disconnect()
@@ -472,7 +469,7 @@ actor SessionManager {
 
     func setReconnectOnLaunch(_ value: Bool) {
         reconnectOnLaunch = value
-        logger.log("log: reconnectOnLaunch set to: \(value)")
+        AppLogger.log("reconnectOnLaunch set to: \(value)", category: .network)
     }
 
     var shouldReconnectOnLaunch: Bool {
@@ -480,15 +477,15 @@ actor SessionManager {
     }
 
     func checkConnection() async -> Bool {
-        logger.log("log: checkConnection called, operatorConnected: \(self.operatorConnected)")
+        AppLogger.log("checkConnection called, operatorConnected: \(self.operatorConnected)", category: .network)
         if !operatorConnected {
-            logger.log("log: Not connected, attempting reconnect...")
+            AppLogger.log("Not connected, attempting reconnect...", category: .network)
             appendDebugLog("gateway: Not connected, attempting reconnect...", category: "gateway")
             do {
                 try await ensureConnected()
                 return true
             } catch {
-                logger.log("log: Reconnect failed: \(error.localizedDescription)")
+                AppLogger.log("Reconnect failed: \(error.localizedDescription)", category: .network, level: .error)
                 return false
             }
         }

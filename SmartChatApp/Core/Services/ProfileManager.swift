@@ -1,7 +1,4 @@
 import Foundation
-import OSLog
-
-private let profileLog = Logger(subsystem: "SmartChatApp", category: "ProfileManager")
 
 @MainActor
 final class ProfileManager: ObservableObject {
@@ -27,9 +24,9 @@ final class ProfileManager: ObservableObject {
             profiles = try JSONDecoder().decode([GatewayProfile].self, from: data)
             profiles.sort { $0.createdAt < $1.createdAt }
             activeProfile = profiles.first(where: { $0.isActive })
-            profileLog.log("SMAlog: [ProfileManager] Loaded \(self.profiles.count) profiles, active: \(self.activeProfile?.name ?? "none")")
+            AppLogger.log("[ProfileManager] Loaded \(self.profiles.count) profiles, active: \(self.activeProfile?.name ?? "none")", category: .network)
         } catch {
-            profileLog.log("SMAlog: [ProfileManager] Failed to decode profiles: \(error.localizedDescription)")
+            AppLogger.log("[ProfileManager] Failed to decode profiles: \(error.localizedDescription)", category: .network, level: .error)
             profiles = []
             activeProfile = nil
         }
@@ -40,7 +37,7 @@ final class ProfileManager: ObservableObject {
             let data = try JSONEncoder().encode(profiles)
             defaults.set(data, forKey: storageKey)
         } catch {
-            profileLog.log("SMAlog: [ProfileManager] Failed to save profiles: \(error.localizedDescription)")
+            AppLogger.log("[ProfileManager] Failed to save profiles: \(error.localizedDescription)", category: .network, level: .error)
         }
     }
 
@@ -59,7 +56,7 @@ final class ProfileManager: ObservableObject {
         )
         profiles.append(profile)
         saveProfiles()
-        profileLog.log("SMAlog: [ProfileManager] Added profile: \(name)")
+        AppLogger.log("[ProfileManager] Added profile: \(name)", category: .network)
         return profile
     }
 
@@ -101,7 +98,7 @@ final class ProfileManager: ObservableObject {
         }
         activeProfile = profile
         saveProfiles()
-        profileLog.log("SMAlog: [ProfileManager] Activated profile: \(profile?.name ?? "none")")
+        AppLogger.log("[ProfileManager] Activated profile: \(profile?.name ?? "none")", category: .network)
     }
 
     func switchToProfile(_ profile: GatewayProfile) async {
@@ -112,9 +109,9 @@ final class ProfileManager: ObservableObject {
         activateProfile(profile)
         do {
             try await SessionManager.shared.connectWithProfile(profile)
-            profileLog.log("SMAlog: [ProfileManager] Connected to profile: \(profile.name)")
+            AppLogger.log("[ProfileManager] Connected to profile: \(profile.name)", category: .network)
         } catch {
-            profileLog.log("SMAlog: [ProfileManager] Failed to connect: \(error.localizedDescription)")
+            AppLogger.log("[ProfileManager] Failed to connect: \(error.localizedDescription)", category: .network, level: .error)
         }
     }
 
