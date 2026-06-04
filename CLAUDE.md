@@ -71,6 +71,7 @@ Each feature follows TCA pattern:
 | `MarkdownCache` | `Core/Services/` | Whether a message should be rendered as markdown |
 | `MarkdownStreamManager` | `Core/Services/` | Incremental markdown streaming state |
 | `CollapseStateCache` | `Core/Services/` | Per-message collapse-state decision cache |
+| `AppLogger` | `Core/Services/` | App-wide log capture: writes to OSLog and an in-memory ring buffer (cap 2000). Per-category toggles in Settings. Viewable via Debug Logs Viewer. |
 | `GatewayProfile` | `Models/` | Codable profile model (UserDefaults + JSON) |
 | `HomeView` | `Features/Home/` | Home screen with navigation entries |
 | `ChatListView` | `Features/ChatList/` | Session list management |
@@ -177,6 +178,26 @@ Cards are rendered based on tool call names:
 - Collapse state is cached in `CollapseStateCache` per message ID
 - `lineLimit(8)` controls visible lines for collapsible messages
 - `MessageBubbleView` shows a `TypingIndicatorView` (3 dots) for empty-text streaming bubbles, and trailing the streaming content of non-assistant roles (thinking, toolCall, etc.). Assistant markdown streaming skips the trailing dots because `StreamingMarkdownCardView` already signals activity via in-place updates.
+
+## Logging
+
+The app uses `AppLogger` (`Core/Services/AppLogger.swift`) as the single entry point for all log emission. Call sites use:
+
+```swift
+AppLogger.log("message", category: .network)   // default level .debug
+AppLogger.log("oops", category: .nativeChat, level: .error)
+```
+
+`AppLogger` always writes to `OSLog` (system Console) with the `SMAlog:` prefix preserved for grep workflows. It additionally writes to an in-memory ring buffer (`LogRingBuffer`, cap 2000) when the matching category toggle in Settings → Debug & Logs is on.
+
+| Category | Files |
+|----------|-------|
+| `.network` | `SessionManager`, `ProfileManager` |
+| `.cache` | `MessageCache`, `MarkdownCache`, `CollapseStateCache` |
+| `.nativeChat` | `NativeChatView`, `NativeChatViewModel`, `SessionPickerView`, `MessageBubbleView` |
+| `.markdown` | `MarkdownStreamManager` |
+
+Direct use of `os_log` / `Logger(subsystem:)` is no longer permitted in app code — use `AppLogger.log(...)` instead. The SDK-side `Gateway Debug Logs` and `Discovery Debug Logs` toggles (in Settings → Gateway → Advanced) are separate from this system and control `OpenClawKit` internal logging.
 
 ## Theme Configuration
 
