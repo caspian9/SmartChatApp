@@ -844,10 +844,20 @@ struct NativeChatViewModel {
                         state.messages[similarIndex] = existingMessage
                         state.scrollTrigger += 1
                     } else {
-                        // New message
-                        state.messages.append(message)
+                        // New message. If the last message is still in
+                        // progress (state != "final"), insert just before it
+                        // so the in-progress assistant stays at the bottom of
+                        // the array and the new sub-event appears above it.
+                        // Otherwise (last is final, e.g. a previous run or
+                        // user message), append normally.
+                        if let last = state.messages.last, last.state != "final" {
+                            state.messages.insert(message, at: state.messages.count - 1)
+                            logger.log("SMAlog: receiveMessage new (inserted before last, lastState=\(last.state)) - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)")
+                        } else {
+                            state.messages.append(message)
+                            logger.log("SMAlog: receiveMessage new (appended) - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)")
+                        }
                         state.scrollTrigger += 1
-                        logger.log("SMAlog: receiveMessage new - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)")
                     }
                 }
                 // When state is final, message reception is complete - reset sending state
@@ -924,7 +934,7 @@ struct NativeChatViewModel {
     private func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String, send: Send<Action>) async {
         switch event {
         case .agent(let payload):
-            logger.log("SMAlog: agent event - stream: \(payload.stream), runId: \(payload.runId), data keys: \(payload.data.keys.map { $0 })")
+            logger.log("SMAlog: agent event - stream=\(payload.stream, privacy: .public) runId=\(payload.runId, privacy: .public) seq=\(payload.seq ?? -1, privacy: .public) ts=\(payload.ts ?? 0, privacy: .public) data=\(summarizeData(payload.data), privacy: .public)")
             let runId = payload.runId
             let ts = payload.ts ?? 0
             let timestamp = Date(timeIntervalSince1970: Double(ts) / 1000)
@@ -1113,7 +1123,7 @@ struct NativeChatViewModel {
                         role: "toolCall",
                         state: "final",
                         runId: runId,
-                        seq: nil,
+                        seq: seq,
                         startedAt: timestamp,
                         endedAt: nil,
                         livenessState: nil,
@@ -1135,7 +1145,7 @@ struct NativeChatViewModel {
                         role: "toolCall",
                         state: "final",
                         runId: runId,
-                        seq: nil,
+                        seq: seq,
                         startedAt: nil,
                         endedAt: nil,
                         livenessState: nil,
@@ -1235,8 +1245,8 @@ struct NativeChatViewModel {
                     role: "toolCall",
                     state: itemPhase == "end" ? "final" : "streaming",
                     runId: runId,
-                    seq: nil,
-                    startedAt: nil,
+                    seq: seq,
+                    startedAt: startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : nil,
                     endedAt: itemPhase == "end" ? timestamp : nil,
                     livenessState: nil,
                     toolCallId: toolCallId,
@@ -1292,13 +1302,118 @@ struct NativeChatViewModel {
                 await send(.receiveMessage(message))
             default:
                 // plan, approval, patch, compaction, error — not yet surfaced.
-                logger.log("SMAlog: agent unhandled stream: \(payload.stream), data keys: \(data.keys.map { $0 })")
+                logger.log("SMAlog: agent UNHANDLED stream=\(payload.stream, privacy: .public) runId=\(payload.runId, privacy: .public) seq=\(payload.seq ?? -1, privacy: .public) data=\(summarizeData(data), privacy: .public)")
             }
 
-        case .chat, .sessionMessage, .tick, .seqGap, .health:
-            // Ignored - only agent events are used for messages
-            break
+        case .chat(let chat):
+            // Log full structure so we can see if server delivers thinking as
+            // content blocks here (the 2026.5.28 model) vs as separate agent events.
+            // Mirrors the sessionMessage log below so we can spot {type:"thinking", thinking:"..."} blocks.
+            var role = "?"
+            var blockSummaries: [String] = []
+            if let msgAny = chat.message?.value {
+                // AnyCodable stores dicts/arrays as [String: AnyCodable] / [AnyCodable] — unwrap recursively.
+                let unwrapped = unwrapAnyCodable(msgAny)
+                if let dict = unwrapped as? [String: Any] {
+                    role = (dict["role"] as? String) ?? "?"
+                    if let content = dict["content"] as? [Any] {
+                        for (i, block) in content.enumerated() {
+                            if let blockDict = block as? [String: Any] {
+                                var parts: [String] = ["#\(i)"]
+                                if let type = blockDict["type"] as? String { parts.append("type=\(type)") }
+                                if let t = blockDict["text"] as? String, !t.isEmpty {
+                                    let preview = t.prefix(80)
+                                    parts.append("text=\"\(preview)\(t.count > 80 ? "…(\(t.count))" : "")\"")
+                                }
+                                if let th = blockDict["thinking"] as? String, !th.isEmpty {
+                                    let preview = th.prefix(80)
+                                    parts.append("thinking=\"\(preview)\(th.count > 80 ? "…(\(th.count))" : "")\"")
+                                }
+                                if let n = blockDict["name"] as? String { parts.append("name=\(n)") }
+                                if let id = blockDict["id"] as? String { parts.append("id=\(id)") }
+                                blockSummaries.append(parts.joined(separator: " "))
+                            } else {
+                                blockSummaries.append("#\(i)=<\(type(of: block))>")
+                            }
+                        }
+                    } else if let content = dict["content"] {
+                        blockSummaries = ["content=\(formatValue(content))"]
+                    }
+                } else if let str = unwrapped as? String {
+                    blockSummaries = ["string=\"\(str.prefix(100))\""]
+                }
+            }
+            logger.log("SMAlog: chat event runId=\(chat.runId ?? "nil", privacy: .public) sessionKey=\(chat.sessionKey ?? "nil", privacy: .public) state=\(chat.state ?? "nil", privacy: .public) role=\(role, privacy: .public) blocks=[\(blockSummaries.joined(separator: " | "), privacy: .public)] errorMessage=\(chat.errorMessage ?? "nil", privacy: .public)")
+
+        case .sessionMessage(let sm):
+            // History/event-stream messages are typed OpenClawChatMessage.
+            var blockSummaries: [String] = []
+            if let blocks = sm.message?.content {
+                for (i, block) in blocks.enumerated() {
+                    var parts: [String] = ["#\(i)", "type=\(block.type ?? "?")"]
+                    if let t = block.text, !t.isEmpty { parts.append("text=\"\(t.prefix(80))\(t.count > 80 ? "…" : "")\"") }
+                    if let th = block.thinking, !th.isEmpty { parts.append("thinking=\"\(th.prefix(80))\(th.count > 80 ? "…" : "")\"") }
+                    if let n = block.name { parts.append("name=\(n)") }
+                    if let id = block.id { parts.append("id=\(id)") }
+                    blockSummaries.append(parts.joined(separator: " "))
+                }
+            }
+            logger.log("SMAlog: sessionMessage messageId=\(sm.messageId ?? "nil", privacy: .public) messageSeq=\(sm.messageSeq ?? -1, privacy: .public) role=\(sm.message?.role ?? "nil", privacy: .public) blocks=[\(blockSummaries.joined(separator: " | "), privacy: .public)]")
+
+        case .tick:
+            logger.log("SMAlog: transport tick")
+        case .seqGap:
+            logger.log("SMAlog: transport seqGap (out-of-order event detected)")
+        case .health(let ok):
+            logger.log("SMAlog: transport health ok=\(ok, privacy: .public)")
         }
+    }
+
+    /// Render a data dict as a one-line string for logging. Long strings are
+    /// truncated to keep log volume manageable.
+    private func summarizeData(_ data: [String: AnyCodable]) -> String {
+        let parts = data.keys.sorted().map { key -> String in
+            guard let v = data[key]?.value else { return "\(key)=null" }
+            return "\(key)=\(formatValue(v))"
+        }
+        return "{" + parts.joined(separator: ", ") + "}"
+    }
+
+    private func formatValue(_ v: Any) -> String {
+        if let s = v as? String {
+            let preview = s.prefix(120)
+            return "\"\(preview)\(s.count > 120 ? "…(\(s.count))" : "")\""
+        }
+        if let b = v as? Bool { return "\(b)" }
+        if let i = v as? Int { return "\(i)" }
+        if let d = v as? Double { return "\(d)" }
+        if let arr = v as? [Any] { return "[\(arr.count) items]" }
+        if let dict = v as? [String: Any] { return "{\(dict.count) keys:\(dict.keys.sorted().prefix(8).joined(separator: ","))}" }
+        if v is NSNull { return "null" }
+        return "<\(type(of: v))>"
+    }
+
+    private func summarizeAny(_ v: Any, label: String) -> String {
+        if let arr = v as? [Any] {
+            let previews = arr.prefix(5).map { formatValue($0) }
+            return "\(label)=[\(previews.joined(separator: ", "))\(arr.count > 5 ? ", +\(arr.count - 5) more" : "")]"
+        }
+        if let dict = v as? [String: Any] {
+            return "\(label)=\(formatValue(v))"
+        }
+        return "\(label)=\(formatValue(v))"
+    }
+
+    /// Recursively unwraps `AnyCodable` so nested values are raw JSON types
+    /// (`[String: Any]`, `[Any]`, `String`, etc.) instead of `AnyCodable` wrappers.
+    /// `AnyCodable` stores dicts as `[String: AnyCodable]` and arrays as `[AnyCodable]`.
+    private func unwrapAnyCodable(_ v: Any) -> Any {
+        if let ac = v as? AnyCodable { return unwrapAnyCodable(ac.value) }
+        if let arr = v as? [Any] { return arr.map { unwrapAnyCodable($0) } }
+        if let arr = v as? [AnyCodable] { return arr.map { unwrapAnyCodable($0) } }
+        if let dict = v as? [String: Any] { return dict.mapValues { unwrapAnyCodable($0) } }
+        if let dict = v as? [String: AnyCodable] { return dict.mapValues { unwrapAnyCodable($0) } }
+        return v
     }
 
     private func extractString(from data: [String: AnyCodable], key: String) -> String? {
