@@ -1,8 +1,5 @@
 import Foundation
 import UIKit
-import OSLog
-
-private let collapseLog = OSLog(subsystem: "SmartChatApp", category: "CollapseStateCache")
 
 @MainActor
 final class CollapseStateCache: @unchecked Sendable {
@@ -67,8 +64,7 @@ final class CollapseStateCache: @unchecked Sendable {
         }
 
         safeHeightCache[message.id] = safeHeight
-        os_log("SMAlog: [CollapseCache safeHeight] id=%{public}s totalHeight=%{public}.1f safeHeight=%{public}.1f lines=%{public}.1f",
-               log: collapseLog, type: .debug, String(message.id.prefix(8)), totalHeight, safeHeight, safeLines)
+        AppLogger.log("[CollapseCache safeHeight] id=\(String(message.id.prefix(8))) totalHeight=\(String(format: "%.1f", totalHeight)) safeHeight=\(String(format: "%.1f", safeHeight)) lines=\(String(format: "%.1f", safeLines))", category: .cache)
 
         return safeHeight
     }
@@ -81,7 +77,7 @@ final class CollapseStateCache: @unchecked Sendable {
                 computedCount += 1
             }
         }
-        os_log("SMAlog: [CollapseCache] precompute processed=%{public}d computed=%{public}d cacheSize=%{public}d", log: collapseLog, type: .debug, messages.count, computedCount, shouldCollapseCache.count)
+        AppLogger.log("[CollapseCache] precompute processed=\(messages.count) computed=\(computedCount) cacheSize=\(shouldCollapseCache.count)", category: .cache)
     }
 
     func remove(for messageId: String) {
@@ -123,7 +119,7 @@ final class CollapseStateCache: @unchecked Sendable {
         let lineHeight: CGFloat = 20
         let lineCount = Int(ceil(textHeight / lineHeight))
 
-        os_log("SMAlog: [CollapseCache] id=%{public}s text_len=%{public}d lines=%{public}d height=%{public}.1f", log: collapseLog, type: .debug, String(message.id.prefix(8)), text.count, lineCount, textHeight)
+        AppLogger.log("[CollapseCache] id=\(String(message.id.prefix(8))) text_len=\(text.count) lines=\(lineCount) height=\(String(format: "%.1f", textHeight))", category: .cache)
 
         if lineCount < 4 {
             return false

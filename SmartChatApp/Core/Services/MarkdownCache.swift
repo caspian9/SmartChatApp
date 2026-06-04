@@ -1,7 +1,4 @@
 import Foundation
-import OSLog
-
-private let markdownLog = OSLog(subsystem: "SmartChatApp", category: "MarkdownCache")
 
 @MainActor
 final class MarkdownCache: @unchecked Sendable {
