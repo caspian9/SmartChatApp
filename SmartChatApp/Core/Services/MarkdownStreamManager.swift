@@ -1,9 +1,6 @@
 import Foundation
 import UIKit
 import MarkdownDisplayView
-import OSLog
-
-private let managerLog = OSLog(subsystem: "SmartChatApp.MarkdownStreamManager", category: "debug")
 
 @MainActor
 final class MarkdownHolder {
@@ -37,12 +34,12 @@ final class MarkdownHolder {
 
     func begin() {
         guard !hasBegun else {
-            os_log("SMAlog: [MarkdownHolder] begin() skipped (already begun) id=%{public}s", log: managerLog, type: .debug, String(messageId.prefix(8)))
+            AppLogger.log("[MarkdownHolder] begin() skipped (already begun) id=\(String(messageId.prefix(8)))", category: .markdown)
             return
         }
         hasBegun = true
         view.beginRealStreaming(autoScrollBottom: false, useSmartBuffer: true)
-        os_log("SMAlog: [MarkdownHolder] begin() id=%{public}s", log: managerLog, type: .debug, String(messageId.prefix(8)))
+        AppLogger.log("[MarkdownHolder] begin() id=\(String(messageId.prefix(8)))", category: .markdown)
     }
 
     /// Server delivers full cumulative text on every chunk. Compute the
@@ -52,7 +49,7 @@ final class MarkdownHolder {
     @discardableResult
     func appendCumulative(_ cumulative: String) -> String {
         guard hasBegun, !isEnded else {
-            os_log("SMAlog: [MarkdownHolder] appendCumulative skipped (not begun/ended) id=%{public}s", log: managerLog, type: .debug, String(messageId.prefix(8)))
+            AppLogger.log("[MarkdownHolder] appendCumulative skipped (not begun/ended) id=\(String(messageId.prefix(8)))", category: .markdown)
             return ""
         }
         let suffix: String
@@ -65,25 +62,25 @@ final class MarkdownHolder {
             // truncated mid-stream, so we just append the whole cumulative
             // string; this can leave visible duplication but it's strictly
             // safer than dropping content.
-            os_log("SMAlog: [MarkdownHolder] cumulative does not extend prev id=%{public}s prev_len=%{public}d new_len=%{public}d", log: managerLog, type: .debug, String(messageId.prefix(8)), lastReceivedText.count, cumulative.count)
+            AppLogger.log("[MarkdownHolder] cumulative does not extend prev id=\(String(messageId.prefix(8))) prev_len=\(lastReceivedText.count) new_len=\(cumulative.count)", category: .markdown, level: .warning)
             suffix = cumulative
         }
         lastReceivedText = cumulative
         if !suffix.isEmpty {
             view.appendStreamData(suffix)
-            os_log("SMAlog: [MarkdownHolder] appendCumulative id=%{public}s suffix_len=%{public}d total_len=%{public}d", log: managerLog, type: .debug, String(messageId.prefix(8)), suffix.count, cumulative.count)
+            AppLogger.log("[MarkdownHolder] appendCumulative id=\(String(messageId.prefix(8))) suffix_len=\(suffix.count) total_len=\(cumulative.count)", category: .markdown)
         }
         return suffix
     }
 
     func end() {
         guard hasBegun, !isEnded else {
-            os_log("SMAlog: [MarkdownHolder] end() skipped (not begun/already ended) id=%{public}s", log: managerLog, type: .debug, String(messageId.prefix(8)))
+            AppLogger.log("[MarkdownHolder] end() skipped (not begun/already ended) id=\(String(messageId.prefix(8)))", category: .markdown)
             return
         }
         isEnded = true
         view.endRealStreaming()
-        os_log("SMAlog: [MarkdownHolder] end() id=%{public}s final_len=%{public}d", log: managerLog, type: .debug, String(messageId.prefix(8)), lastReceivedText.count)
+        AppLogger.log("[MarkdownHolder] end() id=\(String(messageId.prefix(8))) final_len=\(lastReceivedText.count)", category: .markdown)
     }
 
     /// Reset for reuse - call when re-entering a message that may have leftover state
@@ -125,7 +122,7 @@ final class MarkdownStreamManager {
         }
         let new = MarkdownHolder(messageId: messageId)
         holders[messageId] = new
-        os_log("SMAlog: [MarkdownStreamManager] created holder id=%{public}s total=%{public}d", log: managerLog, type: .debug, String(messageId.prefix(8)), holders.count)
+        AppLogger.log("[MarkdownStreamManager] created holder id=\(String(messageId.prefix(8))) total=\(holders.count)", category: .markdown)
         return new
     }
 
@@ -135,7 +132,7 @@ final class MarkdownStreamManager {
 
     func appendCumulative(messageId: String, cumulative: String) {
         guard let holder = holders[messageId] else {
-            os_log("SMAlog: [MarkdownStreamManager] appendCumulative no holder id=%{public}s", log: managerLog, type: .debug, String(messageId.prefix(8)))
+            AppLogger.log("[MarkdownStreamManager] appendCumulative no holder id=\(String(messageId.prefix(8)))", category: .markdown)
             return
         }
         holder.appendCumulative(cumulative)
@@ -155,7 +152,7 @@ final class MarkdownStreamManager {
     func release(messageId: String) {
         if let holder = holders.removeValue(forKey: messageId) {
             holder.reset()
-            os_log("SMAlog: [MarkdownStreamManager] released holder id=%{public}s remaining=%{public}d", log: managerLog, type: .debug, String(messageId.prefix(8)), holders.count)
+            AppLogger.log("[MarkdownStreamManager] released holder id=\(String(messageId.prefix(8))) remaining=\(holders.count)", category: .markdown)
         }
     }
 
@@ -164,6 +161,6 @@ final class MarkdownStreamManager {
             holder.reset()
         }
         holders.removeAll()
-        os_log("SMAlog: [MarkdownStreamManager] released all", log: managerLog, type: .debug)
+        AppLogger.log("[MarkdownStreamManager] released all", category: .markdown)
     }
 }
