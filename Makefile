@@ -1,13 +1,40 @@
-DEVICE_ID := $(shell xcrun devicectl list devices 2>/dev/null | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' | head -1)
+# Pick the first available, non-simulator iOS device, by name.
+# Name works for both xcodebuild -destination and devicectl --device,
+# avoiding the CoreDevice-vs-device-UDID mismatch between the two APIs.
+DEVICE_NAME := $(shell xcrun xcdevice list 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((x['name'] for x in d if not x.get('simulator') and x.get('available') and x.get('platform') == 'com.apple.platform.iphoneos'), ''))" 2>/dev/null)
 
-.PHONY: build install list-devices
+.PHONY: build install list-devices compile-only install-only
 
 build:
 	xcodegen generate
-	xcodebuild build -scheme SmartChatApp -destination "platform=iOS,id=$(DEVICE_ID)" -allowProvisioningUpdates build
+	xcodebuild -skipMacroValidation -scheme SmartChatApp \
+		-destination "platform=iOS,name=$(DEVICE_NAME)" \
+		-allowProvisioningUpdates build
+
+# Like build, but skips code signing — useful on a machine without an
+# Apple ID / provisioning profile, when you only want to verify the
+# code compiles. Output is in DerivedData but .app is not installable.
+compile-only:
+	xcodegen generate
+	xcodebuild -skipMacroValidation -scheme SmartChatApp \
+		-destination "platform=iOS,name=$(DEVICE_NAME)" \
+		CODE_SIGNING_ALLOWED=NO build
 
 install: build
-	xcrun devicectl device install app --device $(DEVICE_ID) ~/Library/Developer/Xcode/DerivedData/SmartChatApp-*/Build/Products/Debug-iphoneos/SmartChatApp.app
+	xcrun devicectl device install app --device "$(DEVICE_NAME)" \
+		~/Library/Developer/Xcode/DerivedData/SmartChatApp-*/Build/Products/Debug-iphoneos/SmartChatApp.app
+
+# Install a previously-built .app from DerivedData without re-running build.
+# Useful for re-installing after a device reboot or for quick iteration when
+# the binary hasn't changed.
+APP_PATH := $(HOME)/Library/Developer/Xcode/DerivedData/SmartChatApp-*/Build/Products/Debug-iphoneos/SmartChatApp.app
+install-only:
+	@ls -d $(APP_PATH) >/dev/null 2>&1 || { echo "❌ No built .app found at $(APP_PATH). Run 'make build' first."; exit 1; }
+	xcrun devicectl device install app --device "$(DEVICE_NAME)" $(APP_PATH)
 
 list-devices:
-	xcrun devicectl list devices
+	@echo "=== make build will target (xcdevice, xcodebuild-compatible) ==="
+	@xcrun xcdevice list 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); [print(f\"  {'*' if not x.get('simulator') and x.get('available') and x.get('platform') == 'com.apple.platform.iphoneos' else ' '} {x.get('name'):<30}  {x.get('identifier')}\") for x in d if not x.get('simulator')]" 2>/dev/null
+	@echo ""
+	@echo "=== Connected iOS devices (devicectl) ==="
+	@xcrun devicectl list devices 2>&1 | tail -n +3
