@@ -13,28 +13,15 @@ struct SessionPickerView: View {
     @State private var selectedChannel: String?
 
     private func extractAgentId(from key: String) -> String {
-        let parts = key.split(separator: ":")
-        if parts.count >= 2 {
-            return String(parts[1])
-        }
-        return "Unknown"
+        SessionKey.parse(key).agentId ?? "Unknown"
     }
 
     private func extractChannel(from key: String) -> String {
-        let parts = key.split(separator: ":")
-        if parts.count >= 3 {
-            let channel = String(parts[2]).trimmingCharacters(in: .whitespacesAndNewlines)
-            return channel.isEmpty ? "Unknown" : channel
-        }
-        return "Unknown"
+        SessionKey.parse(key).channel ?? "Unknown"
     }
 
     private func extractSessionUuid(from key: String) -> String {
-        let parts = key.split(separator: ":")
-        if parts.count >= 4 {
-            return String(parts[3])
-        }
-        return String(key.suffix(8))
+        SessionKey.parse(key).uuid ?? String(key.suffix(8))
     }
 
     /// Full label used inside the Session menu. Shows `displayName` if set,
