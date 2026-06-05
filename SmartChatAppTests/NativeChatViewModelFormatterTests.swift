@@ -2,6 +2,7 @@ import XCTest
 @testable import SmartChatApp
 @testable import OpenClawProtocol
 
+@MainActor
 final class NativeChatViewModelFormatterTests: XCTestCase {
     var sut: NativeChatViewModel!
 

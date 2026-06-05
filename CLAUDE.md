@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SmartChatApp is an iOS AI chat application that connects to OpenClaw Gateway, supporting streaming message output and interactive content cards (music, video, buttons, images).
 
-**Tech Stack:** SwiftUI, The Composable Architecture (TCA) 1.9.3, XcodeGen, Swift Package Manager
+**Tech Stack:** SwiftUI, iOS 17 Observation (`@Observable`), XcodeGen, Swift Package Manager
 
 ## Build Commands
 
@@ -40,18 +40,20 @@ open SmartChatApp.xcodeproj
 ```
 Presentation Layer (SwiftUI Views)
     ↓
-Feature Layer (TCA Reducers)
+Feature Layer (@MainActor @Observable ViewModels)
     ↓
 Service Layer (OpenClawClient, CardRegistry)
     ↓
 Network Layer (URLSession + SSE Streaming)
 ```
 
-### TCA Pattern
+### State Management Pattern
 
-Each feature follows TCA pattern:
-- `FeatureName.swift` — Contains `@Reducer struct FeatureName` with `State`, `Action`, and `body`
-- `FeatureNameView.swift` — SwiftUI view using `StoreOf<FeatureName>`
+State lives in `@MainActor @Observable` classes (iOS 17+ Observation). Each feature is a single class file plus a SwiftUI view:
+- `FeatureNameViewModel.swift` — `@MainActor @Observable final class` with stored properties for state and methods for actions
+- `FeatureNameView.swift` — SwiftUI view holding `@State private var viewModel = FeatureNameViewModel()` and calling `viewModel.someMethod(...)` directly
+
+This matches the OpenClawKit SDK's own `OpenClawChatViewModel` pattern. `@MainActor` makes all state mutations main-thread-safe; the @Observable macro drives SwiftUI re-renders on property changes. Long-running work is dispatched via `Task { ... }` and hops back to main actor when calling other methods.
 
 ### Key Components
 
@@ -75,7 +77,6 @@ Each feature follows TCA pattern:
 | `GatewayProfile` | `Models/` | Codable profile model (UserDefaults + JSON) |
 | `HomeView` | `Features/Home/` | Home screen with navigation entries |
 | `ChatListView` | `Features/ChatList/` | Session list management |
-| `ChatListFeature` | `Features/ChatList/` | Session list state management |
 | `NativeChatView` | `Features/NativeChat/` | Native chat UI |
 | `NativeChatViewModel` | `Features/NativeChat/` | Native chat state management (handles all agent event streams) |
 | `MessageBubbleView` | `Features/NativeChat/` | Per-message bubble rendering |
