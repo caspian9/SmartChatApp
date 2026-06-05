@@ -24,13 +24,17 @@ final class NativeChatViewModel {
     var messages: [ChatMessage] = []
     var inputText: String = ""
     private(set) var isLoading: Bool = false
-    private(set) var isSending: Bool = false
+    var isSending: Bool = false
     private(set) var isSwitchingGateway: Bool = false
     var error: String?
     private(set) var isRestoringFromCache: Bool = false
-    private(set) var needsScrollToBottom: Bool = false
-    private(set) var scrollTrigger: Int = 0
+    var needsScrollToBottom: Bool = false
+    var scrollTrigger: Int = 0
     private(set) var cacheLoadCounter: Int = 0
+
+    // MARK: - Collaborators
+
+    let messageReceiver: MessageReceiver
 
     // MARK: - Static state (concurrency-safe via lock)
     //
@@ -43,7 +47,10 @@ final class NativeChatViewModel {
     @ObservationIgnored
     private static let loadHistoryLock = OSAllocatedUnfairLock<String?>(initialState: nil)
 
-    init() {}
+    init() {
+        self.messageReceiver = MessageReceiver()
+        self.messageReceiver.viewModel = self
+    }
 
     // MARK: - Public API (called by NativeChatView)
 
@@ -701,101 +708,8 @@ final class NativeChatViewModel {
         cacheLoadCounter += 1
     }
 
-    private func appendNewMessages(_ newMessages: [ChatMessage]) {
-        if newMessages.isEmpty {
-            AppLogger.log("appendNewMessages - no new messages", category: .nativeChat)
-            return
-        }
-        AppLogger.log("appendNewMessages appending \(newMessages.count) messages", category: .nativeChat)
-        messages.append(contentsOf: newMessages)
-        needsScrollToBottom = true
-    }
-
-    private func receiveMessage(_ message: ChatMessage) {
-        // Check if this is an update to existing message or new message
-        if let existingIndex = messages.firstIndex(where: { $0.id == message.id }) {
-            // Update existing message (streaming text update)
-            var existingMessage = messages[existingIndex]
-            AppLogger.log("receiveMessage update - id: \(String(message.id.prefix(8))), existingIndex: \(existingIndex), newText len: \(message.text.count), existingText len: \(existingMessage.text.count), state: \(message.state)", category: .nativeChat)
-            // Only update text if new text is not empty (preserve content on end phase)
-            if !message.text.isEmpty {
-                existingMessage.text = message.text
-                AppLogger.log("receiveMessage updated text, new len: \(existingMessage.text.count), prev state: \(existingMessage.state), new state: \(message.state)", category: .nativeChat)
-            } else {
-                AppLogger.log("receiveMessage SKIPPED text update (empty), prev state: \(existingMessage.state), new state: \(message.state)", category: .nativeChat, level: .warning)
-            }
-            existingMessage.state = message.state
-            if message.startedAt != nil { existingMessage.startedAt = message.startedAt }
-            if message.endedAt != nil { existingMessage.endedAt = message.endedAt }
-            if message.livenessState != nil { existingMessage.livenessState = message.livenessState }
-            if message.seq != nil { existingMessage.seq = message.seq }
-            if message.inputTokens != nil { existingMessage.inputTokens = message.inputTokens }
-            if message.outputTokens != nil { existingMessage.outputTokens = message.outputTokens }
-            if message.cacheRead != nil { existingMessage.cacheRead = message.cacheRead }
-            if message.cacheWrite != nil { existingMessage.cacheWrite = message.cacheWrite }
-            messages[existingIndex] = existingMessage
-            scrollTrigger += 1
-            AppLogger.log("updated message: \(message.id), text length: \(existingMessage.text.count), FINAL state: \(existingMessage.state)", category: .nativeChat)
-        } else {
-            // Fallback: id mismatch between streaming (id=runId) and cached
-            // (id=server-id) can cause a second copy of the same logical
-            // message to be appended. Match by role+text+timestamp and
-            // update in place so the display doesn't accumulate duplicates
-            // while the cache dedup (role|text|timestamp|usage) keeps
-            // the disk count stable.
-            let similarIndex = messages.firstIndex { existing in
-                existing.role == message.role &&
-                existing.text == message.text &&
-                abs(existing.timestamp.timeIntervalSince(message.timestamp)) < 60.0
-            }
-            if let similarIndex = similarIndex {
-                var existingMessage = messages[similarIndex]
-                AppLogger.log("receiveMessage similar-match - newId=\(String(message.id.prefix(8))) existingId=\(String(existingMessage.id.prefix(8))) idx=\(similarIndex) state=\(message.state)", category: .nativeChat)
-                if !message.text.isEmpty {
-                    existingMessage.text = message.text
-                }
-                existingMessage.state = message.state
-                if message.startedAt != nil { existingMessage.startedAt = message.startedAt }
-                if message.endedAt != nil { existingMessage.endedAt = message.endedAt }
-                if message.livenessState != nil { existingMessage.livenessState = message.livenessState }
-                if message.seq != nil { existingMessage.seq = message.seq }
-                if message.inputTokens != nil { existingMessage.inputTokens = message.inputTokens }
-                if message.outputTokens != nil { existingMessage.outputTokens = message.outputTokens }
-                if message.cacheRead != nil { existingMessage.cacheRead = message.cacheRead }
-                if message.cacheWrite != nil { existingMessage.cacheWrite = message.cacheWrite }
-                messages[similarIndex] = existingMessage
-                scrollTrigger += 1
-            } else {
-                // New message. If the last message is still in
-                // progress (state != "final"), insert just before it
-                // so the in-progress assistant stays at the bottom of
-                // the array and the new sub-event appears above it.
-                // Otherwise (last is final, e.g. a previous run or
-                // user message), append normally.
-                if let last = messages.last, last.state != "final" {
-                    messages.insert(message, at: messages.count - 1)
-                    AppLogger.log("receiveMessage new (inserted before last, lastState=\(last.state)) - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)", category: .nativeChat)
-                } else {
-                    messages.append(message)
-                    AppLogger.log("receiveMessage new (appended) - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)", category: .nativeChat)
-                }
-                scrollTrigger += 1
-            }
-        }
-        // When state is final, message reception is complete - reset sending state
-        if message.state == "final" {
-            // Intentionally do NOT write the streaming copy to the
-            // cache here. The agent-end event payload does not carry
-            // usage tokens, so the streaming copy's dedup key
-            // (`role|text|bucket|usage`) differs from the network's
-            // server-stored message (which has the full usage).
-            // Writing the streaming copy would cause both versions
-            // to land in the cache — and on re-entry, both would
-            // display, with the streaming copy missing the 4 token
-            // values. loadHistory's network fetch is the
-            // authoritative cache writer and runs on every entry.
-            setSending(false)
-        }
+    func receiveMessage(_ message: ChatMessage) {
+        messageReceiver.receiveMessage(message)
     }
 
     private func setError(_ error: String?) {
