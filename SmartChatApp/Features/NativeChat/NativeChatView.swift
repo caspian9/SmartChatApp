@@ -1,12 +1,9 @@
 import SwiftUI
-import ComposableArchitecture
 
 struct NativeChatView: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var profileManager = ProfileManager.shared
-    @StateObject private var store = StoreOf<NativeChatViewModel>(initialState: NativeChatViewModel.State()) {
-        NativeChatViewModel()
-    }
+    @State private var viewModel = NativeChatViewModel()
     @FocusState private var isInputFocused: Bool
     @State private var isUserScrolling = false
     @State private var scrollToMessageId: String?
@@ -25,22 +22,22 @@ struct NativeChatView: View {
             .toolbar { toolbarItem }
             .onAppear {
                 AppLogger.log("NativeChatView onAppear called", category: .nativeChat)
-                if store.selectedProfileId == nil {
-                    store.send(.setSelectedProfile(profileManager.activeProfile?.id))
+                if viewModel.selectedProfileId == nil {
+                    viewModel.setSelectedProfile(profileManager.activeProfile?.id)
                 }
-                store.send(.loadSessions)
+                viewModel.loadSessions()
             }
             .onChange(of: profileManager.profiles) { _ in
-                if let selectedId = store.selectedProfileId,
+                if let selectedId = viewModel.selectedProfileId,
                    !profileManager.profiles.contains(where: { $0.id == selectedId }) {
-                    store.send(.setSelectedProfile(profileManager.activeProfile?.id))
+                    viewModel.setSelectedProfile(profileManager.activeProfile?.id)
                 }
             }
     }
 
     private var toolbarItem: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            Button(action: { store.send(.createSession) }) {
+            Button(action: { viewModel.createSession() }) {
                 Image(systemName: "plus").foregroundColor(theme.primary)
             }
         }
@@ -56,19 +53,19 @@ struct NativeChatView: View {
 
     @ViewBuilder
     private var sessionPicker: some View {
-        if !store.sessions.isEmpty {
+        if !viewModel.sessions.isEmpty {
             SessionPickerView(
-                sessions: store.sessions,
+                sessions: viewModel.sessions,
                 selectedSession: Binding(
-                    get: { store.selectedSession },
+                    get: { viewModel.selectedSession },
                     set: { newValue in
-                        if let s = newValue { store.send(.selectSession(s)) }
+                        if let s = newValue { viewModel.selectSession(s) }
                     }
                 ),
                 profiles: profileManager.profiles,
-                selectedProfileId: store.selectedProfileId,
+                selectedProfileId: viewModel.selectedProfileId,
                 onProfileChange: { newId in
-                    store.send(.switchProfile(newId))
+                    viewModel.switchProfile(newId)
                 }
             )
         } else if !profileManager.profiles.isEmpty {
@@ -77,9 +74,9 @@ struct NativeChatView: View {
                 sessions: [],
                 selectedSession: .constant(nil),
                 profiles: profileManager.profiles,
-                selectedProfileId: store.selectedProfileId,
+                selectedProfileId: viewModel.selectedProfileId,
                 onProfileChange: { newId in
-                    store.send(.switchProfile(newId))
+                    viewModel.switchProfile(newId)
                 }
             )
         }
@@ -108,18 +105,18 @@ struct NativeChatView: View {
             // history load) to position the viewport deliberately.
             .onTapGesture { isInputFocused = false }
             .onAppear {
-                AppLogger.log("messageScrollView onAppear, messages: \(store.messages.count)", category: .nativeChat)
+                AppLogger.log("messageScrollView onAppear, messages: \(viewModel.messages.count)", category: .nativeChat)
             }
-            .onChange(of: store.messages.count) { count in
+            .onChange(of: viewModel.messages.count) { count in
                 AppLogger.log("messages.count changed to \(count)", category: .nativeChat)
                 if !isUserScrolling {
                     scheduleScroll(proxy: proxy)
                 }
             }
-            .onChange(of: store.scrollTrigger) { [self] newValue in
+            .onChange(of: viewModel.scrollTrigger) { [self] newValue in
                 guard newValue != triggerCount else { return }
                 triggerCount = newValue
-                let lastId = store.messages.last?.id
+                let lastId = viewModel.messages.last?.id
                 AppLogger.log("scrollTrigger changed to \(newValue), lastId: \(lastId?.prefix(8) ?? "nil")", category: .nativeChat)
                 if let id = lastId {
                     AppLogger.log("triggering immediate scroll to \(String(id.prefix(8)))", category: .nativeChat)
@@ -128,10 +125,10 @@ struct NativeChatView: View {
                     }
                 }
             }
-            .onChange(of: store.cacheLoadCounter) { [self] newValue in
+            .onChange(of: viewModel.cacheLoadCounter) { [self] newValue in
                 guard newValue != cacheLoadTriggerCount else { return }
                 cacheLoadTriggerCount = newValue
-                let lastId = store.messages.last?.id
+                let lastId = viewModel.messages.last?.id
                 AppLogger.log("cacheLoadCounter changed to \(newValue), lastId: \(lastId?.prefix(8) ?? "nil")", category: .nativeChat)
                 if let id = lastId {
                     // Multi-poll scroll: history-load bubbles render through
@@ -154,16 +151,16 @@ struct NativeChatView: View {
                     }
                 }
             }
-            .onChange(of: store.needsScrollToBottom) { needsScroll in
+            .onChange(of: viewModel.needsScrollToBottom) { needsScroll in
                 if needsScroll {
-                    let lastId = store.messages.last?.id
+                    let lastId = viewModel.messages.last?.id
                     AppLogger.log("needsScrollToBottom true, lastId: \(lastId?.prefix(8) ?? "nil")", category: .nativeChat)
                     if let id = lastId {
                         proxy.scrollTo(id, anchor: .bottom)
                     }
                 }
             }
-            .onChange(of: store.isSending) { isSending in
+            .onChange(of: viewModel.isSending) { isSending in
                 AppLogger.log("isSending changed to \(isSending)", category: .nativeChat)
                 if !isSending {
                     isUserScrolling = false
@@ -175,7 +172,7 @@ struct NativeChatView: View {
                     // ScrollView's own frame changes — so the bottom of the
                     // content falls outside the viewport. Explicitly scroll
                     // to the last message to recover the bottom.
-                    if let id = store.messages.last?.id {
+                    if let id = viewModel.messages.last?.id {
                         DispatchQueue.main.async {
                             proxy.scrollTo(id, anchor: .bottom)
                         }
@@ -192,7 +189,7 @@ struct NativeChatView: View {
     }
 
     private func scheduleScroll(proxy: ScrollViewProxy) {
-        let lastId = store.messages.last?.id
+        let lastId = viewModel.messages.last?.id
         guard let id = lastId else { return }
         AppLogger.log("scheduleScroll to \(String(id.prefix(8))), isUserScrolling: \(isUserScrolling)", category: .nativeChat)
         // Single delayed scroll. The 5-poll variant was originally to catch
@@ -208,7 +205,7 @@ struct NativeChatView: View {
 
     private var messageList: some View {
         LazyVStack(spacing: 0) {
-            ForEach(store.messages) { message in
+            ForEach(viewModel.messages) { message in
                 MessageBubbleView(message: message)
                     .id(message.id)
             }
@@ -219,17 +216,17 @@ struct NativeChatView: View {
     private var chatInput: some View {
         ChatInputView(
             inputText: Binding(
-                get: { store.inputText },
+                get: { viewModel.inputText },
                 set: { newValue in
-                    store.send(.updateInputText(newValue))
+                    viewModel.inputText = newValue
                     isUserScrolling = false
                 }
             ),
-            isSending: store.isSending,
+            isSending: viewModel.isSending,
             onSend: {
                 isUserScrolling = false
                 isInputFocused = false
-                store.send(.sendMessage)
+                viewModel.sendMessage()
             }
         )
         .focused($isInputFocused)

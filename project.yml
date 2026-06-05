@@ -18,9 +18,6 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
 packages:
-  TCA:
-    url: https://github.com/pointfreeco/swift-composable-architecture
-    from: "1.9.3"
   OpenClawKit:
     path: ../openclaw/apps/shared/OpenClawKit
   MarkdownDisplayView:
@@ -42,8 +39,6 @@ targets:
         SWIFT_EMIT_LOC_STRINGS: YES
         GENERATE_INFOPLIST_FILE: NO
     dependencies:
-      - package: TCA
-        product: ComposableArchitecture
       - package: OpenClawKit
         product: OpenClawKit
       - package: OpenClawKit
