@@ -544,7 +544,7 @@ final class NativeChatViewModel {
                     var toolCallText = ""
                     for contentItem in msg.content {
                         if contentItem.type == "toolCall", let name = contentItem.name {
-                            let callText = formatToolCallBubbleText(name: name, arguments: contentItem.arguments)
+                            let callText = MessageFormatters.formatToolCallBubbleText(name: name, arguments: contentItem.arguments)
                             guard !callText.isEmpty else { continue }
                             hasToolCall = true
                             if toolCallText.isEmpty {
@@ -1014,7 +1014,7 @@ final class NativeChatViewModel {
                 }
                 let toolName = extractString(from: data, key: "name") ?? ""
                 if phase == "start" {
-                    let text = formatToolCallBubbleText(name: toolName, arguments: data["args"])
+                    let text = MessageFormatters.formatToolCallBubbleText(name: toolName, arguments: data["args"])
                     AppLogger.log("agent tool start - tool: \(toolName), callId: \(toolCallId)", category: .nativeChat)
                     let message = ChatMessage(
                         id: "\(runId):tool:\(toolCallId)",
@@ -1036,7 +1036,7 @@ final class NativeChatViewModel {
                 } else if phase == "update" {
                     // Intermediate state. Refresh the toolCall bubble with the
                     // latest args/progress so the user sees the tool is alive.
-                    let text = formatToolCallBubbleText(name: toolName, arguments: data["args"])
+                    let text = MessageFormatters.formatToolCallBubbleText(name: toolName, arguments: data["args"])
                     AppLogger.log("agent tool update - tool: \(toolName), callId: \(toolCallId), text len: \(text.count)", category: .nativeChat)
                     let message = ChatMessage(
                         id: "\(runId):tool:\(toolCallId)",
@@ -1057,7 +1057,7 @@ final class NativeChatViewModel {
                     receiveMessage(message)
                 } else if phase == "result" {
                     let resultValue = data["result"]?.value
-                    let text = formatToolResultText(result: resultValue)
+                    let text = MessageFormatters.formatToolResultText(result: resultValue)
                     let isError = (data["isError"]?.value as? Bool) ?? false
                     AppLogger.log("agent tool result - tool: \(toolName), callId: \(toolCallId), isError: \(isError), text len: \(text.count)", category: .nativeChat)
                     let message = ChatMessage(
@@ -1112,7 +1112,7 @@ final class NativeChatViewModel {
                 // path, or future server changes), they flow through
                 // automatically. progressText is appended during running
                 // state so the user sees the tool is alive.
-                var callText = formatToolCallBubbleText(name: name, arguments: data["args"], meta: meta)
+                var callText = MessageFormatters.formatToolCallBubbleText(name: name, arguments: data["args"], meta: meta)
                 if callText.isEmpty {
                     callText = "ToolCall: \(kind)"
                 }
@@ -1383,143 +1383,5 @@ final class NativeChatViewModel {
             }
         }
         return nil
-    }
-
-    func formatAnyCodableValue(_ value: Any) -> String {
-        if let str = value as? String {
-            let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return "" }
-            let first = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
-            if first.count > 160 { return String(first.prefix(157)) + "…" }
-            return first
-        }
-        if let num = value as? Int { return String(num) }
-        if let num = value as? Double { return String(num) }
-        if let bool = value as? Bool { return bool ? "true" : "false" }
-        if let array = value as? [Any] {
-            let items = array.compactMap { self.formatAnyCodableValue($0) }
-            guard !items.isEmpty else { return "" }
-            let preview = items.prefix(3).joined(separator: ", ")
-            return items.count > 3 ? "\(preview)…" : preview
-        }
-        if let dict = value as? [String: Any] {
-            let keys = ["name", "id", "command", "action", "path", "node", "nodeId"]
-            for key in keys {
-                if let label = dict[key] {
-                    let str = formatAnyCodableValue(label)
-                    if !str.isEmpty { return str }
-                }
-            }
-        }
-        if let dict = value as? [String: AnyCodable] {
-            let keys = ["name", "id", "command", "action", "path", "node", "nodeId"]
-            for key in keys {
-                if let anyCodable = dict[key] {
-                    let formatted = formatAnyCodableValue(anyCodable.value)
-                    if !formatted.isEmpty { return formatted }
-                }
-            }
-            // Generic scan for first non-empty string value
-            for (_, anyCodable) in dict {
-                let formatted = formatAnyCodableValue(anyCodable.value)
-                if !formatted.isEmpty {
-                    return formatted
-                }
-            }
-        }
-        return ""
-    }
-
-    /// Builds a short human-readable label for a tool call: "name: args".
-    /// Falls back to a one-line JSON dump of args so the bubble has something
-    /// to show even when no friendly field is present.
-    func formatToolCallText(name: String, args: Any?) -> String {
-        if name.isEmpty { return "" }
-        guard let args else { return name }
-        if let str = args as? String, !str.isEmpty {
-            return "\(name): \(str)"
-        }
-        if let dict = args as? [String: Any] {
-            if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.fragmentsAllowed, .sortedKeys]),
-               let json = String(data: data, encoding: .utf8) {
-                return "\(name): \(json)"
-            }
-        }
-        if let arr = args as? [Any] {
-            if let data = try? JSONSerialization.data(withJSONObject: arr, options: [.fragmentsAllowed, .sortedKeys]),
-               let json = String(data: data, encoding: .utf8) {
-                return "\(name): \(json)"
-            }
-        }
-        return name
-    }
-
-    /// Renders a toolCall bubble's text. Three forms depending on what's available:
-    /// ```
-    /// // 1. history / legacy verbose=on — full key: value list from args
-    /// ToolCall: <name>
-    /// command: <cmd>
-    /// timeout: <timeout>
-    ///
-    /// // 2. modern `item` event with meta — second line shows the action summary
-    /// ToolCall: <name>
-    /// with: <meta>
-    ///
-    /// // 3. modern `item` event without meta — name only
-    /// ToolCall: <name>
-    /// ```
-    /// Shared by history and live paths so the format stays consistent.
-    /// The modern `item` event does not include the actual command string in its
-    /// data (server-side limitation, `AgentItemEventData` schema has no `command`
-    /// field), so the bubble falls back to the server-provided `meta` summary.
-    func formatToolCallBubbleText(name: String, arguments: AnyCodable?, meta: String? = nil) -> String {
-        guard !name.isEmpty else { return "" }
-        var callText = "ToolCall: \(name)"
-        // 路径1：args 存在（history / legacy verbose=on）—— 走老格式
-        if let arguments {
-            var argsLines: [String] = []
-            let appendArgLine: (String, Any) -> Void = { key, value in
-                let valueStr: String
-                if key == "command", let str = value as? String {
-                    valueStr = str
-                } else {
-                    valueStr = self.formatAnyCodableValue(value)
-                }
-                if !valueStr.isEmpty {
-                    argsLines.append("\(key): \(valueStr)")
-                }
-            }
-            if let dict = arguments.value as? [String: AnyCodable] {
-                for (key, anyCodable) in dict {
-                    appendArgLine(key, anyCodable.value)
-                }
-            } else if let dict = arguments.value as? [String: Any] {
-                for (key, value) in dict {
-                    appendArgLine(key, value)
-                }
-            }
-            if !argsLines.isEmpty {
-                callText += "\n" + argsLines.joined(separator: "\n")
-                return callText
-            }
-        }
-        // 路径2：args 为空（现代 item 事件）—— 用 meta 拼第二行
-        if let meta, !meta.isEmpty {
-            callText += "\nwith: \(meta)"
-        }
-        return callText
-    }
-
-    /// Pretty-prints a tool result payload. JSON values get indented; raw
-    /// strings pass through. The MessageBubbleView will further pretty-print
-    /// anything it sees for `role == "toolResult"`, so this stays minimal.
-    func formatToolResultText(result: Any?) -> String {
-        guard let result else { return "" }
-        if let str = result as? String { return str }
-        if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .fragmentsAllowed, .sortedKeys]),
-           let json = String(data: data, encoding: .utf8) {
-            return json
-        }
-        return String(describing: result)
     }
 }
