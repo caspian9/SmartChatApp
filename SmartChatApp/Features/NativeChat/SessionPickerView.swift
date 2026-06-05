@@ -260,7 +260,7 @@ struct SessionPickerView: View {
                 selectedSession = first
             }
         }
-        .onChange(of: selectedSession) { newSession in
+        .onChange(of: selectedSession) { _, newSession in
             if let session = newSession {
                 let agentId = extractAgentId(from: session.key)
                 let channel = extractChannel(from: session.key)

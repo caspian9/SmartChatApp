@@ -27,7 +27,7 @@ struct NativeChatView: View {
                 }
                 viewModel.loadSessions()
             }
-            .onChange(of: profileManager.profiles) { _ in
+            .onChange(of: profileManager.profiles) { _, _ in
                 if let selectedId = viewModel.selectedProfileId,
                    !profileManager.profiles.contains(where: { $0.id == selectedId }) {
                     viewModel.setSelectedProfile(profileManager.activeProfile?.id)
@@ -107,13 +107,13 @@ struct NativeChatView: View {
             .onAppear {
                 AppLogger.log("messageScrollView onAppear, messages: \(viewModel.messages.count)", category: .nativeChat)
             }
-            .onChange(of: viewModel.messages.count) { count in
+            .onChange(of: viewModel.messages.count) { _, count in
                 AppLogger.log("messages.count changed to \(count)", category: .nativeChat)
                 if !isUserScrolling {
                     scheduleScroll(proxy: proxy)
                 }
             }
-            .onChange(of: viewModel.scrollTrigger) { [self] newValue in
+            .onChange(of: viewModel.scrollTrigger) { [self] _, newValue in
                 guard newValue != triggerCount else { return }
                 triggerCount = newValue
                 let lastId = viewModel.messages.last?.id
@@ -125,7 +125,7 @@ struct NativeChatView: View {
                     }
                 }
             }
-            .onChange(of: viewModel.cacheLoadCounter) { [self] newValue in
+            .onChange(of: viewModel.cacheLoadCounter) { [self] _, newValue in
                 guard newValue != cacheLoadTriggerCount else { return }
                 cacheLoadTriggerCount = newValue
                 let lastId = viewModel.messages.last?.id
@@ -151,7 +151,7 @@ struct NativeChatView: View {
                     }
                 }
             }
-            .onChange(of: viewModel.needsScrollToBottom) { needsScroll in
+            .onChange(of: viewModel.needsScrollToBottom) { _, needsScroll in
                 if needsScroll {
                     let lastId = viewModel.messages.last?.id
                     AppLogger.log("needsScrollToBottom true, lastId: \(lastId?.prefix(8) ?? "nil")", category: .nativeChat)
@@ -160,7 +160,7 @@ struct NativeChatView: View {
                     }
                 }
             }
-            .onChange(of: viewModel.isSending) { isSending in
+            .onChange(of: viewModel.isSending) { _, isSending in
                 AppLogger.log("isSending changed to \(isSending)", category: .nativeChat)
                 if !isSending {
                     isUserScrolling = false
@@ -179,7 +179,7 @@ struct NativeChatView: View {
                     }
                 }
             }
-            .onChange(of: isInputFocused) { focused in
+            .onChange(of: isInputFocused) { _, focused in
                 AppLogger.log("isInputFocused changed to \(focused)", category: .nativeChat)
                 if !isUserScrolling {
                     scheduleScroll(proxy: proxy)
