@@ -1,4 +1,5 @@
 import Foundation
+import os
 import OpenClawChatUI
 import OpenClawKit
 
@@ -33,16 +34,14 @@ final class NativeChatViewModel {
 
     // MARK: - Static state (concurrency-safe via lock)
     //
-    // Preserved verbatim from the @Reducer version. `loadHistoryLock` is the
-    // mutex; `inFlightLoadHistory` is the per-session-key reentrancy guard.
-    // The class itself is @MainActor; these statics are deliberately outside
-    // the actor so concurrent Task launches from `loadHistory()` can race for
-    // the lock without bouncing through main.
+    // Per-session-key reentrancy guard for `loadHistory()`. The class is
+    // @MainActor; this static is deliberately outside the actor so
+    // concurrent Task launches can race for the lock without bouncing
+    // through main. The state is held inside the lock itself so we never
+    // touch a `nonisolated(unsafe)` global directly from async code.
 
     @ObservationIgnored
-    private static let loadHistoryLock = NSLock()
-    @ObservationIgnored
-    nonisolated(unsafe) private static var inFlightLoadHistory: String?
+    private static let loadHistoryLock = OSAllocatedUnfairLock<String?>(initialState: nil)
 
     init() {}
 
@@ -95,7 +94,7 @@ final class NativeChatViewModel {
                 let transport = await SessionManager.shared.makeTransport(sessionKey: "")
                 let response = try await transport.listSessions(limit: 50)
                 AppLogger.log("Loaded \(response.sessions.count) sessions", category: .nativeChat)
-                await self.loadedSessions(response.sessions)
+                self.loadedSessions(response.sessions)
             } catch {
                 AppLogger.log("Load sessions error: \(error.localizedDescription)", category: .nativeChat, level: .error)
                 try? await Task.sleep(for: .milliseconds(500))
@@ -103,10 +102,10 @@ final class NativeChatViewModel {
                     try await SessionManager.shared.ensureConnected()
                     let transport = await SessionManager.shared.makeTransport(sessionKey: "")
                     let response = try await transport.listSessions(limit: 50)
-                    await self.loadedSessions(response.sessions)
+                    self.loadedSessions(response.sessions)
                 } catch {
                     AppLogger.log("Load sessions retry failed: \(error.localizedDescription)", category: .nativeChat, level: .error)
-                    await self.loadedSessions([])
+                    self.loadedSessions([])
                 }
             }
         }
@@ -238,7 +237,7 @@ final class NativeChatViewModel {
             // If we have a cached session selected, kick off history load
             // so the chat panel isn't empty while we wait for the network switch
             if hadCache {
-                await self.loadHistory()
+                self.loadHistory()
             }
 
             let profile = await MainActor.run {
@@ -246,7 +245,7 @@ final class NativeChatViewModel {
             }
             guard let profile = profile else {
                 AppLogger.log("switchProfile - profile not found", category: .nativeChat, level: .warning)
-                await self.setError("Profile not found")
+                self.setError("Profile not found")
                 return
             }
             await ProfileManager.shared.switchToProfile(profile)
@@ -258,13 +257,13 @@ final class NativeChatViewModel {
                 try await Task.sleep(for: .milliseconds(100))
                 let transport = await SessionManager.shared.makeTransport(sessionKey: "")
                 let response = try await transport.listSessions(limit: 50)
-                await self.loadedSessions(response.sessions)
+                self.loadedSessions(response.sessions)
             } catch {
                 AppLogger.log("Load sessions after switch error: \(error.localizedDescription)", category: .nativeChat, level: .error)
                 // Cache (if any) is already shown, so just clear the loading flag
-                await self.setError(error.localizedDescription)
+                self.setError(error.localizedDescription)
             }
-            await self.finishSwitchingGateway()
+            self.finishSwitchingGateway()
         }
     }
 
@@ -313,11 +312,11 @@ final class NativeChatViewModel {
                     customKey: customKey
                 )
                 AppLogger.log("Created session: \(String(sessionKey))", category: .nativeChat)
-                await self.sessionCreated(sessionKey)
-                await self.loadSessions()
+                self.sessionCreated(sessionKey)
+                self.loadSessions()
             } catch {
                 AppLogger.log("Create session error: \(error.localizedDescription)", category: .nativeChat, level: .error)
-                await self.setError(error.localizedDescription)
+                self.setError(error.localizedDescription)
             }
         }
     }
@@ -414,8 +413,8 @@ final class NativeChatViewModel {
                 AppLogger.log("Message sent, waiting for response...", category: .nativeChat)
             } catch {
                 AppLogger.log("Send message error: \(error.localizedDescription)", category: .nativeChat, level: .error)
-                await self.setError(error.localizedDescription)
-                await self.setSending(false)
+                self.setError(error.localizedDescription)
+                self.setSending(false)
             }
         }
     }
@@ -433,14 +432,15 @@ final class NativeChatViewModel {
         let cachedIsRestoring = isRestoring
 
         // Acquire lock BEFORE creating task closure to prevent concurrent Tasks
-        Self.loadHistoryLock.lock()
-        let alreadyInProgress = Self.inFlightLoadHistory == cachedSessionKey
+        let alreadyInProgress = Self.loadHistoryLock.withLock { state -> Bool in
+            let isInProgress = state == cachedSessionKey
+            if !isInProgress {
+                state = cachedSessionKey
+            }
+            return isInProgress
+        }
         if alreadyInProgress {
-            Self.loadHistoryLock.unlock()
             AppLogger.log("[loadHistory] already in progress for \(cachedSessionKeyPreview)", category: .nativeChat)
-        } else {
-            Self.inFlightLoadHistory = cachedSessionKey
-            Self.loadHistoryLock.unlock()
         }
 
         let taskIdStr = String(UUID().uuidString.prefix(8))
@@ -448,11 +448,11 @@ final class NativeChatViewModel {
         Task { [cachedSessionKey, cachedSessionKeyPreview, cachedIsRestoring, taskIdStr] in
             AppLogger.log("[\(taskIdStr)] loadHistory Task started, sessionKey: \(cachedSessionKeyPreview)", category: .nativeChat)
             defer {
-                Self.loadHistoryLock.lock()
-                if Self.inFlightLoadHistory == cachedSessionKey {
-                    Self.inFlightLoadHistory = nil
+                Self.loadHistoryLock.withLock { state in
+                    if state == cachedSessionKey {
+                        state = nil
+                    }
                 }
-                Self.loadHistoryLock.unlock()
             }
             // Load cache first and send to UI immediately
             let cachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
@@ -494,7 +494,7 @@ final class NativeChatViewModel {
                     CollapseStateCache.shared.precompute(for: chatMessages)
                 }
                 // Send cached messages to UI
-                await self.loadedCachedHistory(chatMessages, isRestoring: cachedIsRestoring)
+                self.loadedCachedHistory(chatMessages, isRestoring: cachedIsRestoring)
             }
 
             // Then fetch from network
@@ -637,10 +637,10 @@ final class NativeChatViewModel {
                 // `getCurrentSessionKey()` guard here.
                 if cachedMessages.isEmpty {
                     // No cache was shown, this is first data load
-                    await self.loadedNetworkHistory(sessionKey: cachedSessionKey, messages: finalChatMessages)
+                    self.loadedNetworkHistory(sessionKey: cachedSessionKey, messages: finalChatMessages)
                 } else if finalChatMessages.count > cachedMessages.count {
                     // New messages were added
-                    await self.loadedNetworkHistory(sessionKey: cachedSessionKey, messages: finalChatMessages)
+                    self.loadedNetworkHistory(sessionKey: cachedSessionKey, messages: finalChatMessages)
                 } else {
                     AppLogger.log("[\(taskIdStr)] Network returned same messages as cache, skipping UI update", category: .nativeChat)
                 }
@@ -666,7 +666,7 @@ final class NativeChatViewModel {
                 CollapseStateCache.shared.precompute(for: messages)
             }
             // Force view refresh after cache is populated
-            await self.incrementCacheCounter()
+            self.incrementCacheCounter()
         }
     }
 
@@ -693,7 +693,7 @@ final class NativeChatViewModel {
                 MarkdownCache.shared.precomputeForMessages(messages)
                 CollapseStateCache.shared.precompute(for: messages)
             }
-            await self.incrementCacheCounter()
+            self.incrementCacheCounter()
         }
     }
 
