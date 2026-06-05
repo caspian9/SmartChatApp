@@ -27,29 +27,21 @@ final class NativeChatViewModel {
     var isSending: Bool = false
     private(set) var isSwitchingGateway: Bool = false
     var error: String?
-    private(set) var isRestoringFromCache: Bool = false
+    var isRestoringFromCache: Bool = false
     var needsScrollToBottom: Bool = false
     var scrollTrigger: Int = 0
-    private(set) var cacheLoadCounter: Int = 0
+    var cacheLoadCounter: Int = 0
 
     // MARK: - Collaborators
 
     let messageReceiver: MessageReceiver
-
-    // MARK: - Static state (concurrency-safe via lock)
-    //
-    // Per-session-key reentrancy guard for `loadHistory()`. The class is
-    // @MainActor; this static is deliberately outside the actor so
-    // concurrent Task launches can race for the lock without bouncing
-    // through main. The state is held inside the lock itself so we never
-    // touch a `nonisolated(unsafe)` global directly from async code.
-
-    @ObservationIgnored
-    private static let loadHistoryLock = OSAllocatedUnfairLock<String?>(initialState: nil)
+    let historyLoader: HistoryLoader
 
     init() {
         self.messageReceiver = MessageReceiver()
+        self.historyLoader = HistoryLoader()
         self.messageReceiver.viewModel = self
+        self.historyLoader.viewModel = self
     }
 
     // MARK: - Public API (called by NativeChatView)
@@ -427,286 +419,10 @@ final class NativeChatViewModel {
     }
 
     func loadHistory() {
-        guard let session = selectedSession else { return }
-        let sessionKey = session.key
-        let sessionKeyPreview = String(sessionKey.prefix(8))
-        // Capture isRestoring BEFORE resetting
-        let isRestoring = isRestoringFromCache
-        isRestoringFromCache = false
-
-        let cachedSessionKey = sessionKey
-        let cachedSessionKeyPreview = sessionKeyPreview
-        let cachedIsRestoring = isRestoring
-
-        // Acquire lock BEFORE creating task closure to prevent concurrent Tasks
-        let alreadyInProgress = Self.loadHistoryLock.withLock { state -> Bool in
-            let isInProgress = state == cachedSessionKey
-            if !isInProgress {
-                state = cachedSessionKey
-            }
-            return isInProgress
-        }
-        if alreadyInProgress {
-            AppLogger.log("[loadHistory] already in progress for \(cachedSessionKeyPreview)", category: .nativeChat)
-        }
-
-        let taskIdStr = String(UUID().uuidString.prefix(8))
-
-        Task { [cachedSessionKey, cachedSessionKeyPreview, cachedIsRestoring, taskIdStr] in
-            AppLogger.log("[\(taskIdStr)] loadHistory Task started, sessionKey: \(cachedSessionKeyPreview)", category: .nativeChat)
-            defer {
-                Self.loadHistoryLock.withLock { state in
-                    if state == cachedSessionKey {
-                        state = nil
-                    }
-                }
-            }
-            // Load cache first and send to UI immediately
-            let cachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
-            AppLogger.log("cache returned \(cachedMessages.count) messages, sessionKey: \(cachedSessionKeyPreview)", category: .nativeChat)
-            if !cachedMessages.isEmpty {
-                let chatMessages = cachedMessages.compactMap { msg -> ChatMessage? in
-                    var text = ""
-                    for contentItem in msg.content {
-                        if let t = contentItem.text, !t.isEmpty {
-                            text = t.trimmingCharacters(in: .whitespacesAndNewlines)
-                            break
-                        }
-                    }
-                    if text.isEmpty { return nil }
-                    return ChatMessage(
-                        id: msg.id.uuidString,
-                        text: text,
-                        timestamp: Date(timeIntervalSince1970: (msg.timestamp ?? 0) / 1000),
-                        role: msg.role,
-                        state: "final",
-                        runId: nil,
-                        seq: nil,
-                        startedAt: nil,
-                        endedAt: nil,
-                        livenessState: nil,
-                        inputTokens: msg.usage?.input,
-                        outputTokens: msg.usage?.output,
-                        cacheRead: msg.usage?.cacheRead,
-                        cacheWrite: msg.usage?.cacheWrite,
-                        toolCallId: msg.toolCallId,
-                        toolName: msg.toolName,
-                        stopReason: msg.stopReason
-                    )
-                }
-                AppLogger.log("Loaded \(chatMessages.count) cached messages for session: \(cachedSessionKeyPreview), isRestoring: \(cachedIsRestoring)", category: .nativeChat)
-                // Precompute collapse and markdown states BEFORE sending to UI
-                await MainActor.run {
-                    MarkdownCache.shared.precomputeForMessages(chatMessages)
-                    CollapseStateCache.shared.precompute(for: chatMessages)
-                }
-                // Send cached messages to UI
-                self.loadedCachedHistory(chatMessages, isRestoring: cachedIsRestoring)
-            }
-
-            // Then fetch from network
-            do {
-                try await SessionManager.shared.ensureConnected()
-                let transport = await SessionManager.shared.makeTransport(sessionKey: cachedSessionKey)
-                let history = try await transport.requestHistory(sessionKey: cachedSessionKey)
-
-                // Staleness check moved here: this task dispatches
-                // `loadedNetworkHistory` carrying the session key, and
-                // the method verifies `selectedSession?.key` still matches
-                // before applying. The old check used
-                // `SessionManager.getCurrentSessionKey()`, which
-                // is overwritten by `loadSessions`'s concurrent
-                // `makeTransport("")` and caused the history to
-                // be silently dropped when the message cache was
-                // empty (so this is the only path that can
-                // repopulate the UI).
-
-                let messageCount = history.messages?.count ?? 0
-                AppLogger.log("Loaded \(messageCount) history messages for session: \(cachedSessionKeyPreview)", category: .nativeChat)
-                let chatMessages: [ChatMessage] = (history.messages ?? []).enumerated().compactMap { index, anyCodable -> ChatMessage? in
-                    guard let msg = try? JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(anyCodable)) else {
-                        print("SMAlog: message[\(index)] failed to decode as OpenClawChatMessage, raw: \(String(describing: anyCodable))")
-                        return nil
-                    }
-                    var text = ""
-                    var role = msg.role
-                    for contentItem in msg.content {
-                        if let t = contentItem.text, !t.isEmpty {
-                            text = t.trimmingCharacters(in: .whitespacesAndNewlines)
-                            break
-                        }
-                    }
-                    // If no text, check for thinking content
-                    if text.isEmpty {
-                        for contentItem in msg.content {
-                            if let thinking = contentItem.thinking, !thinking.isEmpty {
-                                text = thinking.trimmingCharacters(in: .whitespacesAndNewlines)
-                                role = "thinking"
-                                break
-                            }
-                        }
-                    }
-                    // Append toolCall content if present (may append to existing text or create new entry)
-                    var hasToolCall = false
-                    var toolCallText = ""
-                    for contentItem in msg.content {
-                        if contentItem.type == "toolCall", let name = contentItem.name {
-                            let callText = MessageFormatters.formatToolCallBubbleText(name: name, arguments: contentItem.arguments)
-                            guard !callText.isEmpty else { continue }
-                            hasToolCall = true
-                            if toolCallText.isEmpty {
-                                toolCallText = callText
-                            } else {
-                                toolCallText += "\n\n" + callText
-                            }
-                        }
-                    }
-                    if hasToolCall {
-                        if text.isEmpty {
-                            text = toolCallText
-                            role = "toolCall"
-                        } else {
-                            text = text + "\n\n" + toolCallText
-                        }
-                    }
-                    AppLogger.log("history msg[\(index)] contentItems=\(msg.content.count) text_len=\(text.count) role=\(role)", category: .nativeChat)
-                    if text.isEmpty {
-                        AppLogger.log("history msg[\(index)] skipped - empty text, content: \(String(describing: msg.content))", category: .nativeChat, level: .warning)
-                        return nil
-                    }
-                    let ts = msg.timestamp ?? 0
-                    let msgId = msg.id.uuidString
-                    let textPreview = String(text.prefix(100))
-                    AppLogger.log("history msg[\(index)] role=\(role) toolName=\(msg.toolName ?? "nil") toolCallId=\(msg.toolCallId ?? "nil") text_len=\(text.count) text_preview=\(textPreview)", category: .nativeChat)
-                    return ChatMessage(
-                        id: msgId,
-                        text: text,
-                        timestamp: Date(timeIntervalSince1970: ts / 1000),
-                        role: role,
-                        state: "final",
-                        runId: nil,
-                        seq: nil,
-                        startedAt: nil,
-                        endedAt: nil,
-                        livenessState: nil,
-                        inputTokens: msg.usage?.input,
-                        outputTokens: msg.usage?.output,
-                        cacheRead: msg.usage?.cacheRead,
-                        cacheWrite: msg.usage?.cacheWrite,
-                        toolCallId: msg.toolCallId,
-                        toolName: msg.toolName,
-                        stopReason: msg.stopReason
-                    )
-                }
-                AppLogger.log("chatMessages count=\(chatMessages.count)", category: .nativeChat)
-                // Cache the fetched messages (setMessages handles deduplication)
-                let openClawMessages = chatMessages.compactMap { createOpenClawChatMessage(from: $0) }
-                AppLogger.log("openClawMessages count=\(openClawMessages.count)", category: .nativeChat)
-                await MessageCache.shared.setMessages(openClawMessages, for: cachedSessionKey)
-
-                // Reload from cache to get accurate message count (cache now has all messages deduplicated)
-                let finalCachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
-                let finalChatMessages = finalCachedMessages.compactMap { msg -> ChatMessage? in
-                    var text = ""
-                    for contentItem in msg.content {
-                        if let t = contentItem.text, !t.isEmpty {
-                            text = t.trimmingCharacters(in: .whitespacesAndNewlines)
-                            break
-                        }
-                    }
-                    if text.isEmpty { return nil }
-                    return ChatMessage(
-                        id: msg.id.uuidString,
-                        text: text,
-                        timestamp: Date(timeIntervalSince1970: (msg.timestamp ?? 0) / 1000),
-                        role: msg.role,
-                        state: "final",
-                        runId: nil,
-                        seq: nil,
-                        startedAt: nil,
-                        endedAt: nil,
-                        livenessState: nil,
-                        inputTokens: msg.usage?.input,
-                        outputTokens: msg.usage?.output,
-                        cacheRead: msg.usage?.cacheRead,
-                        cacheWrite: msg.usage?.cacheWrite,
-                        toolCallId: msg.toolCallId,
-                        toolName: msg.toolName,
-                        stopReason: msg.stopReason
-                    )
-                }
-                AppLogger.log("[\(taskIdStr)] finalCachedMessages from cache: \(finalChatMessages.count)", category: .nativeChat)
-
-                // Only update UI if we didn't already show cache, or if there are new messages
-                // This prevents flickering when cache and network return the same data.
-                // The check in `loadedNetworkHistory` handles the
-                // "user switched sessions" case so we don't need a
-                // `getCurrentSessionKey()` guard here.
-                if cachedMessages.isEmpty {
-                    // No cache was shown, this is first data load
-                    self.loadedNetworkHistory(sessionKey: cachedSessionKey, messages: finalChatMessages)
-                } else if finalChatMessages.count > cachedMessages.count {
-                    // New messages were added
-                    self.loadedNetworkHistory(sessionKey: cachedSessionKey, messages: finalChatMessages)
-                } else {
-                    AppLogger.log("[\(taskIdStr)] Network returned same messages as cache, skipping UI update", category: .nativeChat)
-                }
-            } catch {
-                AppLogger.log("Load history error: \(error.localizedDescription)", category: .nativeChat, level: .error)
-            }
-        }
+        historyLoader.loadHistory()
     }
 
     func loadMoreHistory() {}
-
-    // MARK: - Private state mutators (formerly @Reducer actions called only from inside .run blocks)
-
-    private func loadedCachedHistory(_ messages: [ChatMessage], isRestoring: Bool) {
-        AppLogger.log("loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)", category: .nativeChat)
-        self.messages = messages
-        scrollTrigger += 1
-        cacheLoadCounter += 1
-        // Precompute markdown and collapse states synchronously on main actor, then force refresh
-        Task { [messages] in
-            await MainActor.run {
-                MarkdownCache.shared.precomputeForMessages(messages)
-                CollapseStateCache.shared.precompute(for: messages)
-            }
-            // Force view refresh after cache is populated
-            self.incrementCacheCounter()
-        }
-    }
-
-    private func loadedNetworkHistory(sessionKey: String, messages: [ChatMessage]) {
-        // Drop the result if the user has switched to a different
-        // session since this fetch started. Comparing against
-        // `selectedSession?.key` (the only source of truth
-        // for what the user is looking at) avoids the race the
-        // old `SessionManager.getCurrentSessionKey()` guard had
-        // with the concurrent `makeTransport("")` from
-        // `loadSessions`.
-        let currentKey = selectedSession?.key
-        if currentKey != sessionKey {
-            let currentKeyLog = currentKey ?? "nil"
-            AppLogger.log("loadedNetworkHistory dropped: session \(String(sessionKey.prefix(8))) is no longer selected (current: \(String(currentKeyLog.prefix(8))))", category: .nativeChat, level: .warning)
-            return
-        }
-        AppLogger.log("loadedNetworkHistory applying \(messages.count) messages for session: \(String(sessionKey.prefix(8)))", category: .nativeChat)
-        self.messages = messages
-        scrollTrigger += 1
-        cacheLoadCounter += 1
-        Task { [messages] in
-            await MainActor.run {
-                MarkdownCache.shared.precomputeForMessages(messages)
-                CollapseStateCache.shared.precompute(for: messages)
-            }
-            self.incrementCacheCounter()
-        }
-    }
-
-    private func incrementCacheCounter() {
-        cacheLoadCounter += 1
-    }
 
     func receiveMessage(_ message: ChatMessage) {
         messageReceiver.receiveMessage(message)
