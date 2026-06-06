@@ -30,7 +30,6 @@ final class MessageReceiver {
             if message.cacheRead != nil { existingMessage.cacheRead = message.cacheRead }
             if message.cacheWrite != nil { existingMessage.cacheWrite = message.cacheWrite }
             vm.messages[existingIndex] = existingMessage
-            vm.scrollTrigger += 1
             AppLogger.log("updated message: \(message.id), text length: \(existingMessage.text.count), FINAL state: \(existingMessage.state)", category: .nativeChat)
         } else {
             let similarIndex = vm.messages.firstIndex { existing in
@@ -54,7 +53,6 @@ final class MessageReceiver {
                 if message.cacheRead != nil { existingMessage.cacheRead = message.cacheRead }
                 if message.cacheWrite != nil { existingMessage.cacheWrite = message.cacheWrite }
                 vm.messages[similarIndex] = existingMessage
-                vm.scrollTrigger += 1
             } else {
                 if let last = vm.messages.last, last.state != "final" {
                     vm.messages.insert(message, at: vm.messages.count - 1)
@@ -63,9 +61,13 @@ final class MessageReceiver {
                     vm.messages.append(message)
                     AppLogger.log("receiveMessage new (appended) - id: \(String(message.id.prefix(8))), text len: \(message.text.count), state: \(message.state)", category: .nativeChat)
                 }
-                vm.scrollTrigger += 1
             }
         }
+        // Single scroll request per receiveMessage call regardless of
+        // which merge path was taken (id-match, similar-match, or fresh
+        // insert). Multiple fires in the same beat used to compound with
+        // HistoryLoader's triggers to produce visible jitter.
+        vm.scrollRequest = NativeChatScrollRequest(token: vm.scrollRequest.token &+ 1, kind: .newMessage)
         if message.state == "final" {
             // Intentionally do NOT write the streaming copy to the
             // cache here. The agent-end event payload does not carry
@@ -93,6 +95,6 @@ final class MessageReceiver {
         }
         AppLogger.log("appendNewMessages appending \(newMessages.count) messages", category: .nativeChat)
         vm.messages.append(contentsOf: newMessages)
-        vm.needsScrollToBottom = true
+        vm.scrollRequest = NativeChatScrollRequest(token: vm.scrollRequest.token &+ 1, kind: .newMessage)
     }
 }
