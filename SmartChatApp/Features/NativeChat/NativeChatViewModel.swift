@@ -151,14 +151,15 @@ final class NativeChatViewModel {
                 // Start event listening task - pass sessionKey to check later
                 Task {
                     for await evt in transport.events() {
-                        await MainActor.run {
-                            Task {
-                                // Only handle events for current session (check via SessionManager)
-                                let currentKey = await SessionManager.shared.getCurrentSessionKey()
-                                if currentKey == sessionKey {
-                                    await self.handleTransportEvent(evt, sessionKey: sessionKey)
-                                }
-                            }
+                        // Read the user's current view from our own state
+                        // (the single source of truth). The previous
+                        // SessionManager.getCurrentSessionKey() check
+                        // raced against loadSessions' `makeTransport("")`
+                        // which clobbered `currentSessionKey` for the
+                        // duration of the refresh.
+                        let currentKey = await MainActor.run { self.selectedSession?.key }
+                        if currentKey == sessionKey {
+                            await self.handleTransportEvent(evt, sessionKey: sessionKey)
                         }
                     }
                 }

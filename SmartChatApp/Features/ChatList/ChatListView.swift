@@ -75,7 +75,7 @@ struct ChatListView: View {
     private func refreshFromNetwork() async {
         do {
             try await SessionManager.shared.ensureConnected()
-            let transport = SessionManager.shared.makeTransport(sessionKey: "")
+            let transport = await SessionManager.shared.makeTransport(sessionKey: "")
             let response = try await transport.listSessions(limit: 50)
             await MainActor.run {
                 sessions = response.sessions
@@ -93,11 +93,12 @@ struct ChatListView: View {
 
     @ViewBuilder
     private func sessionView(for session: OpenClawChatSessionEntry) -> some View {
-        let transport = SessionManager.shared.makeTransport(sessionKey: session.key)
-        ChatView(
-            sessionKey: session.key,
-            sessionEntry: session,
-            transport: transport,
+        // `makeTransport` is now actor-isolated and async, but a
+        // @ViewBuilder function cannot `await` (and `body` is sync, so
+        // we cannot bubble async up either). Load the transport inside
+        // a small wrapper view's `.task` and pass it in once available.
+        SessionChatView(
+            session: session,
             onAppear: {
                 Task {
                     try? await SessionManager.shared.ensureConnected()
@@ -111,7 +112,7 @@ struct ChatListView: View {
             do {
                 try await SessionManager.shared.ensureConnected()
                 let sessionKey = try await SessionManager.shared.createSession()
-                let transport = SessionManager.shared.makeTransport(sessionKey: sessionKey)
+                let transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
                 let response = try await transport.listSessions(limit: 50)
                 await MainActor.run {
                     sessions = response.sessions
@@ -198,5 +199,33 @@ struct SessionRowView: View {
         formatter.dateStyle = .short
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+}
+
+/// Loads a `OpenClawChatTransport` for `session` in a `.task` and only
+/// then constructs `ChatView`. Required because `SessionManager.makeTransport`
+/// is now actor-isolated and async, but a @ViewBuilder function called
+/// from `body` (sync) cannot `await` it directly.
+private struct SessionChatView: View {
+    let session: OpenClawChatSessionEntry
+    let onAppear: () -> Void
+    @State private var transport: (any OpenClawChatTransport)?
+
+    var body: some View {
+        Group {
+            if let transport {
+                ChatView(
+                    sessionKey: session.key,
+                    sessionEntry: session,
+                    transport: transport,
+                    onAppear: onAppear
+                )
+            } else {
+                Color.clear
+            }
+        }
+        .task {
+            transport = await SessionManager.shared.makeTransport(sessionKey: session.key)
+        }
     }
 }
