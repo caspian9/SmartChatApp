@@ -41,7 +41,7 @@ final class ProfileManager: ObservableObject {
         }
     }
 
-    func addProfile(name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool, role: GatewayConnectionRole, cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) -> GatewayProfile {
+    func addProfile(name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool, role: GatewayConnectionRole, enabledCaps: Set<String>) -> GatewayProfile {
         let profile = GatewayProfile(
             name: name,
             colorTag: colorTag,
@@ -50,9 +50,7 @@ final class ProfileManager: ObservableObject {
             token: token,
             tlsEnabled: tlsEnabled,
             role: role,
-            cameraEnabled: cameraEnabled,
-            locationEnabled: locationEnabled,
-            voiceWakeEnabled: voiceWakeEnabled
+            enabledCaps: enabledCaps
         )
         profiles.append(profile)
         saveProfiles()
@@ -60,7 +58,7 @@ final class ProfileManager: ObservableObject {
         return profile
     }
 
-    func updateProfile(id: UUID, name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool, role: GatewayConnectionRole, cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) {
+    func updateProfile(id: UUID, name: String, colorTag: String, host: String, port: Int, token: String, tlsEnabled: Bool, role: GatewayConnectionRole, enabledCaps: Set<String>) {
         guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
         profiles[index].name = name
         profiles[index].colorTag = colorTag
@@ -69,9 +67,7 @@ final class ProfileManager: ObservableObject {
         profiles[index].token = token
         profiles[index].tlsEnabled = tlsEnabled
         profiles[index].role = role
-        profiles[index].cameraEnabled = cameraEnabled
-        profiles[index].locationEnabled = locationEnabled
-        profiles[index].voiceWakeEnabled = voiceWakeEnabled
+        profiles[index].enabledCaps = enabledCaps
         profiles[index].updatedAt = Date()
         saveProfiles()
     }

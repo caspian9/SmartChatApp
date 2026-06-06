@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 struct GatewayProfile: Codable, Identifiable, Equatable {
     let id: UUID
@@ -9,15 +10,14 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
     var token: String
     var tlsEnabled: Bool
     var role: GatewayConnectionRole
-    var cameraEnabled: Bool
-    var locationEnabled: Bool
-    var voiceWakeEnabled: Bool
+    var enabledCaps: Set<String>
     var isActive: Bool
     var createdAt: Date
     var updatedAt: Date
 
     enum CodingKeys: String, CodingKey {
         case id, name, colorTag, host, port, token, tlsEnabled, role
+        case enabledCaps
         case cameraEnabled, locationEnabled, voiceWakeEnabled
         case isActive, createdAt, updatedAt
     }
@@ -32,12 +32,43 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
         token = try container.decode(String.self, forKey: .token)
         tlsEnabled = try container.decode(Bool.self, forKey: .tlsEnabled)
         role = try container.decode(GatewayConnectionRole.self, forKey: .role)
-        cameraEnabled = try container.decodeIfPresent(Bool.self, forKey: .cameraEnabled) ?? false
-        locationEnabled = try container.decodeIfPresent(Bool.self, forKey: .locationEnabled) ?? false
-        voiceWakeEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceWakeEnabled) ?? false
+        if let stored = try container.decodeIfPresent(Set<String>.self, forKey: .enabledCaps) {
+            enabledCaps = stored
+        } else {
+            // Migrate pre-Set profiles that stored per-cap bools.
+            var migrated: Set<String> = []
+            if try container.decodeIfPresent(Bool.self, forKey: .cameraEnabled) ?? false {
+                migrated.insert(OpenClawCapability.camera.rawValue)
+            }
+            if try container.decodeIfPresent(Bool.self, forKey: .locationEnabled) ?? false {
+                migrated.insert(OpenClawCapability.location.rawValue)
+            }
+            if try container.decodeIfPresent(Bool.self, forKey: .voiceWakeEnabled) ?? false {
+                migrated.insert(OpenClawCapability.voiceWake.rawValue)
+            }
+            enabledCaps = migrated
+        }
         isActive = try container.decode(Bool.self, forKey: .isActive)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        // Only the canonical fields are written. The legacy per-cap bools exist
+        // solely so old profiles (pre-Set) decode cleanly into enabledCaps.
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(colorTag, forKey: .colorTag)
+        try container.encode(host, forKey: .host)
+        try container.encode(port, forKey: .port)
+        try container.encode(token, forKey: .token)
+        try container.encode(tlsEnabled, forKey: .tlsEnabled)
+        try container.encode(role, forKey: .role)
+        try container.encode(enabledCaps, forKey: .enabledCaps)
+        try container.encode(isActive, forKey: .isActive)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 
     init(
@@ -49,9 +80,7 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
         token: String,
         tlsEnabled: Bool = true,
         role: GatewayConnectionRole = .operatorAndNode,
-        cameraEnabled: Bool = false,
-        locationEnabled: Bool = false,
-        voiceWakeEnabled: Bool = false,
+        enabledCaps: Set<String> = [],
         isActive: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -64,9 +93,7 @@ struct GatewayProfile: Codable, Identifiable, Equatable {
         self.token = token
         self.tlsEnabled = tlsEnabled
         self.role = role
-        self.cameraEnabled = cameraEnabled
-        self.locationEnabled = locationEnabled
-        self.voiceWakeEnabled = voiceWakeEnabled
+        self.enabledCaps = enabledCaps
         self.isActive = isActive
         self.createdAt = createdAt
         self.updatedAt = updatedAt

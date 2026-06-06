@@ -67,6 +67,16 @@ public final class NodeCommandRouter: @unchecked Sendable {
         // Reminders commands (stubs)
         register("reminders.list", handler: stubHandler("reminders.list"))
         register("reminders.add", handler: stubHandler("reminders.add"))
+
+        // Motion commands (stubs — CoreMotion not wired up yet)
+        register("motion.activity", handler: stubHandler("motion.activity"))
+        register("motion.pedometer", handler: stubHandler("motion.pedometer"))
+
+        // Browser commands (stubs — no in-app browser)
+        register("browser.proxy", handler: stubHandler("browser.proxy"))
+
+        // Screen snapshot (stub — only `screen.record` is exposed as a stub today)
+        register("screen.snapshot", handler: stubHandler("screen.snapshot"))
     }
 
     private func register(_ command: String, handler: @escaping CommandHandler) {
