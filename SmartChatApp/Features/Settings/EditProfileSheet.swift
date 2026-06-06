@@ -1,11 +1,12 @@
 import SwiftUI
+import OpenClawKit
 
 struct EditProfileSheet: View {
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
 
     let profile: GatewayProfile?
-    let onSave: (String, String, String, Int, String, Bool, GatewayConnectionRole, Bool, Bool, Bool) -> Void
+    let onSave: (String, String, String, Int, String, Bool, GatewayConnectionRole, Set<String>) -> Void
     let onDelete: ((UUID) -> Void)?
     let onCancel: (() -> Void)?
 
@@ -16,13 +17,40 @@ struct EditProfileSheet: View {
     @State private var editToken: String = ""
     @State private var editTlsEnabled: Bool = true
     @State private var editRole: GatewayConnectionRole = .operatorAndNode
-    @State private var editCameraEnabled: Bool = false
-    @State private var editLocationEnabled: Bool = false
-    @State private var editVoiceWakeEnabled: Bool = false
+    @State private var editEnabledCaps: Set<String> = []
     @State private var isTesting = false
     @State private var isConnected = false
     @State private var testResult: String?
     @State private var testStatus: TestStatus = .idle
+
+    /// Caps exposed in the picker. `device` is intentionally omitted — it's
+    /// always advertised by SessionManager regardless of profile state.
+    /// `voiceWake` and `watch` are omitted too: neither maps to a `node.invoke`
+    /// command set on iOS-as-node (voice wake is an in-app trigger; an iPhone
+    /// is not a watch).
+    private static let selectableCaps: [OpenClawCapability] = [
+        .camera, .location, .screen, .canvas, .browser,
+        .talk, .photos, .contacts, .calendar, .reminders, .motion,
+    ]
+
+    private func capLabel(_ cap: OpenClawCapability) -> String {
+        switch cap {
+        case .canvas: return "Canvas"
+        case .browser: return "Browser"
+        case .camera: return "Camera"
+        case .screen: return "Screen"
+        case .voiceWake: return "Voice Wake"
+        case .talk: return "Talk"
+        case .location: return "Location"
+        case .device: return "Device"
+        case .watch: return "Watch"
+        case .photos: return "Photos"
+        case .contacts: return "Contacts"
+        case .calendar: return "Calendar"
+        case .reminders: return "Reminders"
+        case .motion: return "Motion"
+        }
+    }
 
     enum TestStatus {
         case idle, testing, success, failure, invalid
@@ -75,7 +103,7 @@ struct EditProfileSheet: View {
 
     private let colorOptions = ["#10A37F", "#3B82F6", "#F97316", "#EF4444", "#8B5CF6"]
 
-    init(profile: GatewayProfile?, onSave: @escaping (String, String, String, Int, String, Bool, GatewayConnectionRole, Bool, Bool, Bool) -> Void, onDelete: ((UUID) -> Void)? = nil, onCancel: (() -> Void)? = nil) {
+    init(profile: GatewayProfile?, onSave: @escaping (String, String, String, Int, String, Bool, GatewayConnectionRole, Set<String>) -> Void, onDelete: ((UUID) -> Void)? = nil, onCancel: (() -> Void)? = nil) {
         self.profile = profile
         self.onSave = onSave
         self.onDelete = onDelete
@@ -88,9 +116,7 @@ struct EditProfileSheet: View {
             _editToken = State(initialValue: profile.token)
             _editTlsEnabled = State(initialValue: profile.tlsEnabled)
             _editRole = State(initialValue: profile.role)
-            _editCameraEnabled = State(initialValue: profile.cameraEnabled)
-            _editLocationEnabled = State(initialValue: profile.locationEnabled)
-            _editVoiceWakeEnabled = State(initialValue: profile.voiceWakeEnabled)
+            _editEnabledCaps = State(initialValue: profile.enabledCaps)
         }
     }
 
@@ -116,7 +142,7 @@ struct EditProfileSheet: View {
 
         Task {
             do {
-                try await SessionManager.shared.connectWithRole(gatewayURL: url, authToken: editToken, role: editRole, cameraEnabled: editCameraEnabled, locationEnabled: editLocationEnabled, voiceWakeEnabled: editVoiceWakeEnabled)
+                try await SessionManager.shared.connectWithRole(gatewayURL: url, authToken: editToken, role: editRole, enabledCaps: editEnabledCaps)
                 await MainActor.run {
                     isTesting = false
                     testStatus = .success
@@ -192,12 +218,27 @@ struct EditProfileSheet: View {
                 }
 
                 Section("Capabilities") {
-                    Toggle("Camera", isOn: $editCameraEnabled)
+                    HStack {
+                        Text("Device")
+                            .foregroundColor(theme.textPrimary)
+                        Spacer()
+                        Text("always on")
+                            .font(.caption)
+                            .foregroundColor(theme.textSecondary)
+                    }
+                    ForEach(Self.selectableCaps, id: \.self) { cap in
+                        Toggle(capLabel(cap), isOn: Binding(
+                            get: { editEnabledCaps.contains(cap.rawValue) },
+                            set: { isOn in
+                                if isOn {
+                                    editEnabledCaps.insert(cap.rawValue)
+                                } else {
+                                    editEnabledCaps.remove(cap.rawValue)
+                                }
+                            }
+                        ))
                         .foregroundColor(theme.textPrimary)
-                    Toggle("Location", isOn: $editLocationEnabled)
-                        .foregroundColor(theme.textPrimary)
-                    Toggle("Voice Wake", isOn: $editVoiceWakeEnabled)
-                        .foregroundColor(theme.textPrimary)
+                    }
                 }
 
                 Section("Authentication") {
@@ -271,7 +312,7 @@ struct EditProfileSheet: View {
                     Button("Save") {
                         let port = Int(editPort) ?? 443
                         let cleanHost = Self.cleanHost(editHost)
-                        onSave(editName, editColorTag, cleanHost, port, editToken, editTlsEnabled, editRole, editCameraEnabled, editLocationEnabled, editVoiceWakeEnabled)
+                        onSave(editName, editColorTag, cleanHost, port, editToken, editTlsEnabled, editRole, editEnabledCaps)
                         dismiss()
                     }
                     .disabled(editName.isEmpty)

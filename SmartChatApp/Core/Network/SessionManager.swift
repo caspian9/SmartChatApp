@@ -60,21 +60,21 @@ actor SessionManager {
         connectedDeviceName
     }
 
-    func connectWithRole(gatewayURL: URL, authToken: String, role: GatewayConnectionRole, cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) async throws {
+    func connectWithRole(gatewayURL: URL, authToken: String, role: GatewayConnectionRole, enabledCaps: Set<String>) async throws {
         switch role {
         case .operatorOnly:
             try await connect(gatewayURL: gatewayURL, authToken: authToken)
         case .nodeOnly:
-            try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
+            try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken, enabledCaps: enabledCaps)
         case .operatorAndNode:
-            try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
+            try await connectNodeRole(gatewayURL: gatewayURL, authToken: authToken, enabledCaps: enabledCaps)
             try await connect(gatewayURL: gatewayURL, authToken: authToken)
         }
     }
 
     func connectWithProfile(_ profile: GatewayProfile) async throws {
         let url = gatewayURL(host: profile.host, port: profile.port, tlsEnabled: profile.tlsEnabled)
-        try await connectWithRole(gatewayURL: url, authToken: profile.token, role: profile.role, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
+        try await connectWithRole(gatewayURL: url, authToken: profile.token, role: profile.role, enabledCaps: profile.enabledCaps)
     }
 
     func gatewayURL(host: String, port: Int, tlsEnabled: Bool) -> URL {
@@ -143,9 +143,9 @@ actor SessionManager {
         }
     }
 
-    func connectNodeRole(gatewayURL: URL, authToken: String, cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) async throws {
+    func connectNodeRole(gatewayURL: URL, authToken: String, enabledCaps: Set<String>) async throws {
         let deviceIdentity = DeviceIdentityStore.loadOrCreate()
-        let nodeOptions = makeNodeConnectOptions(deviceIdentity: deviceIdentity, cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
+        let nodeOptions = makeNodeConnectOptions(deviceIdentity: deviceIdentity, enabledCaps: enabledCaps)
         let sessionBox = WebSocketSessionBox(session: URLSession.shared)
 
         do {
@@ -181,8 +181,10 @@ actor SessionManager {
             nodeConnected = true
             nodeConnectionError = nil
             AppLogger.log("Node connection established", category: .network)
-            let caps = nodeCaps(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
-            let commands = nodeCommands(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled)
+            let caps = nodeCaps(enabledCaps: enabledCaps)
+            let commands = nodeCommands(enabledCaps: enabledCaps)
+            AppLogger.log("Node caps sent to gateway: \(caps)", category: .network)
+            AppLogger.log("Node commands sent to gateway: \(commands)", category: .network)
             appendDebugLog("gateway: Node connected to gateway", category: "gateway")
             appendDebugLog("gateway: Node caps: \(caps.joined(separator: ", "))", category: "gateway")
             appendDebugLog("gateway: Node commands: \(commands.joined(separator: ", "))", category: "gateway")
@@ -193,12 +195,12 @@ actor SessionManager {
         }
     }
 
-    private func makeNodeConnectOptions(deviceIdentity: DeviceIdentity, cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) -> GatewayConnectOptions {
+    private func makeNodeConnectOptions(deviceIdentity: DeviceIdentity, enabledCaps: Set<String>) -> GatewayConnectOptions {
         GatewayConnectOptions(
             role: "node",
             scopes: [],
-            caps: nodeCaps(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled),
-            commands: nodeCommands(cameraEnabled: cameraEnabled, locationEnabled: locationEnabled, voiceWakeEnabled: voiceWakeEnabled),
+            caps: nodeCaps(enabledCaps: enabledCaps),
+            commands: nodeCommands(enabledCaps: enabledCaps),
             permissions: nodePermissions(),
             clientId: "openclaw-ios",
             clientMode: "node",
@@ -207,105 +209,62 @@ actor SessionManager {
         )
     }
 
-    private func nodeCaps(cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) -> [String] {
-        var caps: [String] = [
-            OpenClawCapability.canvas.rawValue,
-            OpenClawCapability.screen.rawValue,
-            OpenClawCapability.device.rawValue,
-            OpenClawCapability.talk.rawValue,
-        ]
-
-        // Optional caps based on profile settings
-        if cameraEnabled {
-            caps.append(OpenClawCapability.camera.rawValue)
+    private func nodeCaps(enabledCaps: Set<String>) -> [String] {
+        // `device` is a real implementation (battery/thermal/storage/network/status,
+        // device info), not a stub — advertise unconditionally so the gateway can
+        // query it without the user toggling anything. The rest of the caps come
+        // from the profile's enabled set; handlers stay registered, so profile
+        // changes need a reconnect to take effect.
+        var caps: [String] = [OpenClawCapability.device.rawValue]
+        for cap in enabledCaps.sorted() where cap != OpenClawCapability.device.rawValue {
+            caps.append(cap)
         }
-        if voiceWakeEnabled {
-            caps.append(OpenClawCapability.voiceWake.rawValue)
-        }
-        if locationEnabled {
-            caps.append(OpenClawCapability.location.rawValue)
-        }
-
-        // Always-on caps
-        caps.append(contentsOf: [
-            OpenClawCapability.photos.rawValue,
-            OpenClawCapability.contacts.rawValue,
-            OpenClawCapability.calendar.rawValue,
-            OpenClawCapability.reminders.rawValue,
-        ])
-
         return caps
     }
 
-    private func nodeCommands(cameraEnabled: Bool, locationEnabled: Bool, voiceWakeEnabled: Bool) -> [String] {
+    private func nodeCommands(enabledCaps: Set<String>) -> [String] {
+        // Always advertise `device.*` to match the unconditional `device` cap.
         var commands: [String] = [
-            // Canvas commands
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-            // Canvas A2UI commands
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            OpenClawCanvasA2UICommand.reset.rawValue,
-            // Screen commands
-            OpenClawScreenCommand.record.rawValue,
-            // System commands
-            OpenClawSystemCommand.notify.rawValue,
-            // Chat commands
-            OpenClawChatCommand.push.rawValue,
-            // Talk commands
-            OpenClawTalkCommand.pttStart.rawValue,
-            OpenClawTalkCommand.pttStop.rawValue,
-            OpenClawTalkCommand.pttCancel.rawValue,
-            OpenClawTalkCommand.pttOnce.rawValue,
+            OpenClawDeviceCommand.status.rawValue,
+            OpenClawDeviceCommand.info.rawValue,
         ]
-
-        // Add commands based on capabilities
-        if cameraEnabled {
+        if enabledCaps.contains(OpenClawCapability.camera.rawValue) {
             commands.append(contentsOf: [
                 OpenClawCameraCommand.list.rawValue,
                 OpenClawCameraCommand.snap.rawValue,
                 OpenClawCameraCommand.clip.rawValue,
             ])
         }
-
-        if locationEnabled {
+        if enabledCaps.contains(OpenClawCapability.location.rawValue) {
             commands.append(OpenClawLocationCommand.get.rawValue)
         }
-
-        // Always include device commands
-        commands.append(contentsOf: [
-            OpenClawDeviceCommand.status.rawValue,
-            OpenClawDeviceCommand.info.rawValue,
-        ])
-
-        if true { // photos is always enabled
+        if enabledCaps.contains(OpenClawCapability.contacts.rawValue) {
+            commands.append(OpenClawContactsCommand.search.rawValue)
+        }
+        if enabledCaps.contains(OpenClawCapability.calendar.rawValue) {
+            commands.append(OpenClawCalendarCommand.events.rawValue)
+        }
+        if enabledCaps.contains(OpenClawCapability.reminders.rawValue) {
+            commands.append(OpenClawRemindersCommand.list.rawValue)
+        }
+        if enabledCaps.contains(OpenClawCapability.photos.rawValue) {
             commands.append(OpenClawPhotosCommand.latest.rawValue)
         }
-
-        if true { // contacts is always enabled
+        if enabledCaps.contains(OpenClawCapability.motion.rawValue) {
             commands.append(contentsOf: [
-                OpenClawContactsCommand.search.rawValue,
-                OpenClawContactsCommand.add.rawValue,
+                OpenClawMotionCommand.activity.rawValue,
+                OpenClawMotionCommand.pedometer.rawValue,
             ])
         }
-
-        if true { // calendar is always enabled
-            commands.append(contentsOf: [
-                OpenClawCalendarCommand.events.rawValue,
-                OpenClawCalendarCommand.add.rawValue,
-            ])
+        if enabledCaps.contains(OpenClawCapability.canvas.rawValue) {
+            commands.append(OpenClawCanvasCommand.present.rawValue)
         }
-
-        if true { // reminders is always enabled
-            commands.append(contentsOf: [
-                OpenClawRemindersCommand.list.rawValue,
-                OpenClawRemindersCommand.add.rawValue,
-            ])
+        if enabledCaps.contains(OpenClawCapability.browser.rawValue) {
+            commands.append(OpenClawBrowserCommand.proxy.rawValue)
         }
-
+        if enabledCaps.contains(OpenClawCapability.screen.rawValue) {
+            commands.append(OpenClawScreenCommand.snapshot.rawValue)
+        }
         return commands
     }
 
@@ -424,9 +383,9 @@ actor SessionManager {
         case .operatorOnly:
             try await connect(gatewayURL: url, authToken: profile.token)
         case .nodeOnly:
-            try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
+            try await connectNodeRole(gatewayURL: url, authToken: profile.token, enabledCaps: profile.enabledCaps)
         case .operatorAndNode:
-            try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
+            try await connectNodeRole(gatewayURL: url, authToken: profile.token, enabledCaps: profile.enabledCaps)
             try await connect(gatewayURL: url, authToken: profile.token)
         }
     }
@@ -451,7 +410,7 @@ actor SessionManager {
         }
 
         // Connect node first
-        try await connectNodeRole(gatewayURL: url, authToken: profile.token, cameraEnabled: profile.cameraEnabled, locationEnabled: profile.locationEnabled, voiceWakeEnabled: profile.voiceWakeEnabled)
+        try await connectNodeRole(gatewayURL: url, authToken: profile.token, enabledCaps: profile.enabledCaps)
 
         // Connect operator
         try await connect(gatewayURL: url, authToken: profile.token)
