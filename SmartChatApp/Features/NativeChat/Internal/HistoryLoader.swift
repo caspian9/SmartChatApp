@@ -129,16 +129,15 @@ final class HistoryLoader {
         guard let vm = viewModel else { return }
         AppLogger.log("loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)", category: .nativeChat)
         vm.messages = messages
-        vm.scrollTrigger += 1
-        vm.cacheLoadCounter += 1
-        // Precompute markdown and collapse states synchronously on main actor, then force refresh
+        // Single scroll request — the view's multi-poll handler covers
+        // the `MarkdownViewTextKit` async height measurement. Precompute
+        // runs in a Task without firing a second scroll request.
+        vm.scrollRequest = NativeChatScrollRequest(token: vm.scrollRequest.token &+ 1, kind: .historyLoaded)
         Task { [messages] in
             await MainActor.run {
                 MarkdownCache.shared.precomputeForMessages(messages)
                 CollapseStateCache.shared.precompute(for: messages)
             }
-            // Force view refresh after cache is populated
-            self.incrementCacheCounter()
         }
     }
 
@@ -159,18 +158,12 @@ final class HistoryLoader {
         }
         AppLogger.log("loadedNetworkHistory applying \(messages.count) messages for session: \(String(sessionKey.prefix(8)))", category: .nativeChat)
         vm.messages = messages
-        vm.scrollTrigger += 1
-        vm.cacheLoadCounter += 1
+        vm.scrollRequest = NativeChatScrollRequest(token: vm.scrollRequest.token &+ 1, kind: .historyLoaded)
         Task { [messages] in
             await MainActor.run {
                 MarkdownCache.shared.precomputeForMessages(messages)
                 CollapseStateCache.shared.precompute(for: messages)
             }
-            self.incrementCacheCounter()
         }
-    }
-
-    private func incrementCacheCounter() {
-        viewModel?.cacheLoadCounter += 1
     }
 }

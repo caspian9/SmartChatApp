@@ -3,6 +3,31 @@ import os
 import OpenClawChatUI
 import OpenClawKit
 
+/// Unified scroll signal between the view-model and the view. Replaces the
+/// previous `scrollTrigger` / `cacheLoadCounter` / `needsScrollToBottom`
+/// triple, where three independent counters in the same beat would compound
+/// to 11+ `scrollTo` calls per history load. Writers (sendMessage,
+/// MessageReceiver, HistoryLoader) bump `token` exactly once per event; the
+/// view observes `token` and dispatches on `kind` — `.newMessage` does a
+/// single scroll, `.historyLoaded` does a multi-poll scroll to catch the
+/// `MarkdownViewTextKit` async height measurement.
+enum NativeChatScrollKind: Equatable {
+    /// A new message landed or a streaming delta arrived — single scroll.
+    /// Streaming deltas mutate the same `lastId` (id-match path), so the
+    /// single scroll is a no-op once at the bottom; only a fresh append
+    /// (new user message, new tool bubble) actually moves the viewport.
+    case newMessage
+    /// Cached or network history just loaded — multi-poll scroll catches
+    /// the `MarkdownViewTextKit` async height measurement.
+    case historyLoaded
+}
+
+struct NativeChatScrollRequest: Equatable {
+    var token: Int
+    var kind: NativeChatScrollKind
+    static let initial = NativeChatScrollRequest(token: 0, kind: .newMessage)
+}
+
 @MainActor
 @Observable
 final class NativeChatViewModel {
@@ -24,9 +49,12 @@ final class NativeChatViewModel {
     var isSwitchingGateway: Bool = false
     var error: String?
     var isRestoringFromCache: Bool = false
-    var needsScrollToBottom: Bool = false
-    var scrollTrigger: Int = 0
-    var cacheLoadCounter: Int = 0
+    /// Unified scroll signal. See `NativeChatScrollRequest` doc for the
+    /// rationale. Each writer must increment the token exactly once per
+    /// event — multiple increments in the same beat used to produce
+    /// visible up-down jitter when the viewport kept re-anchoring against
+    /// different layout states.
+    var scrollRequest: NativeChatScrollRequest = .initial
 
     // MARK: - Collaborators
 
@@ -103,6 +131,12 @@ final class NativeChatViewModel {
             isFresh: true
         )
         messages.append(message)
+        // Without this scroll request, the viewport stays at the
+        // pre-send position until `isSending` flips false (lifecycle end,
+        // which can be 10+ seconds for a long response). The view's
+        // `.newMessage` handler scrolls to the new last id (this very
+        // user message) so the user sees the bubble land at the bottom.
+        scrollRequest = NativeChatScrollRequest(token: scrollRequest.token &+ 1, kind: .newMessage)
         inputText = ""
         // Cache user message
         Task {
@@ -163,18 +197,6 @@ final class NativeChatViewModel {
 
     private func setSending(_ value: Bool) {
         isSending = value
-    }
-
-    func scrollToBottom() {
-        needsScrollToBottom = true
-    }
-
-    private func setNeedsScrollToBottom(_ needsScroll: Bool) {
-        needsScrollToBottom = needsScroll
-    }
-
-    private func incrementScrollTrigger() {
-        scrollTrigger += 1
     }
 
     private func loadedMoreHistory(_ messages: [ChatMessage], hasMore: Bool) {
