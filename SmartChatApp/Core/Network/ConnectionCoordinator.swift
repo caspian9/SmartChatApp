@@ -28,6 +28,13 @@ actor ConnectionCoordinator {
     // In-flight connect tasks, keyed by role. Coalesces parallel ensureConnected.
     private var inFlight: [GatewayRole: Task<Void, Error>] = [:]
 
+    // Test-only counter: increments every time a real connect attempt begins
+    // (i.e. `connectOperator` or `connectNodeRole` actually starts). Resets
+    // on `disconnect()`. Used by `ConnectionCoordinatorCoalescingTests` to
+    // assert that parallel `ensureConnected` calls coalesce into a single
+    // underlying connect attempt. No production code reads this.
+    private var connectAttemptCount: Int = 0
+
     // Transport cache: sessionKey -> GatewayChatTransport (conforms to
     // OpenClawChatTransport). One actor per session key for the lifetime of
     // the app.
@@ -51,6 +58,13 @@ actor ConnectionCoordinator {
 
     nonisolated var deviceName: String? { get async { await self._deviceName() } }
     private func _deviceName() -> String? { connectedDeviceName }
+
+    // Test-only: number of connect attempts that have started since the last
+    // `disconnect()`. See `connectAttemptCount` for context.
+    nonisolated var currentConnectAttemptCount: Int {
+        get async { await self._currentConnectAttemptCount() }
+    }
+    private func _currentConnectAttemptCount() -> Int { connectAttemptCount }
 
     func connectWithProfile(_ profile: GatewayProfile) async throws {
         let url = gatewayURL(host: profile.host, port: profile.port, tlsEnabled: profile.tlsEnabled)
@@ -117,6 +131,7 @@ actor ConnectionCoordinator {
         operatorConnected = false
         nodeConnected = false
         connectedDeviceName = nil
+        connectAttemptCount = 0
         await MainActor.run {
             self.state.setDisconnected(reason: nil)
         }
@@ -166,6 +181,7 @@ actor ConnectionCoordinator {
     // MARK: - Private
 
     private func connectOperator(gatewayURL: URL, authToken: String) async throws {
+        connectAttemptCount += 1
         let deviceIdentity = DeviceIdentityStore.loadOrCreate()
         let options = GatewayConnectOptions(
             role: "operator",
@@ -225,6 +241,7 @@ actor ConnectionCoordinator {
         authToken: String,
         enabledCaps: Set<String>
     ) async {
+        connectAttemptCount += 1
         let deviceIdentity = DeviceIdentityStore.loadOrCreate()
         let options = makeNodeOptions(
             deviceIdentity: deviceIdentity,

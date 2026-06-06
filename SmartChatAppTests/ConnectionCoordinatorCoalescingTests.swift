@@ -4,9 +4,14 @@ import XCTest
 @MainActor
 final class ConnectionCoordinatorCoalescingTests: XCTestCase {
     /// Two parallel `ensureConnected` calls with the same profile must share
-    /// one in-flight connect task. We assert on elapsed time: with
-    /// coalescing, total ≈ one failed connect attempt (~connection refused
-    /// in <1s); without coalescing, it'd be ~2×.
+    /// one in-flight connect task. We assert on the coordinator's
+    /// `currentConnectAttemptCount`: with coalescing, exactly one underlying
+    /// connect attempt begins; without coalescing, two would. This is a
+    /// direct, deterministic check of the property under test (an earlier
+    /// version asserted on elapsed time, which is unreliable because
+    /// ECONNREFUSED on port 1 returns in ~200ms locally, so two parallel
+    /// non-coalesced attempts would also complete well under any reasonable
+    /// elapsed-time threshold).
     func testEnsureConnectedCoalescesTwoParallelCalls() async throws {
         let coordinator = ConnectionCoordinator.shared
         let badProfile = GatewayProfile(
@@ -24,10 +29,11 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
             updatedAt: Date()
         )
 
-        // Make sure we start disconnected.
+        // Make sure we start disconnected (this also resets the
+        // connect-attempt counter).
         await coordinator.disconnect()
 
-        let t0 = Date()
+        let startCount = await coordinator.currentConnectAttemptCount
         async let r1: Void = {
             do { try await coordinator.ensureConnected(profile: badProfile) }
             catch { /* expected: connect fails */ }
@@ -37,8 +43,12 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
             catch { /* expected: connect fails */ }
         }()
         _ = await (r1, r2)
-        let elapsed = Date().timeIntervalSince(t0)
-        XCTAssertLessThan(elapsed, 1.8, "ensureConnected should coalesce (elapsed: \(elapsed)s)")
+        let endCount = await coordinator.currentConnectAttemptCount
+        XCTAssertEqual(
+            endCount - startCount,
+            1,
+            "ensureConnected should coalesce two parallel calls into one underlying connect attempt (started \(endCount - startCount))"
+        )
 
         // Cleanup: disconnect so other tests start clean.
         await coordinator.disconnect()
