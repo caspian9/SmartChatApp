@@ -347,6 +347,16 @@ actor SessionManager {
         currentSessionKey
     }
 
+    /// Fetch the latest history for `sessionKey` from the gateway via `chat.history`
+    /// (limit=100, maxChars=100000). GatewayChatTransport falls back to MessageCache
+    /// on failure, so the call site always gets a non-throwing-shaped payload back.
+    /// Side effect: updates `currentSessionKey` via makeTransport — if calling from
+    /// outside the active chat, snapshot and restore via getCurrentSessionKey().
+    func refreshMessages(for sessionKey: String) async throws -> OpenClawChatHistoryPayload {
+        let transport = makeTransport(sessionKey: sessionKey)
+        return try await transport.requestHistory(sessionKey: sessionKey)
+    }
+
     func ensureConnected() async throws {
         // Use active profile
         let activeProfile = await MainActor.run { ProfileManager.shared.activeProfile }
