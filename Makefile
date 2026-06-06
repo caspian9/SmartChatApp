@@ -11,13 +11,14 @@ build:
 		-destination "platform=iOS,name=$(DEVICE_NAME)" \
 		-allowProvisioningUpdates build
 
-# Like build, but skips code signing — useful on a machine without an
-# Apple ID / provisioning profile, when you only want to verify the
-# code compiles. Output is in DerivedData but .app is not installable.
+# Like build, but skips code signing and uses a generic iOS destination —
+# runs with no device connected. Useful on a machine without an Apple ID /
+# provisioning profile, or for a quick syntax check. Output is in DerivedData
+# but .app is not installable (no provisioning profile).
 compile-only:
 	xcodegen generate
 	xcodebuild -skipMacroValidation -scheme SmartChatApp \
-		-destination "platform=iOS,name=$(DEVICE_NAME)" \
+		-destination 'generic/platform=iOS' \
 		CODE_SIGNING_ALLOWED=NO build
 
 install: build
