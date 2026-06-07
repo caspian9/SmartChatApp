@@ -143,6 +143,33 @@ actor SessionManager {
         connectedDeviceName = nil
     }
 
+    /// Test-only connect: probes a profile's connectivity without
+    /// disturbing the main `ConnectionState.phase`. The caller (e.g.
+    /// `EditProfileSheet`'s "Test Connection" button) reads
+    /// `ConnectionState.testInProgress` / `testLastResult` to surface
+    /// the outcome.
+    func testConnect(
+        gatewayURL: URL,
+        authToken: String,
+        role: GatewayConnectionRole,
+        enabledCaps: Set<String>
+    ) async throws {
+        try await coordinator.testConnect(
+            gatewayURL: gatewayURL,
+            authToken: authToken,
+            role: role,
+            enabledCaps: enabledCaps
+        )
+    }
+
+    /// Cancel any in-flight connect attempts. The existing transport
+    /// (if any) is left alive. Used by `ProfileManager.switchToProfile`
+    /// to abort a connect attempt when the user changes their mind and
+    /// switches to a different profile.
+    func cancelInFlight() async {
+        await coordinator.cancelInFlight()
+    }
+
     func checkConnection() async -> Bool {
         let isConnected = await coordinator.connectionStatus
         if !isConnected {
