@@ -43,4 +43,51 @@ final class ConnectionStateTests: XCTestCase {
         XCTAssertEqual(state.phase, .connected)
         XCTAssertEqual(state.reconnectAttempts, 0)
     }
+
+    func testSetConnecting_clearsLastError() {
+        let state = ConnectionState()
+        state.setDisconnected(reason: "previous failure")
+        XCTAssertEqual(state.lastError, "previous failure")
+        state.setConnecting(role: .operator)
+        XCTAssertNil(state.lastError)
+    }
+
+    func testSetConnected_clearsLastError() {
+        let state = ConnectionState()
+        state.setDisconnected(reason: "previous failure")
+        XCTAssertEqual(state.lastError, "previous failure")
+        state.setConnected(deviceName: "device")
+        XCTAssertNil(state.lastError)
+    }
+
+    func testSetConnected_clearsTestState() {
+        let state = ConnectionState()
+        state.setTestInProgress()
+        XCTAssertTrue(state.testInProgress)
+        state.setConnected(deviceName: "device")
+        XCTAssertFalse(state.testInProgress)
+    }
+
+    func testTestResult_roundTrip() {
+        let state = ConnectionState()
+        state.setTestInProgress()
+        XCTAssertTrue(state.testInProgress)
+        XCTAssertNil(state.testLastResult)
+
+        state.setTestResult(.success)
+        XCTAssertFalse(state.testInProgress)
+        XCTAssertEqual(state.testLastResult, .success)
+
+        state.clearTestResult()
+        XCTAssertFalse(state.testInProgress)
+        XCTAssertNil(state.testLastResult)
+    }
+
+    func testSetTestResult_failure_carriesReason() {
+        let state = ConnectionState()
+        state.setTestInProgress()
+        state.setTestResult(.failure(reason: "auth failed"))
+        XCTAssertFalse(state.testInProgress)
+        XCTAssertEqual(state.testLastResult, .failure(reason: "auth failed"))
+    }
 }
