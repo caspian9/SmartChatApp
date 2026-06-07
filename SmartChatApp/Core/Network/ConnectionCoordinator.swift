@@ -162,15 +162,26 @@ actor ConnectionCoordinator {
         await MainActor.run {
             self.state.setTestInProgress()
         }
+        // Track which roles we opened so the defer can tear down only those.
+        // Without this, a successful test connect leaves the operator/node
+        // session open and the next real `connectWithProfile` would re-open
+        // an already-open session (which the SDK either errors on or
+        // silently no-ops — both bad).
+        var openedOperator = false
+        var openedNode = false
         do {
             switch role {
             case .operatorOnly:
                 try await connectOperatorForTest(gatewayURL: gatewayURL, authToken: authToken)
+                openedOperator = true
             case .nodeOnly:
                 await connectNodeRoleForTest(gatewayURL: gatewayURL, authToken: authToken, enabledCaps: enabledCaps)
+                openedNode = true
             case .operatorAndNode:
                 await connectNodeRoleForTest(gatewayURL: gatewayURL, authToken: authToken, enabledCaps: enabledCaps)
+                openedNode = true
                 try await connectOperatorForTest(gatewayURL: gatewayURL, authToken: authToken)
+                openedOperator = true
             }
             await MainActor.run {
                 self.state.setTestResult(.success)
@@ -186,6 +197,16 @@ actor ConnectionCoordinator {
                 self.state.setTestResult(.failure(reason: reason))
             }
             throw error
+        }
+        // Tear down the test session so it doesn't leak. The actor is
+        // serial, so awaiting disconnect here doesn't race with anything
+        // except other in-flight test calls — and we don't support parallel
+        // test connects (UI is single-button).
+        if openedOperator {
+            await operatorSession.disconnect()
+        }
+        if openedNode {
+            await nodeSession.disconnect()
         }
     }
 
