@@ -41,6 +41,7 @@ final class ConnectionState {
         lastError = nil
         reconnectAttempts = 0
         testInProgress = false
+        testLastResult = nil
     }
 
     func setDisconnected(reason: String?) {
