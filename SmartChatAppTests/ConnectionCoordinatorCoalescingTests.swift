@@ -216,4 +216,61 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
         // Cleanup
         await coordinator.disconnect()
     }
+
+    /// When `cancelInFlight()` cancels a Task whose SDK connect is
+    /// about to throw, the catch block in `connectOperator` must NOT
+    /// write that error into `state.lastError` — the new attempt (or
+    /// a subsequent successful connect) is in charge of state. Without
+    /// the `Task.isCancelled` guard in the catch, a brief "Failed"
+    /// flash races the new connect's success and the user sees
+    /// "Failed → Disconnect" flicker on Switch.
+    func testCancelInFlightDoesNotPolluteStateLastError() async throws {
+        let coordinator = ConnectionCoordinator.shared
+        let badProfile = GatewayProfile(
+            id: UUID(),
+            name: "test",
+            colorTag: "#000000",
+            host: "127.0.0.1",
+            port: 1,
+            token: "test-token",
+            tlsEnabled: false,
+            role: .operatorOnly,
+            enabledCaps: [],
+            isActive: true,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+
+        await coordinator.disconnect()
+        // Reset state so a leftover from a prior test doesn't trip
+        // the assertion.
+        await MainActor.run {
+            ConnectionState.shared.setDisconnected(reason: nil)
+        }
+
+        // Kick off a connect (will fail on port 1 with a non-cancel
+        // error) and cancel mid-flight. The catch must see
+        // `Task.isCancelled == true` and skip the `setDisconnected`
+        // call.
+        let task = Task {
+            try? await coordinator.ensureConnected(profile: badProfile)
+        }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        await coordinator.cancelInFlight()
+        _ = await task.value
+
+        // The cancelled task's catch must not have written
+        // lastError. A real error from this attempt would have a
+        // "refused" / "Connection" / "errno" substring; we accept
+        // lastError being nil OR an unrelated prior value, but it
+        // must not be a fresh entry from the cancelled attempt.
+        let lastError = await MainActor.run { ConnectionState.shared.lastError }
+        let looksLikeNetworkError = lastError.map {
+            $0.contains("refused") || $0.contains("Connection") || $0.contains("errno") || $0.contains("canceled")
+        } ?? false
+        XCTAssertFalse(looksLikeNetworkError, "Cancelled task must not write a network-error lastError. Got: \(lastError ?? "nil")")
+
+        // Cleanup
+        await coordinator.disconnect()
+    }
 }

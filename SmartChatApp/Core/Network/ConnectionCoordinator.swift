@@ -312,12 +312,34 @@ actor ConnectionCoordinator {
             AppLogger.log("Operator connect cancelled", category: .network)
             throw CancellationError()
         } catch let error as GatewayConnectAuthError {
+            // The SDK may surface a stale auth error from a connection
+            // whose Task was already cancelled (e.g., user clicked
+            // Switch on another profile while this one was still
+            // connecting). Without this guard, the catch would write
+            // `setDisconnected` and clobber the *new* profile's
+            // `.connecting` state, causing a brief "Failed" flash
+            // before the new profile's connect succeeds. Match the
+            // `catch is CancellationError` semantics above: leave
+            // state alone, treat as silent cancellation.
+            if Task.isCancelled {
+                AppLogger.log("Operator connect cancelled (auth error after cancel)", category: .network)
+                throw CancellationError()
+            }
             let requestIdStr = error.requestId.map { " (requestId: \($0))" } ?? ""
             let displayError = SessionManagerError.authError(error.message + requestIdStr, error.detailCodeRaw)
             AppLogger.log("Auth error: \(error.message)\(requestIdStr)", category: .network, level: .error)
             await MainActor.run { state.setDisconnected(reason: error.message) }
             throw displayError
         } catch {
+            // Same reasoning as the auth error catch above: a cancelled
+            // Task can still produce a non-CancellationError from the
+            // SDK (e.g., URLError.cancelled). Don't write that error
+            // into state — it belongs to an attempt the user has
+            // already abandoned.
+            if Task.isCancelled {
+                AppLogger.log("Operator connect cancelled (error after cancel)", category: .network)
+                throw CancellationError()
+            }
             AppLogger.log("Connection error: \(error.localizedDescription)", category: .network, level: .error)
             await MainActor.run { state.setDisconnected(reason: error.localizedDescription) }
             throw error
