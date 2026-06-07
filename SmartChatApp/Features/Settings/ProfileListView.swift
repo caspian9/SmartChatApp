@@ -192,7 +192,18 @@ private struct ProfileRow: View {
             // flash (e.g., if a stale value lingers across a switch).
             guard isActive else { return }
             flashTask?.cancel()
-            guard newError != nil else { return }
+            if newError == nil {
+                // A new connect attempt is starting (setConnecting clears
+                // lastError), or a successful connect cleared it. Either
+                // way, the previous failure is no longer the current
+                // state — clear the flash so the spinner / "Connect" /
+                // "Disconnect" label can take over. Without this, an
+                // auto-retry that succeeds leaves the row stuck on
+                // "Failed" because the cancelled flashTask never resets
+                // the flag.
+                isFailedFlashActive = false
+                return
+            }
             flashTask = Task {
                 isFailedFlashActive = true
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
