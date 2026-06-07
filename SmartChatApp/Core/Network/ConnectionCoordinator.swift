@@ -362,8 +362,20 @@ actor ConnectionCoordinator {
                 AppLogger.log("Operator connect error but generation moved on; ignoring", category: .network)
                 throw CancellationError()
             }
-            AppLogger.log("Connection error: \(error.localizedDescription)", category: .network, level: .error)
-            await MainActor.run { state.setDisconnected(reason: error.localizedDescription) }
+            // Safety net for the generation guard: even when the
+            // generation matches, a "cancelled" error message means
+            // `cancelInFlight` (or `disconnect`, which calls it) tore
+            // down our URLSession. The user has already moved on to
+            // another profile; surfacing "Failed" with a cancelled
+            // reason is a misleading flicker on the new row. Treat
+            // as silent cancellation.
+            let errorMessage = error.localizedDescription
+            if errorMessage.range(of: "cancel", options: .caseInsensitive) != nil {
+                AppLogger.log("Operator connect cancelled (error: \(errorMessage))", category: .network)
+                throw CancellationError()
+            }
+            AppLogger.log("Connection error: \(errorMessage)", category: .network, level: .error)
+            await MainActor.run { state.setDisconnected(reason: errorMessage) }
             throw error
         }
     }

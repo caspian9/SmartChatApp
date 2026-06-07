@@ -98,6 +98,16 @@ final class ProfileManager: ObservableObject {
     }
 
     func switchToProfile(_ profile: GatewayProfile) async {
+        // Clear all connection state up front so the OLD profile's
+        // connect can't flash a "Failed" row before the new profile's
+        // setConnecting/Connected lands. This is the user-visible
+        // symptom we're fixing: the OLD connect's catch (which can
+        // run up to ~2s after we cancel) was racing the NEW connect's
+        // setConnecting and clobbering the new row with the OLD row's
+        // error.
+        await MainActor.run {
+            ConnectionState.shared.setDisconnected(reason: nil)
+        }
         // Cancel any in-flight connect attempt before doing anything else.
         // Without this, a connect that's still in progress would race
         // with the new connect and could leave the new profile in a
