@@ -35,6 +35,16 @@ actor ConnectionCoordinator {
     // underlying connect attempt. No production code reads this.
     private var connectAttemptCount: Int = 0
 
+    // Monotonic counter bumped by `cancelInFlight` (i.e. at the start
+    // of every `switchToProfile`). Each `connectOperator` /
+    // `connectNodeRole` snapshots it at entry; catch and success
+    // paths compare the snapshot to the current value and treat a
+    // mismatch as "a newer connect has started — my result is stale".
+    // This suppresses the old connect's catch writing `setDisconnected`
+    // over the new connect's `setConnecting`, which is what was
+    // causing the "Failed → Disconnect" flicker on Switch.
+    private var connectGeneration: Int = 0
+
     // Transport cache: sessionKey -> GatewayChatTransport (conforms to
     // OpenClawChatTransport). One actor per session key for the lifetime of
     // the app.
@@ -130,6 +140,12 @@ actor ConnectionCoordinator {
     /// Used by `ProfileManager.switchToProfile` to abort a connect attempt
     /// when the user changes their mind and switches to a different profile.
     func cancelInFlight() {
+        // Bump the generation BEFORE cancelling so any catch / success
+        // path that observes the cancellation also sees the new
+        // generation and suppresses its state writes. Order matters:
+        // if we cancelled first, a catch that ran synchronously could
+        // see the old generation and still clobber state.
+        connectGeneration += 1
         for (_, task) in inFlight {
             task.cancel()
         }
@@ -255,6 +271,11 @@ actor ConnectionCoordinator {
 
     private func connectOperator(gatewayURL: URL, authToken: String) async throws {
         connectAttemptCount += 1
+        // Snapshot the generation so catch / success paths can detect
+        // "a newer connect started while I was running" and treat
+        // their result as stale. Bumped by `cancelInFlight` (called
+        // at the start of every `switchToProfile`).
+        let generation = connectGeneration
         let deviceIdentity = DeviceIdentityStore.loadOrCreate()
         let options = GatewayConnectOptions(
             role: "operator",
@@ -299,6 +320,15 @@ actor ConnectionCoordinator {
             // leave `state.phase = .connected` even though the user
             // already moved on.
             try Task.checkCancellation()
+            // Even if our own Task wasn't cancelled, a newer connect
+            // may have started (generation bumped by another
+            // `cancelInFlight`). In that case our success is stale
+            // — the new profile owns the connection now. Don't
+            // commit operatorConnected / setConnected.
+            if generation != connectGeneration {
+                AppLogger.log("Operator connect succeeded but generation moved on; ignoring", category: .network)
+                throw CancellationError()
+            }
             operatorConnected = true
             let deviceName = deviceIdentity.deviceId.prefix(16).description
             connectedDeviceName = deviceName
@@ -312,17 +342,11 @@ actor ConnectionCoordinator {
             AppLogger.log("Operator connect cancelled", category: .network)
             throw CancellationError()
         } catch let error as GatewayConnectAuthError {
-            // The SDK may surface a stale auth error from a connection
-            // whose Task was already cancelled (e.g., user clicked
-            // Switch on another profile while this one was still
-            // connecting). Without this guard, the catch would write
-            // `setDisconnected` and clobber the *new* profile's
-            // `.connecting` state, causing a brief "Failed" flash
-            // before the new profile's connect succeeds. Match the
-            // `catch is CancellationError` semantics above: leave
-            // state alone, treat as silent cancellation.
-            if Task.isCancelled {
-                AppLogger.log("Operator connect cancelled (auth error after cancel)", category: .network)
+            // If a newer connect has started, our error is stale —
+            // the new profile owns the connection now. Don't write
+            // `setDisconnected` over its `setConnecting`.
+            if generation != connectGeneration {
+                AppLogger.log("Operator connect auth error but generation moved on; ignoring", category: .network)
                 throw CancellationError()
             }
             let requestIdStr = error.requestId.map { " (requestId: \($0))" } ?? ""
@@ -331,13 +355,11 @@ actor ConnectionCoordinator {
             await MainActor.run { state.setDisconnected(reason: error.message) }
             throw displayError
         } catch {
-            // Same reasoning as the auth error catch above: a cancelled
-            // Task can still produce a non-CancellationError from the
-            // SDK (e.g., URLError.cancelled). Don't write that error
-            // into state — it belongs to an attempt the user has
-            // already abandoned.
-            if Task.isCancelled {
-                AppLogger.log("Operator connect cancelled (error after cancel)", category: .network)
+            // Same generation guard: a newer connect started while we
+            // were in flight; our error belongs to an attempt the
+            // user has already abandoned. Don't clobber state.
+            if generation != connectGeneration {
+                AppLogger.log("Operator connect error but generation moved on; ignoring", category: .network)
                 throw CancellationError()
             }
             AppLogger.log("Connection error: \(error.localizedDescription)", category: .network, level: .error)
@@ -395,6 +417,8 @@ actor ConnectionCoordinator {
         enabledCaps: Set<String>
     ) async {
         connectAttemptCount += 1
+        // Snapshot the generation — see `connectOperator` for rationale.
+        let generation = connectGeneration
         let deviceIdentity = DeviceIdentityStore.loadOrCreate()
         let options = makeNodeOptions(
             deviceIdentity: deviceIdentity,
@@ -432,11 +456,26 @@ actor ConnectionCoordinator {
             // (matching the existing silent-failure behavior for node
             // errors) so callers don't need to handle a new error type.
             try Task.checkCancellation()
+            // Generation guard: even if our own Task wasn't cancelled,
+            // a newer connect may have started. Don't commit
+            // nodeConnected — the new profile owns the session now.
+            if generation != connectGeneration {
+                AppLogger.log("Node connect succeeded but generation moved on; ignoring", category: .network)
+                return
+            }
             nodeConnected = true
             AppLogger.log("Node connection established", category: .network)
         } catch is CancellationError {
             AppLogger.log("Node connect cancelled", category: .network)
         } catch {
+            // Generation guard for the error path. The node catch
+            // already doesn't write state, but the log is misleading
+            // ("error") when the cause is just a newer connect
+            // superseding us. Skip the log in that case.
+            if generation != connectGeneration {
+                AppLogger.log("Node connect error but generation moved on; ignoring", category: .network)
+                return
+            }
             AppLogger.log("Node connection error: \(error.localizedDescription)", category: .network, level: .error)
         }
     }
