@@ -165,19 +165,22 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
         }
     }
 
-    /// `cancelInFlight()` propagates a `CancellationError` to the
-    /// awaiting caller when the in-flight connect task is cancelled.
-    /// This is the contract `ProfileManager.switchToProfile` relies on
-    /// to abort a connect attempt without surfacing it as a
-    /// connection failure.
-    func testCancelInFlightDuringConnectThrowsCancellationError() async throws {
+    /// `cancelInFlight()` clears the in-flight map. The "awaiter
+    /// observes CancellationError" half of the contract is covered by
+    /// code review of `catch is CancellationError` in `connectOperator`
+    /// / `connectNodeRole` — racing the cancel against a fast
+    /// ECONNREFUSED on `127.0.0.1:1` is not reliable enough to assert
+    /// on in CI. This test asserts the invariant that matters: after
+    /// cancel, the next `ensureConnected` starts a fresh attempt
+    /// (i.e., the in-flight map was actually cleared).
+    func testCancelInFlightClearsInFlightMapForNextCaller() async throws {
         let coordinator = ConnectionCoordinator.shared
         let badProfile = GatewayProfile(
             id: UUID(),
             name: "test",
             colorTag: "#000000",
             host: "127.0.0.1",
-            port: 1, // unused port
+            port: 1,
             token: "test-token",
             tlsEnabled: false,
             role: .operatorOnly,
@@ -187,40 +190,28 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
             updatedAt: Date()
         )
 
-        // Make sure we start disconnected.
         await coordinator.disconnect()
 
-        // Start a connect, then immediately cancel it. The awaiter
-        // should observe a `CancellationError` (or a connect failure if
-        // the cancel didn't race — port 1 fails in ~5ms locally).
+        // Kick off a connect (will fail on port 1) and cancel mid-flight.
         let task = Task {
-            do {
-                try await coordinator.ensureConnected(profile: badProfile)
-                return Result<Void, Error>.success(())
-            } catch {
-                return Result<Void, Error>.failure(error)
-            }
+            try? await coordinator.ensureConnected(profile: badProfile)
         }
-        try? await Task.sleep(nanoseconds: 1_000_000) // 1ms — let the task land in `inFlight`
+        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms — long enough for the in-flight task to be registered
         await coordinator.cancelInFlight()
-        let result = await task.value
+        _ = await task.value
 
-        switch result {
-        case .success:
-            // Acceptable on very slow systems where port 1's connect
-            // failure raced the cancel; but on fast hardware the
-            // cancel should win. Treat as informational.
-            break
-        case .failure(let error):
-            if error is CancellationError {
-                // Expected
-            } else {
-                // Acceptable: the SDK's connect may have failed
-                // before our cancel landed. The key invariant —
-                // the in-flight map is empty after cancel — is
-                // covered by the previous test.
-            }
+        // Counter increments only when a real connect attempt begins.
+        // After cancel + the original task completing, the next
+        // `ensureConnected` should start a fresh attempt, not coalesce
+        // with a stale one.
+        let beforeFresh = await coordinator.currentConnectAttemptCount
+        let freshTask = Task {
+            try? await coordinator.ensureConnected(profile: badProfile)
         }
+        try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
+        _ = await freshTask.value
+        let afterFresh = await coordinator.currentConnectAttemptCount
+        XCTAssertGreaterThan(afterFresh, beforeFresh, "After cancel, next ensureConnected must start a fresh attempt")
 
         // Cleanup
         await coordinator.disconnect()
