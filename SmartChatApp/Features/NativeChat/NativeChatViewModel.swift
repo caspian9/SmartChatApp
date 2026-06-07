@@ -156,8 +156,11 @@ final class NativeChatViewModel {
                         // SessionManager.getCurrentSessionKey() check
                         // raced against loadSessions' `makeTransport("")`
                         // which clobbered `currentSessionKey` for the
-                        // duration of the refresh.
-                        let currentKey = await MainActor.run { self.selectedSession?.key }
+                        // duration of the refresh. The enclosing Task
+                        // inherits this type's @MainActor isolation, so a
+                        // direct read of `self.selectedSession?.key` is
+                        // safe here — no MainActor.run round-trip needed.
+                        let currentKey = self.selectedSession?.key
                         if currentKey == sessionKey {
                             await self.handleTransportEvent(evt, sessionKey: sessionKey)
                         }
