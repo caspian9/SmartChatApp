@@ -18,10 +18,9 @@ struct EditProfileSheet: View {
     @State private var editTlsEnabled: Bool = true
     @State private var editRole: GatewayConnectionRole = .operatorAndNode
     @State private var editEnabledCaps: Set<String> = []
-    @State private var isTesting = false
-    @State private var isConnected = false
-    @State private var testResult: String?
-    @State private var testStatus: TestStatus = .idle
+    @State private var isFailedFlashActive = false
+    @State private var flashTask: Task<Void, Never>?
+    @Bindable private var connectionState = ConnectionState.shared
 
     /// Caps exposed in the picker. `device` is intentionally omitted — it's
     /// always advertised by SessionManager regardless of profile state.
@@ -52,16 +51,37 @@ struct EditProfileSheet: View {
         }
     }
 
-    enum TestStatus {
-        case idle, testing, success, failure, invalid
-    }
-
     private var isConnectEnabled: Bool {
-        !editHost.isEmpty && isValidHost && !isTesting && !isConnected
+        !editHost.isEmpty && isValidHost && !isProfileConnecting
     }
 
     private var isDisconnectEnabled: Bool {
-        isConnected && !isTesting
+        isProfileConnected
+    }
+
+    private var isProfileConnecting: Bool {
+        if case .connecting = connectionState.phase { return true }
+        return false
+    }
+
+    private var isProfileConnected: Bool {
+        if case .connected = connectionState.phase { return true }
+        return false
+    }
+
+    private var isProfileFailed: Bool {
+        if case .disconnected = connectionState.phase, connectionState.lastError != nil {
+            return true
+        }
+        return false
+    }
+
+    /// True when the sheet is editing the profile that's currently
+    /// `isActive` in `ProfileManager`. New profiles (`profile == nil`)
+    /// are never "active" — they take the test path.
+    private var isEditingActiveProfile: Bool {
+        guard let profile = profile else { return false }
+        return profile.id == ProfileManager.shared.activeProfile?.id
     }
 
     private var isValidHost: Bool {
@@ -121,20 +141,14 @@ struct EditProfileSheet: View {
     }
 
     private func testConnection() {
-        if editHost.isEmpty {
-            testStatus = .invalid
-            testResult = "Host is required"
+        guard !editHost.isEmpty else {
+            AppLogger.log("Test connection aborted: host is empty", category: .network)
             return
         }
-        if !isValidHost {
-            testStatus = .invalid
-            testResult = "Invalid host format"
+        guard isValidHost else {
+            AppLogger.log("Test connection aborted: invalid host format", category: .network)
             return
         }
-
-        isTesting = true
-        testResult = nil
-        testStatus = .testing
 
         let port = Int(editPort) ?? 443
         let cleanHost = Self.cleanHost(editHost)
@@ -143,19 +157,39 @@ struct EditProfileSheet: View {
         Task {
             do {
                 try await SessionManager.shared.connectWithRole(gatewayURL: url, authToken: editToken, role: editRole, enabledCaps: editEnabledCaps)
-                await MainActor.run {
-                    isTesting = false
-                    testStatus = .success
-                    testResult = "Connected"
-                    isConnected = true
-                }
             } catch {
-                await MainActor.run {
-                    isTesting = false
-                    testStatus = .failure
-                    testResult = "Connection failed: \(error.localizedDescription)"
-                    isConnected = false
-                }
+                AppLogger.log("Test connection failed: \(error.localizedDescription)", category: .network, level: .error)
+            }
+        }
+    }
+
+    /// Test path used when the sheet is editing a non-active profile (or
+    /// a brand-new profile). Probes connectivity via
+    /// `SessionManager.testConnect`, which sets `state.testInProgress` /
+    /// `state.testLastResult` instead of mutating the main `state.phase`.
+    private func runTestConnection() {
+        guard !editHost.isEmpty else {
+            AppLogger.log("Test connection aborted: host is empty", category: .network)
+            return
+        }
+        guard isValidHost else {
+            AppLogger.log("Test connection aborted: invalid host format", category: .network)
+            return
+        }
+        let port = Int(editPort) ?? 443
+        let cleanHost = Self.cleanHost(editHost)
+        let url = SessionManager.shared.gatewayURL(host: cleanHost, port: port, tlsEnabled: editTlsEnabled)
+        Task {
+            do {
+                try await SessionManager.shared.testConnect(
+                    gatewayURL: url,
+                    authToken: editToken,
+                    role: editRole,
+                    enabledCaps: editEnabledCaps
+                )
+            } catch {
+                // testConnect already updates state.testLastResult; just log here.
+                AppLogger.log("Test connection failed: \(error.localizedDescription)", category: .network, level: .error)
             }
         }
     }
@@ -163,11 +197,76 @@ struct EditProfileSheet: View {
     private func disconnectConnection() {
         Task {
             await SessionManager.shared.disconnect()
-            await MainActor.run {
-                isConnected = false
-                testResult = "Disconnected"
-                testStatus = .idle
+        }
+    }
+
+    /// Connect / Disconnect button for the sheet when it's editing the
+    /// currently-active profile. Uses the main `state.phase` and flashes
+    /// "Failed" for 1s when `state.lastError` flips to a non-nil value.
+    @ViewBuilder
+    private var activeProfileButtonSection: some View {
+        HStack {
+            Button(action: isProfileConnected ? disconnectConnection : testConnection) {
+                HStack {
+                    Spacer()
+                    if isFailedFlashActive {
+                        Text("Failed").foregroundColor(.red)
+                    } else if isProfileConnecting {
+                        ProgressView().progressViewStyle(CircularProgressViewStyle())
+                        Text("Connecting...")
+                    } else if isProfileConnected {
+                        Image(systemName: "link.badge.plus")
+                        Text("Disconnect").foregroundColor(.red)
+                    } else {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                        Text("Connect")
+                    }
+                    Spacer()
+                }
             }
+            .disabled(isProfileConnecting)
+        }
+        if let error = connectionState.lastError, isProfileFailed {
+            Text(error)
+                .font(.caption)
+                .foregroundColor(.red)
+                .lineLimit(3)
+        }
+    }
+
+    /// "Test Connection" button for the sheet when it's editing a
+    /// non-active profile (or a brand-new one). Uses `testConnect` so the
+    /// main `state.phase` is left alone. Reads `testInProgress` /
+    /// `testLastResult` to surface the outcome.
+    @ViewBuilder
+    private var testConnectionButtonSection: some View {
+        HStack {
+            Button(action: runTestConnection) {
+                HStack {
+                    Spacer()
+                    if connectionState.testInProgress {
+                        ProgressView().progressViewStyle(CircularProgressViewStyle())
+                        Text("Testing...")
+                    } else if case .success = connectionState.testLastResult {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("Test Passed").foregroundColor(.green)
+                    } else if case .failure = connectionState.testLastResult {
+                        Image(systemName: "xmark.circle.fill")
+                        Text("Test Failed").foregroundColor(.red)
+                    } else {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                        Text("Test Connection")
+                    }
+                    Spacer()
+                }
+            }
+            .disabled(connectionState.testInProgress || !isConnectEnabled)
+        }
+        if case .failure(let reason) = connectionState.testLastResult {
+            Text(reason)
+                .font(.caption)
+                .foregroundColor(.red)
+                .lineLimit(3)
         }
     }
 
@@ -248,35 +347,10 @@ struct EditProfileSheet: View {
                 }
 
                 Section {
-                    HStack {
-                        Button(action: isConnected ? disconnectConnection : testConnection) {
-                            HStack {
-                                Spacer()
-                                if isTesting {
-                                    ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle())
-                                    Text("Connecting...")
-                                } else if isConnected {
-                                    Image(systemName: "link.badge.plus")
-                                    Text("Disconnect")
-                                        .foregroundColor(.red)
-                                } else {
-                                    Image(systemName: "antenna.radiowaves.left.and.right")
-                                    Text("Connect")
-                                }
-                                Spacer()
-                            }
-                        }
-                        .disabled(isTesting)
-                    }
-
-                    if let result = testResult {
-                        HStack(spacing: 4) {
-                            Image(systemName: testStatus == TestStatus.success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            Text(result)
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(testStatus == TestStatus.success ? .green : .red)
+                    if isEditingActiveProfile {
+                        activeProfileButtonSection
+                    } else {
+                        testConnectionButtonSection
                     }
                 }
 
@@ -301,6 +375,18 @@ struct EditProfileSheet: View {
             }
             .navigationTitle(isNewProfile ? "New Profile" : "Edit Profile")
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: connectionState.lastError) { _, newError in
+                guard isEditingActiveProfile else { return }
+                flashTask?.cancel()
+                guard newError != nil else { return }
+                flashTask = Task {
+                    isFailedFlashActive = true
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if !Task.isCancelled {
+                        isFailedFlashActive = false
+                    }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -316,11 +402,6 @@ struct EditProfileSheet: View {
                         dismiss()
                     }
                     .disabled(editName.isEmpty)
-                }
-            }
-            .task {
-                if let profile = profile, profile.isActive {
-                    isConnected = await SessionManager.shared.connectionStatus
                 }
             }
         }
