@@ -100,17 +100,49 @@ struct HomeView: View {
 
                 Text(bannerSubtitle)
                     .font(.caption)
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(bannerIsFailed ? .red : theme.textSecondary)
+                    .lineLimit(2)
+
+                if bannerIsFailed {
+                    Text("Tap to retry")
+                        .font(.caption2)
+                        .foregroundColor(theme.primary)
+                }
             }
 
             Spacer()
+
+            if bannerIsFailed {
+                Image(systemName: "arrow.clockwise")
+                    .foregroundColor(theme.primary)
+            }
         }
         .padding(16)
         .background(theme.cardBackground)
         .cornerRadius(12)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if bannerIsFailed, let active = ProfileManager.shared.activeProfile {
+                Task {
+                    do {
+                        try await SessionManager.shared.connectWithProfile(active)
+                    } catch {
+                        AppLogger.log("Reconnect failed: \(error.localizedDescription)", category: .network, level: .error)
+                    }
+                }
+            }
+        }
+    }
+
+    private var bannerIsFailed: Bool {
+        if case .disconnected = connectionState.phase, connectionState.lastError != nil {
+            return true
+        }
+        return false
     }
 
     private var bannerColor: Color {
+        if bannerIsFailed { return .red }
         switch connectionState.phase {
         case .connected:
             return .green
@@ -122,6 +154,7 @@ struct HomeView: View {
     }
 
     private var bannerTitle: String {
+        if bannerIsFailed { return "Connection Failed" }
         switch connectionState.phase {
         case .connected:
             return "Connected to OpenClaw"
@@ -135,6 +168,9 @@ struct HomeView: View {
     }
 
     private var bannerSubtitle: String {
+        if bannerIsFailed {
+            return connectionState.lastError ?? ""
+        }
         let device = connectionState.connectedDeviceName ?? ""
         let host = ProfileManager.shared.activeProfile?.host ?? ""
         switch connectionState.phase {
