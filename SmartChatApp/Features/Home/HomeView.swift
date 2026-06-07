@@ -6,12 +6,7 @@ struct HomeView: View {
     @State private var showChatList = false
     @State private var showNativeChat = false
     @State private var showSettings = false
-    @State private var isConnected = false
-    @State private var isConnecting = false
-    @State private var connectedDeviceName = ""
-    @State private var gatewayHost = ""
-    @State private var shouldAutoConnect = false
-    @State private var refreshTimer: Timer?
+    @Bindable private var connectionState = ConnectionState.shared
 
     private var isCompact: Bool {
         horizontalSizeClass == .compact
@@ -88,126 +83,65 @@ struct HomeView: View {
         .navigationDestination(isPresented: $showSettings) {
             SettingsView()
         }
-        .task {
-            if ConfigurationManager.shared.autoConnectOnLaunch {
-                isConnecting = true
-            }
-            await refreshConnectionStatus()
-        }
-        .onAppear {
-            refreshConnectionStatus()
-            startRefreshTimer()
-        }
-        .onDisappear {
-            stopRefreshTimer()
-        }
-    }
-
-    private func startRefreshTimer() {
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            Task { @MainActor in
-                self.refreshConnectionStatus()
-            }
-        }
-    }
-
-    private func stopRefreshTimer() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
-    }
-
-    private func refreshConnectionStatus() {
-        Task {
-            let wasConnected = await SessionManager.shared.connectionStatus
-            let deviceName = await SessionManager.shared.deviceName ?? ""
-
-            await MainActor.run {
-                if wasConnected {
-                    isConnected = true
-                    isConnecting = false
-                    connectedDeviceName = deviceName
-                } else if !isConnecting {
-                    // Only update if not in connecting state
-                    isConnected = false
-                    connectedDeviceName = ""
-                }
-                // Use active profile host
-                if let activeProfile = ProfileManager.shared.activeProfile {
-                    gatewayHost = activeProfile.host
-                } else {
-                    gatewayHost = ""
-                }
-            }
-        }
+        .task { }
     }
 
     @ViewBuilder
     private var connectionBanner: some View {
-        if isConnected {
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 10, height: 10)
+        HStack(spacing: 12) {
+            Circle()
+                .fill(bannerColor)
+                .frame(width: 10, height: 10)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Connected to OpenClaw")
-                        .font(.subheadline)
-                        .foregroundColor(theme.textPrimary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(bannerTitle)
+                    .font(.subheadline)
+                    .foregroundColor(theme.textPrimary)
 
-                    Text("\(connectedDeviceName) • \(gatewayHost)")
-                        .font(.caption)
-                        .foregroundColor(theme.textSecondary)
-                }
-
-                Spacer()
+                Text(bannerSubtitle)
+                    .font(.caption)
+                    .foregroundColor(theme.textSecondary)
             }
-            .padding(16)
-            .background(theme.cardBackground)
-            .cornerRadius(12)
-        } else if isConnecting {
-            // Still connecting
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.yellow)
-                    .frame(width: 10, height: 10)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Connecting...")
-                        .font(.subheadline)
-                        .foregroundColor(theme.textPrimary)
+            Spacer()
+        }
+        .padding(16)
+        .background(theme.cardBackground)
+        .cornerRadius(12)
+    }
 
-                    Text(gatewayHost)
-                        .font(.caption)
-                        .foregroundColor(theme.textSecondary)
-                }
+    private var bannerColor: Color {
+        switch connectionState.phase {
+        case .connected:
+            return .green
+        case .connecting, .reconnecting:
+            return .yellow
+        case .disconnected:
+            return .gray
+        }
+    }
 
-                Spacer()
-            }
-            .padding(16)
-            .background(theme.cardBackground)
-            .cornerRadius(12)
-        } else if hasProfile {
-            // Configured but auto-connect disabled or connection failed
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.gray)
-                    .frame(width: 10, height: 10)
+    private var bannerTitle: String {
+        switch connectionState.phase {
+        case .connected:
+            return "Connected to OpenClaw"
+        case .connecting:
+            return "Connecting..."
+        case .reconnecting:
+            return "Reconnecting..."
+        case .disconnected:
+            return hasProfile ? "Not connected" : ""
+        }
+    }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Not connected")
-                        .font(.subheadline)
-                        .foregroundColor(theme.textPrimary)
-
-                    Text(gatewayHost)
-                        .font(.caption)
-                        .foregroundColor(theme.textSecondary)
-                }
-
-                Spacer()
-            }
-            .padding(16)
-            .background(theme.cardBackground)
-            .cornerRadius(12)
+    private var bannerSubtitle: String {
+        let device = connectionState.connectedDeviceName ?? ""
+        let host = ProfileManager.shared.activeProfile?.host ?? ""
+        switch connectionState.phase {
+        case .connected:
+            return "\(device) • \(host)"
+        default:
+            return host
         }
     }
 }
