@@ -3,11 +3,9 @@ import SwiftUI
 struct ProfileListView: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var profileManager = ProfileManager.shared
+    @Bindable private var connectionState = ConnectionState.shared
     @State private var showDeleteAlert = false
     @State private var profileToDelete: GatewayProfile?
-    @State private var isConnected = false
-    @State private var connectingProfileId: UUID?
-    @State private var failedProfileId: UUID?
 
     @Binding var showNewProfileSheet: Bool
     var refreshTrigger: Bool
@@ -28,9 +26,6 @@ struct ProfileListView: View {
                 profileList
             }
         }
-        .task(id: refreshTrigger) {
-            await loadConnectionStatus()
-        }
         .alert("Delete Profile", isPresented: $showDeleteAlert) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
@@ -50,8 +45,18 @@ struct ProfileListView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    func loadConnectionStatus() async {
-        isConnected = await SessionManager.shared.connectionStatus
+    private var isAnyConnectInFlight: Bool {
+        if case .connecting = connectionState.phase { return true }
+        return false
+    }
+
+    private func isProfileConnecting(_ profile: GatewayProfile) -> Bool {
+        switch (connectionState.phase, profile.role) {
+        case (.connecting(let role), .operatorOnly): return role == .`operator`
+        case (.connecting(let role), .nodeOnly): return role == .node
+        case (.connecting(let role), .operatorAndNode): return role == .`operator` || role == .node
+        default: return false
+        }
     }
 
     private var profileList: some View {
@@ -83,55 +88,42 @@ struct ProfileListView: View {
                 Button {
                     Task {
                         if profile.isActive {
-                            if isConnected {
+                            if case .connected = connectionState.phase {
                                 await SessionManager.shared.disconnect()
-                                isConnected = false
                             } else {
-                                connectingProfileId = profile.id
                                 do {
                                     try await SessionManager.shared.connectWithProfile(profile)
-                                    isConnected = await SessionManager.shared.connectionStatus
                                 } catch {
-                                    failedProfileId = profile.id
-                                    isConnected = false
-                                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                                    failedProfileId = nil
+                                    AppLogger.log("Connect failed: \(error)", category: .network)
                                 }
-                                connectingProfileId = nil
                             }
                         } else {
-                            connectingProfileId = profile.id
                             ProfileManager.shared.activateProfile(profile)
                             do {
                                 try await SessionManager.shared.connectWithProfile(profile)
-                                isConnected = await SessionManager.shared.connectionStatus
                             } catch {
-                                failedProfileId = profile.id
-                                isConnected = false
-                                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                                failedProfileId = nil
+                                AppLogger.log("Connect failed: \(error)", category: .network)
                             }
-                            connectingProfileId = nil
                         }
                     }
                 } label: {
                     ZStack {
-                        if connectingProfileId == profile.id && failedProfileId != profile.id {
+                        if isProfileConnecting(profile) {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle())
                         }
-                        if failedProfileId == profile.id {
-                            Text("Failed")
-                                .foregroundColor(.red)
-                        }
                         let isThisActive = profileManager.activeProfile?.id == profile.id
+                        let isConnected = { () -> Bool in
+                            if case .connected = connectionState.phase { return true }
+                            return false
+                        }()
                         Text(isThisActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
-                            .opacity(connectingProfileId == profile.id || failedProfileId == profile.id ? 0 : 1)
+                            .opacity(isProfileConnecting(profile) ? 0 : 1)
                     }
                 }
                 .font(.caption)
                 .foregroundColor(theme.primary)
-                .disabled(connectingProfileId != nil)
+                .disabled(isAnyConnectInFlight)
                 .buttonStyle(.bordered)
                 .frame(height: 28)
 
