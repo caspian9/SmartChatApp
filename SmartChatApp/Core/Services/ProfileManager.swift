@@ -103,10 +103,15 @@ final class ProfileManager: ObservableObject {
         // with the new connect and could leave the new profile in a
         // half-connected state when the old task finally lands.
         await SessionManager.shared.cancelInFlight()
-        let wasConnected = await SessionManager.shared.connectionStatus
-        if wasConnected {
-            await SessionManager.shared.disconnect()
-        }
+        // Always fully disconnect — not just if wasConnected. If the
+        // previous profile was in `.connecting`, the SDK's
+        // `operatorSession` is still mid-websocket internally;
+        // cancelInFlight only stops us from awaiting it, it doesn't
+        // tear down the SDK session. Reusing the same session for the
+        // new profile's connect races the SDK's cleanup, producing a
+        // transient "session busy" error that surfaces as a brief
+        // "Failed" flash before the new connect succeeds.
+        await SessionManager.shared.disconnect()
         activateProfile(profile)
         do {
             try await SessionManager.shared.connectWithProfile(profile)
