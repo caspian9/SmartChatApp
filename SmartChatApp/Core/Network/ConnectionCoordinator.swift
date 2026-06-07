@@ -269,6 +269,9 @@ actor ConnectionCoordinator {
         )
         let sessionBox = WebSocketSessionBox(session: URLSession.shared)
         let state = self.state
+        await MainActor.run {
+            state.setConnecting(role: .operator)
+        }
         do {
             try await operatorSession.connect(
                 url: gatewayURL,
@@ -378,6 +381,9 @@ actor ConnectionCoordinator {
         let sessionBox = WebSocketSessionBox(session: URLSession.shared)
         let state = self.state
         let router = commandRouter
+        await MainActor.run {
+            state.setConnecting(role: .node)
+        }
         do {
             try await nodeSession.connect(
                 url: gatewayURL,
