@@ -6,8 +6,6 @@ struct ProfileListView: View {
     @Bindable private var connectionState = ConnectionState.shared
     @State private var showDeleteAlert = false
     @State private var profileToDelete: GatewayProfile?
-    @State private var isFailedFlashActive = false
-    @State private var flashTask: Task<Void, Never>?
 
     @Binding var showNewProfileSheet: Bool
     var refreshTrigger: Bool
@@ -47,6 +45,29 @@ struct ProfileListView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var profileList: some View {
+        ForEach(profileManager.profiles) { profile in
+            ProfileRow(
+                profile: profile,
+                isActive: profileManager.activeProfile?.id == profile.id,
+                isConnecting: isProfileConnecting(profile),
+                isConnected: isProfileConnected,
+                isButtonDisabled: isButtonDisabled(for: profile),
+                onButtonTap: { await handleButtonTap(for: profile) },
+                onEdit: { onEditProfile(profile) },
+                onRequestDelete: {
+                    profileToDelete = profile
+                    showDeleteAlert = true
+                }
+            )
+        }
+    }
+
+    private var isProfileConnected: Bool {
+        if case .connected = connectionState.phase { return true }
+        return false
+    }
+
     private func isProfileConnecting(_ profile: GatewayProfile) -> Bool {
         // Spinner should only appear on the active profile's row — non-active
         // rows must remain clickable so the user can click "Switch" to
@@ -65,107 +86,126 @@ struct ProfileListView: View {
         return isActive && isProfileConnecting(profile)
     }
 
-    private var profileList: some View {
-        ForEach(profileManager.profiles) { profile in
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(Color(hex: profile.colorTag))
-                    .frame(width: 12, height: 12)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(profile.name)
-                        .font(.body)
-                        .fontWeight(.medium)
-                        .foregroundColor(theme.textPrimary)
-                        .lineLimit(1)
-                    Text(profile.host)
-                        .font(.caption)
-                        .foregroundColor(theme.textSecondary)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                if profile.isActive {
-                    Image(systemName: "checkmark")
-                        .foregroundColor(theme.primary)
-                }
-
-                Button {
-                    Task {
-                        if profile.isActive {
-                            if case .connected = connectionState.phase {
-                                await SessionManager.shared.disconnect()
-                            } else {
-                                do {
-                                    try await SessionManager.shared.connectWithProfile(profile)
-                                } catch {
-                                    AppLogger.log("Connect failed: \(error)", category: .network)
-                                }
-                            }
-                        } else {
-                            // Disconnect current, then activate + connect new.
-                            // `switchToProfile` is the canonical flow: it disconnects
-                            // any live connection first, then activates + connects,
-                            // so the button never briefly shows "Disconnect" for a
-                            // profile that isn't actually connected yet.
-                            await ProfileManager.shared.switchToProfile(profile)
-                        }
-                    }
-                } label: {
-                    ZStack {
-                        if isProfileConnecting(profile) {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                        }
-                        if isFailedFlashActive {
-                            Text("Failed")
-                                .foregroundColor(.red)
-                        }
-                        let isThisActive = profileManager.activeProfile?.id == profile.id
-                        let isConnected = { () -> Bool in
-                            if case .connected = connectionState.phase { return true }
-                            return false
-                        }()
-                        Text(isThisActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
-                            .opacity((isProfileConnecting(profile) || isFailedFlashActive) ? 0 : 1)
-                    }
-                }
-                .font(.caption)
-                .foregroundColor(theme.primary)
-                .disabled(isButtonDisabled(for: profile))
-                .buttonStyle(.bordered)
-                .frame(height: 28)
-
-                Button {
-                    onEditProfile(profile)
-                } label: {
-                    Image(systemName: "pencil")
-                        .font(.caption)
-                        .foregroundColor(theme.primary)
-                }
-                .buttonStyle(.bordered)
-            }
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-            .onChange(of: connectionState.lastError) { _, newError in
-                flashTask?.cancel()
-                guard newError != nil else { return }
-                flashTask = Task {
-                    isFailedFlashActive = true
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    if !Task.isCancelled {
-                        isFailedFlashActive = false
-                    }
+    private func handleButtonTap(for profile: GatewayProfile) async {
+        if profile.isActive {
+            if case .connected = connectionState.phase {
+                await SessionManager.shared.disconnect()
+            } else {
+                do {
+                    try await SessionManager.shared.connectWithProfile(profile)
+                } catch {
+                    AppLogger.log("Connect failed: \(error)", category: .network)
                 }
             }
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                Button(role: .destructive) {
-                    profileToDelete = profile
-                    showDeleteAlert = true
-                } label: {
-                    Label("Delete", systemImage: "trash")
+        } else {
+            // Disconnect current, then activate + connect new.
+            // `switchToProfile` is the canonical flow: it disconnects
+            // any live connection first, then activates + connects,
+            // so the button never briefly shows "Disconnect" for a
+            // profile that isn't actually connected yet.
+            await ProfileManager.shared.switchToProfile(profile)
+        }
+    }
+}
+
+/// Single profile row. Owns its own `isFailedFlashActive` so a failed
+/// connect flashes only this row (not all rows in the list). `lastError`
+/// is only set for the active profile's connect attempt, so the row
+/// gates the flash on `isActive` defensively.
+private struct ProfileRow: View {
+    @Environment(\.theme) private var theme
+    @Bindable private var connectionState = ConnectionState.shared
+
+    let profile: GatewayProfile
+    let isActive: Bool
+    let isConnecting: Bool
+    let isConnected: Bool
+    let isButtonDisabled: Bool
+    let onButtonTap: () async -> Void
+    let onEdit: () -> Void
+    let onRequestDelete: () -> Void
+
+    @State private var isFailedFlashActive = false
+    @State private var flashTask: Task<Void, Never>?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Circle()
+                .fill(Color(hex: profile.colorTag))
+                .frame(width: 12, height: 12)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(profile.name)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(theme.textPrimary)
+                    .lineLimit(1)
+                Text(profile.host)
+                    .font(.caption)
+                    .foregroundColor(theme.textSecondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if profile.isActive {
+                Image(systemName: "checkmark")
+                    .foregroundColor(theme.primary)
+            }
+
+            Button {
+                Task { await onButtonTap() }
+            } label: {
+                ZStack {
+                    if isConnecting {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                    }
+                    if isFailedFlashActive {
+                        Text("Failed")
+                            .foregroundColor(.red)
+                    }
+                    Text(isActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
+                        .opacity((isConnecting || isFailedFlashActive) ? 0 : 1)
                 }
+            }
+            .font(.caption)
+            .foregroundColor(theme.primary)
+            .disabled(isButtonDisabled)
+            .buttonStyle(.bordered)
+            .frame(height: 28)
+
+            Button {
+                onEdit()
+            } label: {
+                Image(systemName: "pencil")
+                    .font(.caption)
+                    .foregroundColor(theme.primary)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .onChange(of: connectionState.lastError) { _, newError in
+            // lastError is set for the active profile's connect attempt;
+            // gate the flash on isActive so non-active rows can never
+            // flash (e.g., if a stale value lingers across a switch).
+            guard isActive else { return }
+            flashTask?.cancel()
+            guard newError != nil else { return }
+            flashTask = Task {
+                isFailedFlashActive = true
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if !Task.isCancelled {
+                    isFailedFlashActive = false
+                }
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                onRequestDelete()
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
     }
