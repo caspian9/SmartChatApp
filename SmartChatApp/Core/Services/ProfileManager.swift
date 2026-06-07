@@ -98,6 +98,11 @@ final class ProfileManager: ObservableObject {
     }
 
     func switchToProfile(_ profile: GatewayProfile) async {
+        // Cancel any in-flight connect attempt before doing anything else.
+        // Without this, a connect that's still in progress would race
+        // with the new connect and could leave the new profile in a
+        // half-connected state when the old task finally lands.
+        await SessionManager.shared.cancelInFlight()
         let wasConnected = await SessionManager.shared.connectionStatus
         if wasConnected {
             await SessionManager.shared.disconnect()
