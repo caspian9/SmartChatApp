@@ -64,8 +64,15 @@ final class ConnectionStateTests: XCTestCase {
         let state = ConnectionState()
         state.setTestInProgress()
         XCTAssertTrue(state.testInProgress)
+        XCTAssertNil(state.testLastResult)
+        state.setTestResult(.failure(reason: "stale"))
+        XCTAssertFalse(state.testInProgress)
+        XCTAssertEqual(state.testLastResult, .failure(reason: "stale"))
+        // A real connection succeeds — both test fields should clear so a
+        // stale "test failed" indicator doesn't flash in the UI.
         state.setConnected(deviceName: "device")
         XCTAssertFalse(state.testInProgress)
+        XCTAssertNil(state.testLastResult)
     }
 
     func testTestResult_roundTrip() {
