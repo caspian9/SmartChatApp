@@ -125,7 +125,19 @@ actor ConnectionCoordinator {
         try await task.value
     }
 
+    /// Cancel all in-flight connect attempts (operator + node).
+    /// Does NOT call `disconnect()` — the existing transport stays alive.
+    /// Used by `ProfileManager.switchToProfile` to abort a connect attempt
+    /// when the user changes their mind and switches to a different profile.
+    func cancelInFlight() {
+        for (_, task) in inFlight {
+            task.cancel()
+        }
+        inFlight = [:]
+    }
+
     func disconnect() async {
+        cancelInFlight()
         await operatorSession.disconnect()
         await nodeSession.disconnect()
         operatorConnected = false
@@ -134,6 +146,46 @@ actor ConnectionCoordinator {
         connectAttemptCount = 0
         await MainActor.run {
             self.state.setDisconnected(reason: nil)
+        }
+    }
+
+    /// Test-only connect: same flow as `connectWithRole`, but does NOT
+    /// touch `state.phase` / `operatorConnected` / `nodeConnected`.
+    /// The caller (EditProfileSheet "Test Connection" button) reads
+    /// `state.testInProgress` / `state.testLastResult` instead.
+    func testConnect(
+        gatewayURL: URL,
+        authToken: String,
+        role: GatewayConnectionRole,
+        enabledCaps: Set<String>
+    ) async throws {
+        await MainActor.run {
+            self.state.setTestInProgress()
+        }
+        do {
+            switch role {
+            case .operatorOnly:
+                try await connectOperatorForTest(gatewayURL: gatewayURL, authToken: authToken)
+            case .nodeOnly:
+                await connectNodeRoleForTest(gatewayURL: gatewayURL, authToken: authToken, enabledCaps: enabledCaps)
+            case .operatorAndNode:
+                await connectNodeRoleForTest(gatewayURL: gatewayURL, authToken: authToken, enabledCaps: enabledCaps)
+                try await connectOperatorForTest(gatewayURL: gatewayURL, authToken: authToken)
+            }
+            await MainActor.run {
+                self.state.setTestResult(.success)
+            }
+        } catch is CancellationError {
+            await MainActor.run {
+                self.state.setTestResult(.failure(reason: "cancelled"))
+            }
+            throw CancellationError()
+        } catch {
+            let reason = error.localizedDescription
+            await MainActor.run {
+                self.state.setTestResult(.failure(reason: reason))
+            }
+            throw error
         }
     }
 
@@ -217,12 +269,24 @@ actor ConnectionCoordinator {
                     BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
                 }
             )
+            // Throw if the in-flight task was cancelled (via
+            // `cancelInFlight()`) before we commit success. Without this,
+            // a profile switch mid-connect would race the success path and
+            // leave `state.phase = .connected` even though the user
+            // already moved on.
+            try Task.checkCancellation()
             operatorConnected = true
             let deviceName = deviceIdentity.deviceId.prefix(16).description
             connectedDeviceName = deviceName
             await MainActor.run {
                 state.setConnected(deviceName: deviceName)
             }
+        } catch is CancellationError {
+            // Don't surface cancellation as a "connection failure" — the
+            // user just changed their mind. Leave state alone
+            // (`setDisconnected` would clobber any current state).
+            AppLogger.log("Operator connect cancelled", category: .network)
+            throw CancellationError()
         } catch let error as GatewayConnectAuthError {
             let requestIdStr = error.requestId.map { " (requestId: \($0))" } ?? ""
             let displayError = SessionManagerError.authError(error.message + requestIdStr, error.detailCodeRaw)
@@ -234,6 +298,49 @@ actor ConnectionCoordinator {
             await MainActor.run { state.setDisconnected(reason: error.localizedDescription) }
             throw error
         }
+    }
+
+    /// Test-only variant of `connectOperator`. Performs the same SDK connect
+    /// call but does NOT touch `state.phase` or `operatorConnected` — the
+    /// caller's `state.testInProgress` / `state.testLastResult` track the
+    /// outcome instead. This lets EditProfileSheet's "Test Connection"
+    /// button probe a profile without disturbing the main connection.
+    private func connectOperatorForTest(gatewayURL: URL, authToken: String) async throws {
+        let deviceIdentity = DeviceIdentityStore.loadOrCreate()
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
+            caps: ["sessions", "chat"],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios",
+            clientMode: "ui",
+            clientDisplayName: deviceIdentity.deviceId.prefix(16).description,
+            includeDeviceIdentity: true
+        )
+        let sessionBox = WebSocketSessionBox(session: URLSession.shared)
+        try await operatorSession.connect(
+            url: gatewayURL,
+            token: authToken,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: sessionBox,
+            onConnected: {
+                AppLogger.log("Operator test connected", category: .network)
+            },
+            onDisconnected: { _ in
+                // No-op in test path — we don't track test state in
+                // onDisconnected; the caller surfaces the result via
+                // `state.testLastResult`.
+            },
+            onInvoke: { request in
+                BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
+            }
+        )
+        // IMPORTANT: do NOT set `operatorConnected = true` or call
+        // `state.setConnected` — the test path is read-only with respect
+        // to the main connection.
     }
 
     private func connectNodeRole(
@@ -271,10 +378,57 @@ actor ConnectionCoordinator {
                     await router.handle(request)
                 }
             )
+            // Same as `connectOperator`: throw if the in-flight task was
+            // cancelled before we commit success. Cancellation is swallowed
+            // (matching the existing silent-failure behavior for node
+            // errors) so callers don't need to handle a new error type.
+            try Task.checkCancellation()
             nodeConnected = true
             AppLogger.log("Node connection established", category: .network)
+        } catch is CancellationError {
+            AppLogger.log("Node connect cancelled", category: .network)
         } catch {
             AppLogger.log("Node connection error: \(error.localizedDescription)", category: .network, level: .error)
+        }
+    }
+
+    /// Test-only variant of `connectNodeRole`. Same shape as
+    /// `connectOperatorForTest` — does NOT touch `state.phase` or
+    /// `nodeConnected`. Returns silently on success/failure; the caller
+    /// (testConnect) updates `state.testLastResult`.
+    private func connectNodeRoleForTest(
+        gatewayURL: URL,
+        authToken: String,
+        enabledCaps: Set<String>
+    ) async {
+        let deviceIdentity = DeviceIdentityStore.loadOrCreate()
+        let options = makeNodeOptions(
+            deviceIdentity: deviceIdentity,
+            enabledCaps: enabledCaps
+        )
+        let sessionBox = WebSocketSessionBox(session: URLSession.shared)
+        let router = commandRouter
+        do {
+            try await nodeSession.connect(
+                url: gatewayURL,
+                token: authToken,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: sessionBox,
+                onConnected: {
+                    AppLogger.log("Node test connected", category: .network)
+                },
+                onDisconnected: { _ in
+                    // No-op in test path.
+                },
+                onInvoke: { request in
+                    await router.handle(request)
+                }
+            )
+            // No `nodeConnected = true` — test path is read-only.
+        } catch {
+            AppLogger.log("Node test connection error: \(error.localizedDescription)", category: .network, level: .error)
         }
     }
 
