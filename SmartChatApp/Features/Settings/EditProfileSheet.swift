@@ -18,10 +18,7 @@ struct EditProfileSheet: View {
     @State private var editTlsEnabled: Bool = true
     @State private var editRole: GatewayConnectionRole = .operatorAndNode
     @State private var editEnabledCaps: Set<String> = []
-    @State private var isTesting = false
-    @State private var isConnected = false
-    @State private var testResult: String?
-    @State private var testStatus: TestStatus = .idle
+    @Bindable private var connectionState = ConnectionState.shared
 
     /// Caps exposed in the picker. `device` is intentionally omitted — it's
     /// always advertised by SessionManager regardless of profile state.
@@ -52,16 +49,22 @@ struct EditProfileSheet: View {
         }
     }
 
-    enum TestStatus {
-        case idle, testing, success, failure, invalid
-    }
-
     private var isConnectEnabled: Bool {
-        !editHost.isEmpty && isValidHost && !isTesting && !isConnected
+        !editHost.isEmpty && isValidHost && !isProfileConnecting
     }
 
     private var isDisconnectEnabled: Bool {
-        isConnected && !isTesting
+        isProfileConnected
+    }
+
+    private var isProfileConnecting: Bool {
+        if case .connecting = connectionState.phase { return true }
+        return false
+    }
+
+    private var isProfileConnected: Bool {
+        if case .connected = connectionState.phase { return true }
+        return false
     }
 
     private var isValidHost: Bool {
@@ -121,20 +124,14 @@ struct EditProfileSheet: View {
     }
 
     private func testConnection() {
-        if editHost.isEmpty {
-            testStatus = .invalid
-            testResult = "Host is required"
+        guard !editHost.isEmpty else {
+            AppLogger.log("Test connection aborted: host is empty", category: .network)
             return
         }
-        if !isValidHost {
-            testStatus = .invalid
-            testResult = "Invalid host format"
+        guard isValidHost else {
+            AppLogger.log("Test connection aborted: invalid host format", category: .network)
             return
         }
-
-        isTesting = true
-        testResult = nil
-        testStatus = .testing
 
         let port = Int(editPort) ?? 443
         let cleanHost = Self.cleanHost(editHost)
@@ -143,19 +140,8 @@ struct EditProfileSheet: View {
         Task {
             do {
                 try await SessionManager.shared.connectWithRole(gatewayURL: url, authToken: editToken, role: editRole, enabledCaps: editEnabledCaps)
-                await MainActor.run {
-                    isTesting = false
-                    testStatus = .success
-                    testResult = "Connected"
-                    isConnected = true
-                }
             } catch {
-                await MainActor.run {
-                    isTesting = false
-                    testStatus = .failure
-                    testResult = "Connection failed: \(error.localizedDescription)"
-                    isConnected = false
-                }
+                AppLogger.log("Test connection failed: \(error.localizedDescription)", category: .network, level: .error)
             }
         }
     }
@@ -163,11 +149,6 @@ struct EditProfileSheet: View {
     private func disconnectConnection() {
         Task {
             await SessionManager.shared.disconnect()
-            await MainActor.run {
-                isConnected = false
-                testResult = "Disconnected"
-                testStatus = .idle
-            }
         }
     }
 
@@ -249,14 +230,14 @@ struct EditProfileSheet: View {
 
                 Section {
                     HStack {
-                        Button(action: isConnected ? disconnectConnection : testConnection) {
+                        Button(action: isProfileConnected ? disconnectConnection : testConnection) {
                             HStack {
                                 Spacer()
-                                if isTesting {
+                                if isProfileConnecting {
                                     ProgressView()
                                         .progressViewStyle(CircularProgressViewStyle())
                                     Text("Connecting...")
-                                } else if isConnected {
+                                } else if isProfileConnected {
                                     Image(systemName: "link.badge.plus")
                                     Text("Disconnect")
                                         .foregroundColor(.red)
@@ -267,16 +248,7 @@ struct EditProfileSheet: View {
                                 Spacer()
                             }
                         }
-                        .disabled(isTesting)
-                    }
-
-                    if let result = testResult {
-                        HStack(spacing: 4) {
-                            Image(systemName: testStatus == TestStatus.success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            Text(result)
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(testStatus == TestStatus.success ? .green : .red)
+                        .disabled(isProfileConnecting)
                     }
                 }
 
@@ -316,11 +288,6 @@ struct EditProfileSheet: View {
                         dismiss()
                     }
                     .disabled(editName.isEmpty)
-                }
-            }
-            .task {
-                if let profile = profile, profile.isActive {
-                    isConnected = await SessionManager.shared.connectionStatus
                 }
             }
         }
