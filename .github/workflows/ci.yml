@@ -121,6 +121,14 @@ jobs:
       # (TCA, CasePaths, swift-perception, swift-dependencies are all
       # well-known pointfreeco packages), so the security caveat in
       # the flag's help text does not apply.
+      #
+      # CI runs the simulator path with CODE_SIGNING_ALLOWED=NO,
+      # so the Team ID isn't needed here. The release.yml
+      # workflow (tag-driven, runs on .archive) does need it;
+      # it consumes IOS_DEVELOPMENT_TEAM from a repo secret
+      # with auto-detect fallback via scripts/ios-team-id.sh.
+      # See the Makefile comment block for the full override
+      # contract.
       - name: Build (iOS Simulator)
         env:
           BUILD_NUMBER: ${{ github.run_number }}
