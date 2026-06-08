@@ -23,6 +23,14 @@ Steps for a reviewer to verify this works:
 2. ...
 3. Expected result: ...
 
+## Prerequisites
+
+- [ ] The `../openclaw` sibling is present at the expected path
+      (see README → Sourcing OpenClawKit). CI clones it automatically
+      from `caspian9/openclaw`; local builds need it on disk.
+- [ ] `make configure-signing` succeeded (or `IOS_DEVELOPMENT_TEAM`
+      is set in the environment).
+
 ## Screenshots / Logs
 
 If applicable, attach screenshots or relevant log lines.
