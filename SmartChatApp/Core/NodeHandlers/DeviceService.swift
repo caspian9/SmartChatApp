@@ -51,8 +51,8 @@ final class DeviceService: @unchecked Sendable {
 
     func info() -> OpenClawDeviceInfoPayload {
         let device = UIDevice.current
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.1"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
 
         return OpenClawDeviceInfoPayload(
             deviceName: device.name,

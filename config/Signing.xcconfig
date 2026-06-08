@@ -25,3 +25,8 @@ PRODUCT_BUNDLE_IDENTIFIER = $(SMARTCHATAPP_APP_BUNDLE_ID)
 // xcconfig evaluates top-to-bottom: later includes override earlier values.
 #include? ".local-signing.xcconfig"
 #include? "LocalSigning.xcconfig"
+
+// Pull in version settings so a target that only needs signing (rare) still
+// gets MARKETING_VERSION / CURRENT_PROJECT_VERSION resolved. Targets that
+// need only version can point straight at Version.xcconfig.
+#include? "Version.xcconfig"

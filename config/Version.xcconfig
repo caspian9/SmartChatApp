@@ -1,0 +1,31 @@
+// Shared version defaults for the main app and tests.
+// Auto-generated build-time override lives in .local-version.xcconfig
+// (git-ignored; written by scripts/inject-build-timestamp.sh on every
+// `make build`).
+// Manual local overrides can go in LocalVersion.xcconfig (git-ignored).
+
+// Human-facing version. Bump this when you ship a user-visible release.
+// This is the source of truth — `project.yml` settings.base.MARKETING_VERSION
+// mirrors it as a fallback in case the xcconfig fails to load.
+SMARTCHATAPP_MARKETING_VERSION = 0.0.1
+
+// CFBundleVersion. Apple-mandated monotonic int — App Store Connect
+// rejects non-numeric values. Set at build time by
+// scripts/inject-build-timestamp.sh (→ .local-version.xcconfig).
+// Local:  `git rev-list --count HEAD`
+// CI:     $BUILD_NUMBER env (GitHub Actions: $GITHUB_RUN_NUMBER)
+// Default 0 keeps compile-only / non-git CI runs safe.
+SMARTCHATAPP_BUILD_NUMBER = 0
+
+// Short git SHA for human-readable build display. NOT mapped to a
+// build setting — CFBundleVersion must stay a pure integer. Read at
+// runtime by SettingsView from the xcconfig file on disk.
+SMARTCHATAPP_GIT_SHA =
+
+// Map SMARTCHATAPP_* to Xcode build settings. XcodeGen does not expand
+// these at project-generation time, so the mapping must live here.
+MARKETING_VERSION = $(SMARTCHATAPP_MARKETING_VERSION)
+CURRENT_PROJECT_VERSION = $(SMARTCHATAPP_BUILD_NUMBER)
+
+#include? ".local-version.xcconfig"
+#include? "LocalVersion.xcconfig"
