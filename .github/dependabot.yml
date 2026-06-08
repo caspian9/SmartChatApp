@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      github-actions-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "swift"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # SwiftPM updates can break iOS-targeted APIs without
+    # warning (MarkdownDisplayView / swiftui-math are tightly
+    # coupled to specific SwiftUI versions). Group minor+patch
+    # together so a single PR surfaces the full transitive
+    # update set; ignore major bumps so they need explicit
+    # human action.
+    groups:
+      swift-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
