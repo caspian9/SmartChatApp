@@ -582,7 +582,7 @@ item references the section number above for context.
 - [x] **33** — Add `codeql.yml` for Swift. Done 2026-06-08 (0d8e565; Swift build preflight added in 81cbfd7).
 - [x] **32** — Add `dependabot.yml` for `github-actions` and `swift`. Done 2026-06-08; both ecosystems paused with `open-pull-requests-limit: 0` (plan-tier blocker — see `2026-06-08-plan-limits-blockers.md`).
 - [ ] **36** — Enable Discussions with categories.
-- [ ] **43** — Treat warnings as errors on `Release` builds.
+- [x] **43** — Treat warnings as errors on `Release` builds. Done 2026-06-08 (`dcefd7a` — `GCC_TREAT_WARNINGS_AS_ERRORS=YES` added to both build and test steps in `ci.yml`). The same flag applies to Debug builds too (the matrix has no Debug/Release split today), so the gate acts as a "don't ship a new deprecation" guard for every CI run, not just Release.
 - [ ] **35** — OIDC for App Store Connect when TestFlight is added.
 - [ ] **40** — GitHub Pages site from `docs/` (only if `docs/` grows).
 
@@ -612,7 +612,7 @@ item references the section number above for context.
 - [x] **25** — `git ls-files | grep -E '\.DS_Store|Icon\r'`. Done 2026-06-08 (no hits; `.gitignore` covers `.DS_Store`).
 - [x] **26** — Replace `"SmartChatApp"` in `LICENSE` with the
             actual legal copyright holder. Done 2026-06-08 (840b21a — placeholder `<Your Name or Company>` added for the user to fill in).
-- [ ] **30** — `gitleaks detect` sweep.
+- [x] **30** — `gitleaks detect` sweep. Done 2026-06-08 (374 commits, 1.57 MB, **no leaks found**; gitleaks v8.30.1 installed via `brew install gitleaks` for re-runs). Re-verified post-filter-repo (378 commits, 1.57 MB, no leaks).
 
 ### Going-public follow-up: PII in git history
 
