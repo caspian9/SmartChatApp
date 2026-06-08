@@ -1,10 +1,24 @@
 name: CI
 
+# Minimum token scope for the build/test job: only `contents: read` is
+# required. Setting this explicitly avoids the default broad grants
+# (notably `contents: write` on private repos) and ensures a future
+# step that accidentally needs write will fail loudly at review time.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+# Cancel in-progress runs for the same ref on rapid pushes. Limited to
+# pull_request events so a push to main never yanks a main-branch
+# build mid-flight (pushes serialize naturally on the group key).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
