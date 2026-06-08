@@ -43,7 +43,7 @@ the version pipeline in 6858a3f.
 
 ### Removed
 - `SmartChatApp/Features/Home/DeviceInfoView.swift` (dead code;
-  hardcoded `"Hai's iPhone"`; superseded by `HomeView`'s
+  hardcoded a personal device name; superseded by `HomeView`'s
   `connectionBanner`).
 
 ## [0.0.0] - 2026-06-08
