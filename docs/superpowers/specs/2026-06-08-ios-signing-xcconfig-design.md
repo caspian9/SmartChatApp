@@ -17,7 +17,7 @@ Problems with the current setup:
 
 The reference architecture in `openclaw/apps/ios/` solves this with a three-layer xcconfig + auto-detect-script pattern. This plan adopts that pattern with project-specific changes:
 
-- Bundle IDs **do not** get a per-user suffix (we keep `com.smartchat.SmartChatApp` to preserve upgrade continuity with the app already installed on `Hai's iPhone`).
+- Bundle IDs **do not** get a per-user suffix (we keep `com.smartchat.SmartChatApp` to preserve upgrade continuity with the app already installed on a developer iPhone).
 - The OpenClaw-specific preferred Team ID (`Y5PE65HELJ`) is removed — local Team ID comes from Xcode's own account list or `.local-signing.xcconfig`.
 - `Signing.xcconfig` shared defaults ship with the team field **empty** (no developer-specific value in git history).
 
@@ -133,7 +133,7 @@ Detection → file write pipeline:
 **Key difference from OpenClaw:** OpenClaw appends `-${user}-${team}` to Bundle IDs so multiple developers sharing the same Apple Team don't collide on the App Store. **We do not append** because:
 
 - This is a single-developer project (per the user's "C: 去掉防冲突" decision in the design discussion)
-- The current `Hai's iPhone` already has `com.smartchat.SmartChatApp` installed; appending a suffix would force a manual uninstall of the old app
+- A developer iPhone already has `com.smartchat.SmartChatApp` installed; appending a suffix would force a manual uninstall of the old app
 - If a second developer joins later, the suffix logic can be re-introduced by toggling an env var in `ios-configure-signing.sh`
 
 ### Makefile integration

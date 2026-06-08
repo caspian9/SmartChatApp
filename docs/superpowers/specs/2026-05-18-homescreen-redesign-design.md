@@ -17,7 +17,7 @@ Redesign the app's home screen with two entry points: NativeChat and ChatList.
 │   │  💬    │ │  📋    ││
 │   └─────────┘ └─────────┘│
 │                          │
-│   当前设备: Hai's iPhone  │
+│   当前设备: <Your iPhone>  │
 │                          │
 └─────────────────────────┘
 ```

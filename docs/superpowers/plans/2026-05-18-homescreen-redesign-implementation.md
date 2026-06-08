@@ -82,7 +82,7 @@ import SwiftUI
 
 struct DeviceInfoView: View {
     private var deviceName: String {
-        ConfigurationManager.shared.isConfigured ? "Hai's iPhone" : "Not Connected"
+        ConfigurationManager.shared.isConfigured ? "<Your iPhone>" : "Not Connected"
     }
 
     var body: some View {
