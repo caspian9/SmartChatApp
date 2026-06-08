@@ -563,12 +563,12 @@ item references the section number above for context.
 
 ### When you're ready for releases
 
-- [ ] **3** — Add `CHANGELOG.md` (Keep-a-Changelog format).
-- [ ] **13** — `scripts/bump-version.sh` + `make bump-patch`.
-- [ ] **3** — Add `release.yml` workflow (archive + `.ipa` artifact on `v*` tags).
-- [ ] **3** — Add `ExportOptions.plist` (template, profile-id placeholders).
-- [ ] **34** — Create a `release` GitHub Environment.
-- [ ] **14** — Document `IOS_DEVELOPMENT_TEAM` env override for CI/release builds.
+- [x] **3** — Add `CHANGELOG.md` (Keep-a-Changelog format). Done 2026-06-08 (95a2a83).
+- [x] **13** — `scripts/bump-version.sh` + `make bump-patch`. Done 2026-06-08 (d393061).
+- [x] **3** — Add `release.yml` workflow. Done 2026-06-08 (ab5fb72). Sideload-only (no TestFlight).
+- [x] **3** — Add `ExportOptions.plist`. Done 2026-06-08 (f65fc0f).
+- [ ] **34** — Create a `release` GitHub Environment. **Blocked** by plan tier (Pro+ required for user-owned repos). release.yml references it in the `environment:` block; the moment the env is created (or the repo is moved to a Team org), the workflow picks it up automatically with no code change.
+- [x] **14** — Document `IOS_DEVELOPMENT_TEAM` env override. Done 2026-06-08 (c63299b in ci.yml + Makefile comment block from d393061).
 
 ### Optional / nice-to-have
 
