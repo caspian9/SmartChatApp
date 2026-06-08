@@ -376,15 +376,18 @@ shouldn't ship.
     "personal info" the Team ID is fine; treat this as "be aware
     before going public with a username-mapped commit graph".
 
-24. **`docs/superpowers/specs/2026-06-08-ios-signing-xcconfig-design.md`**
-    and other design docs are *internal thinking* documents. They
-    mention `Hai's iPhone`, `caspian9`, etc. Decide whether to:
+24. **Internal design docs** (`docs/superpowers/specs/...`,
+    `docs/superpowers/plans/...`) are *internal thinking* documents.
+    They mention `Hai's iPhone`, `caspian9`, etc. Decide whether to:
     - keep `docs/` public and scrub the personal references, or
     - move them to a `docs-internal/` (gitignored) tree, or
     - leave them; they read as a development journal, not customer docs.
 
-    The current `docs/README.md` does say "preserved as a record of
-    original design intent" which is fine, but `Hai's iPhone` and
+    **Decision (see item #24 below): moved to gitignored** — see
+    `docs/README.md` for the user-facing notice and `.gitignore`
+    for the rule. The original design doc text remains in git
+    history (every spec/plan was committed before being untracked)
+    so the rationale is preserved in commit messages.
     `caspian9` are still searchable in plaintext.
 
 ### Repo-level
@@ -585,10 +588,18 @@ item references the section number above for context.
 
 - [x] **22** — Add `AppLogger.redact(token:)` helper; grep and wrap
             any site that logs profile data. Done 2026-06-08 (b4c4823).
-- [ ] **23** — Decide whether to scrub `Hai's iPhone` / `caspian9`
-            references from `docs/superpowers/`.
-- [ ] **24** — Decide whether to move `docs/superpowers/` to a
-            gitignored internal tree.
+- [x] **23** — Personal references scrubbed (or scoped away).
+            Done 2026-06-08: the only `Hai's iPhone` mention in a
+            public document (CHANGELOG.md:46) was redacted in
+            commit `7a5920d`. The remaining `Hai's iPhone` /
+            `caspian9` mentions live in `docs/superpowers/`,
+            which is now gitignored (item #24) — so the scrub
+            is moot: the directory is no longer part of the
+            public tree.
+- [x] **24** — Move `docs/superpowers/` to a gitignored
+            internal tree. Done 2026-06-08 (`git rm --cached -r
+            docs/superpowers/` + `.gitignore` rule; directory kept
+            on the maintainer's local working tree).
 - [x] **25** — `git ls-files | grep -E '\.DS_Store|Icon\r'`. Done 2026-06-08 (no hits; `.gitignore` covers `.DS_Store`).
 - [x] **26** — Replace `"SmartChatApp"` in `LICENSE` with the
             actual legal copyright holder. Done 2026-06-08 (840b21a — placeholder `<Your Name or Company>` added for the user to fill in).
