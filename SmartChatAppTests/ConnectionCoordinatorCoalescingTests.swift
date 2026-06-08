@@ -367,4 +367,129 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
         // Cleanup
         await coordinator.disconnect()
     }
+
+    /// When the user clicks "Disconnect" in Settings, `disconnect()` writes
+    /// `state.setDisconnected(reason: nil)` to set the phase to
+    /// `.disconnected`. However, the SDK's `onDisconnected` callback (which
+    /// we registered in `connectOperator`/`connectNodeRole`) fires
+    /// **asynchronously** — it can land AFTER `disconnect()` returns and
+    /// after the explicit `setDisconnected` call. The callback then writes
+    /// `state.setReconnecting(reason:)` over the disconnected state,
+    /// leaving the UI stuck on "Reconnecting..." with no actual reconnect
+    /// attempt. The fix: `disconnect()` sets a `userInitiatedDisconnect`
+    /// flag, and the onDisconnected handler short-circuits when the flag
+    /// is true.
+    ///
+    /// This test exercises the handler directly (rather than the SDK
+    /// callback path) because driving a real WebSocket close in unit
+    /// tests is not feasible — the handler is the only piece of logic
+    /// that decides whether to call `setReconnecting`, so testing it
+    /// deterministically covers the property under test.
+    func testUserInitiatedDisconnectSuppressesOnDisconnectedStateWrite() async throws {
+        let state = ConnectionState()
+        let coord = ConnectionCoordinator(state: state)
+
+        // Simulate the user clicking Disconnect: this sets the
+        // `userInitiatedDisconnect` flag and writes
+        // `state.setDisconnected(reason: nil)`.
+        await coord.disconnect()
+
+        // Simulate the SDK firing `onDisconnected` AFTER our
+        // `setDisconnected`. Without the flag, this would write
+        // `state.setReconnecting(...)` and leave the state as
+        // `.reconnecting`. With the flag, the handler is a no-op.
+        await coord.handleTransportDisconnect(
+            role: .operator,
+            reason: "test",
+            generation: 0
+        )
+
+        // Phase should still be `.disconnected` — the user-initiated
+        // disconnect flag suppressed the stale onDisconnected callback.
+        let phase = await MainActor.run { state.phase }
+        XCTAssertEqual(
+            phase, .disconnected,
+            "user-initiated disconnect must not be overwritten by delayed onDisconnected callback. Got: \(String(describing: phase))"
+        )
+
+        // Cleanup
+        await coord.disconnect()
+    }
+
+    /// On `switchToProfile`, `cancelInFlight` is called, which bumps
+    /// `connectGeneration`. A new connect then starts at the new
+    /// generation. If the OLD session's `onDisconnected` callback fires
+    /// after the new connect has started, the handler must treat it as
+    /// stale (the new connect owns the session now) and skip
+    /// `setReconnecting`. Otherwise the stale callback would clobber the
+    /// new connect's `.connecting` state with `.reconnecting` — a
+    /// re-incarnation of the "Failed → Disconnect" flicker.
+    func testStaleGenerationSuppressesOnDisconnectedStateWrite() async throws {
+        let state = ConnectionState()
+        let coord = ConnectionCoordinator(state: state)
+
+        // Bump the generation (simulates `cancelInFlight` on
+        // `switchToProfile` — bumps `connectGeneration` to 1).
+        await coord.cancelInFlight()
+
+        // The OLD session's onDisconnected callback captures
+        // `generation = 0` (the value at the time of the old
+        // `connectOperator` call). It fires AFTER `cancelInFlight`,
+        // so the current `connectGeneration` is 1.
+        await coord.handleTransportDisconnect(
+            role: .operator,
+            reason: "stale from previous session",
+            generation: 0
+        )
+
+        // The handler must short-circuit because the snapshot
+        // generation (0) != current generation (1).
+        let phase = await MainActor.run { state.phase }
+        XCTAssertEqual(
+            phase, .disconnected,
+            "stale onDisconnected callback (from a previous generation) must not write setReconnecting. Got: \(String(describing: phase))"
+        )
+
+        // Cleanup
+        await coord.disconnect()
+    }
+
+    /// When the onDisconnected callback IS for the current session AND
+    /// the disconnect is NOT user-initiated (e.g., the network dropped),
+    /// the handler MUST call `setReconnecting` so the UI can show
+    /// "Reconnecting...". This is the inverse case of the two tests
+    /// above — without this, an unexpected drop would leave the UI
+    /// showing "Connected" while the WebSocket is actually dead.
+    func testUnexpectedDisconnectWritesSetReconnecting() async throws {
+        let state = ConnectionState()
+        let coord = ConnectionCoordinator(state: state)
+
+        // No `disconnect()` call → flag is false (default).
+        // No `cancelInFlight` call → generation matches.
+        // Initial state is .disconnected; we need to set it to .connected
+        // first to verify the handler transitions to .reconnecting.
+        await MainActor.run {
+            state.setConnected(deviceName: "test-device")
+        }
+
+        // Simulate the SDK firing onDisconnected for the CURRENT
+        // session: generation matches, flag is false → handler calls
+        // setReconnecting.
+        await coord.handleTransportDisconnect(
+            role: .operator,
+            reason: "network dropped",
+            generation: 0
+        )
+
+        // Phase should now be .reconnecting.
+        let phase = await MainActor.run { state.phase }
+        if case .reconnecting = phase {
+            // OK
+        } else {
+            XCTFail("Expected phase = .reconnecting, got \(String(describing: phase))")
+        }
+
+        // Cleanup
+        await MainActor.run { state.setDisconnected(reason: nil) }
+    }
 }
