@@ -1,0 +1,27 @@
+// Shared signing defaults + main-app target xcconfig.
+// Auto-generated local overrides live in .local-signing.xcconfig (git-ignored).
+// Manual local overrides can go in LocalSigning.xcconfig (git-ignored).
+
+// Shared defaults. Team is intentionally empty — your real Team ID
+// is written by scripts/ios-configure-signing.sh into .local-signing.xcconfig.
+SMARTCHATAPP_CODE_SIGN_STYLE = Automatic
+SMARTCHATAPP_DEVELOPMENT_TEAM =
+
+SMARTCHATAPP_APP_BUNDLE_ID = com.smartchat.SmartChatApp
+SMARTCHATAPP_TESTS_BUNDLE_ID = com.smartchat.SmartChatAppTests
+
+// Profile names — leave empty to let Automatic mode create profiles on demand.
+SMARTCHATAPP_APP_PROFILE =
+SMARTCHATAPP_TESTS_PROFILE =
+
+// Map the SMARTCHATAPP_* variables to the Xcode build settings XcodeGen
+// references. XcodeGen expands "$(SMARTCHATAPP_DEVELOPMENT_TEAM)" at
+// project-generation time, so this mapping is what actually reaches
+// the build settings during xcodebuild.
+DEVELOPMENT_TEAM = $(SMARTCHATAPP_DEVELOPMENT_TEAM)
+CODE_SIGN_STYLE = $(SMARTCHATAPP_CODE_SIGN_STYLE)
+PRODUCT_BUNDLE_IDENTIFIER = $(SMARTCHATAPP_APP_BUNDLE_ID)
+
+// xcconfig evaluates top-to-bottom: later includes override earlier values.
+#include? ".local-signing.xcconfig"
+#include? "LocalSigning.xcconfig"

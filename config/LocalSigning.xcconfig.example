@@ -1,0 +1,20 @@
+// Copy to LocalSigning.xcconfig (NOT .local-signing.xcconfig) for hand-maintained
+// personal overrides. This file is just a template and should stay committed.
+//
+// Use case: you want a different Apple ID or a specific provisioning profile
+// for a focused test, and the auto-detect picks the wrong team.
+//
+// 1. Copy this file:   cp config/LocalSigning.xcconfig.example config/LocalSigning.xcconfig
+// 2. Edit the values below.
+// 3. Re-run `make build`. LocalSigning.xcconfig wins over .local-signing.xcconfig
+//    because it is included later.
+
+SMARTCHATAPP_CODE_SIGN_STYLE = Automatic
+SMARTCHATAPP_DEVELOPMENT_TEAM = YOUR_10_CHAR_TEAM_ID
+
+SMARTCHATAPP_APP_BUNDLE_ID = com.smartchat.SmartChatApp
+SMARTCHATAPP_TESTS_BUNDLE_ID = com.smartchat.SmartChatAppTests
+
+// Leave empty for Automatic mode.
+SMARTCHATAPP_APP_PROFILE =
+SMARTCHATAPP_TESTS_PROFILE =

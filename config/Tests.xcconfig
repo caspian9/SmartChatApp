@@ -1,0 +1,7 @@
+// Test target xcconfig — overrides PRODUCT_BUNDLE_IDENTIFIER to the tests
+// Bundle ID. Inherits all other signing values from Signing.xcconfig
+// via the #include.
+
+#include "Signing.xcconfig"
+
+PRODUCT_BUNDLE_IDENTIFIER = $(SMARTCHATAPP_TESTS_BUNDLE_ID)
