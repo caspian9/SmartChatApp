@@ -3,7 +3,7 @@
 # avoiding the CoreDevice-vs-device-UDID mismatch between the two APIs.
 DEVICE_NAME := $(shell xcrun xcdevice list 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((x['name'] for x in d if not x.get('simulator') and x.get('available') and x.get('platform') == 'com.apple.platform.iphoneos'), ''))" 2>/dev/null)
 
-.PHONY: build install list-devices compile-only install-only configure-signing detect-team clean-signing
+.PHONY: build install list-devices compile-only install-only configure-signing detect-team clean-signing inject-build-timestamp
 
 # Auto-detect the Apple Team ID and write it (plus canonical Bundle IDs) into
 # config/.local-signing.xcconfig, which config/Signing.xcconfig #include?s.
@@ -16,13 +16,20 @@ configure-signing:
 detect-team:
 	@bash scripts/ios-team-id.sh
 
+# Write the current build timestamp (yyyyMMdd-HHmm) into
+# config/.local-version.xcconfig, which config/Version.xcconfig #include?s.
+# Idempotent: skip the write when the value is unchanged so the mtime
+# (and Xcode's build cache) survives rapid rebuilds.
+inject-build-timestamp:
+	@bash scripts/inject-build-timestamp.sh
+
 # Remove the local override file; the next `make build` regenerates it
 # (or, if no Team is detectable, falls back to the empty shared default).
 clean-signing:
 	@rm -f config/.local-signing.xcconfig
 	@echo "Removed config/.local-signing.xcconfig"
 
-build: configure-signing
+build: configure-signing inject-build-timestamp
 	xcodegen generate
 	xcodebuild -skipMacroValidation -scheme SmartChatApp \
 		-destination "platform=iOS,name=$(DEVICE_NAME)" \
@@ -32,7 +39,7 @@ build: configure-signing
 # runs with no device connected. Useful on a machine without an Apple ID /
 # provisioning profile, or for a quick syntax check. Output is in DerivedData
 # but .app is not installable (no provisioning profile).
-compile-only: configure-signing
+compile-only: configure-signing inject-build-timestamp
 	xcodegen generate
 	xcodebuild -skipMacroValidation -scheme SmartChatApp \
 		-destination 'generic/platform=iOS' \

@@ -1,0 +1,12 @@
+// Manual local override template for config/Version.xcconfig.
+// Copy this file to LocalVersion.xcconfig and uncomment the lines you
+// want to override. LocalVersion.xcconfig is git-ignored.
+//
+// Most of the time you don't need this — `make build` regenerates
+// .local-version.xcconfig automatically. Use this template only when:
+//   - You want to pin a specific build timestamp (e.g. for QA repro)
+//   - You're shipping a release build and want a non-timestamp build number
+//   - You want a non-default version (e.g. a feature branch tagged 0.0.2-rc1)
+
+// SMARTCHATAPP_MARKETING_VERSION = 0.0.2-rc1
+// SMARTCHATAPP_BUILD_NUMBER = 20260608-1430
