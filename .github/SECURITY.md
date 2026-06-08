@@ -5,7 +5,13 @@
 **Please don't open a public issue for security bugs.** Use one of:
 
 - **GitHub private advisory** (preferred): https://github.com/caspian9/SmartChatApp/security/advisories/new
-- **Email:** *(TBD — add once the project has a shared inbox; until then use the private advisory)*
+- **Direct contact:** open an issue tagged `@caspian9` and request
+  a private channel — the maintainer will share a PGP key or
+  switch to email at that point. The repo has no published
+  contact email by design (avoids spam scraping on a public
+  address). If you specifically need an email channel for a
+  coordinated disclosure timeline, mention it in the issue and
+  a key-exchange method will be provided.
 
 You should hear back within 72 hours. If you don't, please follow up
 on the advisory thread (or by `@`-mentioning a maintainer on a

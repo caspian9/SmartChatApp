@@ -156,6 +156,35 @@ Currently declared:
 
 When promoting a stub to a real implementation that touches a privacy-protected API (camera, photos, contacts, calendar, microphone, etc.), add the matching `NS*UsageDescription` to `project.yml` `info.properties` before testing the new handler — without the key, iOS silently ignores the permission request and no prompt appears.
 
+## What this is NOT
+
+To set expectations clearly:
+
+- **Not an App Store app.** SmartChatApp is distributed via
+  GitHub Releases as a sideloadable `.ipa`. There is no
+  TestFlight lane, no App Store Connect integration, and no
+  code-signing identity for distribution in the repo. See
+  the `release.yml` workflow and the "Releases" section in
+  `CHANGELOG.md` for the current distribution path.
+- **Not a chat SDK or library.** The native chat surface is
+  a *consumer* of [OpenClawKit](https://github.com/openclaw/openclaw);
+  if you want to embed a chat UI in your own iOS app, use
+  OpenClawKit directly. SmartChatApp adds a per-message
+  bubble renderer on top of the SDK's `OpenClawChatView`
+  (see `Features/NativeChat/`) and a Node-command bridge
+  for on-device capabilities — these are the project's
+  actual contributions, and they are coupled to the iOS app
+  shape.
+- **Not production-ready.** The app is in early development.
+  Expect rough edges: the version pipeline is new, the
+  stubbed node capabilities return `ok: true` without doing
+  anything, and the agent event stream mapping in
+  `NativeChatViewModel` is calibrated for a specific gateway
+  version. Pin your gateway commit when you need stability.
+- **Not a multi-gateway chat platform.** It works against
+  one OpenClaw Gateway at a time, selected by
+  [Profile](https://github.com/caspian9/SmartChatApp/blob/main/SmartChatApp/Features/Settings/).
+
 ## Roadmap
 
 - [ ] Real implementations for the stubbed node capabilities (camera, photos, contacts, calendar, reminders, talk, canvas, screen)

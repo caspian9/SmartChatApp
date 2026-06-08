@@ -11,6 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 ### Removed
 
+## [0.0.2] - _in development_
+
+Going-public polish. The repo is being prepared for a public
+release; this section collects the changes since 0.0.1 that
+make the public tree sane. The actual `v0.0.2` tag will be
+cut right before the repo flips to public, after a single
+`git filter-repo` pass to flatten the PII residuals out of
+history (see
+`docs/maintenance/2026-06-08-github-maintenance-review.md`,
+"Going-public follow-up: PII in git history").
+
+### Added
+- "What this is NOT" section in README, clarifying the
+  project's distribution model and scope.
+
+### Changed
+- LICENSE copyright holder: `<Your Name or Company>` →
+  `SmartChatApp contributors`.
+- CI: fail the build on compiler warnings
+  (`GCC_TREAT_WARNINGS_AS_ERRORS=YES` on both build and
+  test steps).
+- Maintenance review checklist synced to the current state
+  (13 items moved from `[ ]` to `[x]`).
+- Maintenance review narrative scrubbed of literal PII
+  references; the description now uses the abstract
+  "personal information" phrasing.
+- Repository topics on GitHub About: stale `composable-
+  architecture` and `tca` topics removed (the project
+  never used TCA).
+- GitHub Discussions enabled.
+- `deleteBranchOnMerge` enabled; merge commits disallowed
+  (squash / rebase only).
+
+### Removed
+- `docs/superpowers/` design tree moved to the
+  gitignored `.claude/superpowers/` (per the maintenance
+  review's item #24 decision).
+- Maintenance review's literal PII references (`Hai's
+  iPhone`, `caspian9` mentions in narrative context).
+
 ## [0.0.1] - 2026-06-08
 
 First user-driven release: the maintenance-tier (now / this-week /

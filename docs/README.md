@@ -5,14 +5,20 @@
 These reflect the code as it is today. If they conflict with anything
 in this directory, trust these.
 
-- [`../CLAUDE.md`](../CLAUDE.md) — repo instructions and architecture
-  overview. Source of truth for component responsibilities, agent
-  event stream semantics, and privacy usage descriptions.
 - [`../README.md`](../README.md) — user-facing overview, build
   instructions, node capabilities.
 - [`../project.yml`](../project.yml) — XcodeGen project configuration.
   The generated `SmartChatApp/Info.plist` and `SmartChatApp.xcodeproj`
   are derived from this file.
+
+> **AI-assistant docs (CLAUDE.md) are not part of this public
+> repo.** The maintainer's `CLAUDE.md` (repo instructions,
+> architecture overview, agent event stream semantics) lives
+> in `.claude/CLAUDE.md`, which is gitignored along with the
+> rest of `.claude/`. The information is preserved in
+> commit messages and PR descriptions; this is purely a
+> workspace-organization choice (the file is internal prompt
+> material, not user-facing docs).
 
 ## Design docs and implementation plans
 
