@@ -1,10 +1,31 @@
 version: 2
 updates:
+  # GitHub Actions ecosystem is currently paused because
+  # the CI runs that Dependabot's auto-PRs trigger are
+  # failing with the same plan-tier blocker that affects
+  # direct pushes to main (see docs/maintenance/2026-06-08-
+  # plan-limits-blockers.md — `macos-15` runner availability
+  # is restricted on user-owned private repos on Free).
+  # The PRs Dependabot opens all fail in ~4s with empty
+  # jobs, regardless of which action the PR bumps. Until
+  # the repo moves to Pro / an org with Team / public,
+  # the auto-PRs are noise: the human has to act on every
+  # one, and the action they take is always "close as
+  # not-planned" because CI can never go green.
+  #
+  # `open-pull-requests-limit: 0` keeps the ecosystem
+  # enabled (so version-detection still runs) but
+  # suppresses new PRs. When plan-tier changes, set this
+  # back to 5 (the default) to re-enable.
+  #
+  # To re-enable: change `open-pull-requests-limit: 0` to
+  # `open-pull-requests-limit: 5`, or remove the line.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
+    open-pull-requests-limit: 0
     groups:
       github-actions-minor:
         patterns: ["*"]
