@@ -3,7 +3,7 @@
 # avoiding the CoreDevice-vs-device-UDID mismatch between the two APIs.
 DEVICE_NAME := $(shell xcrun xcdevice list 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((x['name'] for x in d if not x.get('simulator') and x.get('available') and x.get('platform') == 'com.apple.platform.iphoneos'), ''))" 2>/dev/null)
 
-.PHONY: build install list-devices compile-only install-only configure-signing detect-team clean-signing inject-build-timestamp
+.PHONY: build install list-devices compile-only install-only configure-signing detect-team clean-signing inject-build-timestamp bump-patch bump-minor bump-major
 
 # Auto-detect the Apple Team ID and write it (plus canonical Bundle IDs) into
 # config/.local-signing.xcconfig, which config/Signing.xcconfig #include?s.
@@ -34,6 +34,22 @@ build: configure-signing inject-build-timestamp
 	xcodebuild -skipMacroValidation -scheme SmartChatApp \
 		-destination "platform=iOS,name=$(DEVICE_NAME)" \
 		-allowProvisioningUpdates build
+
+# Build-system env overrides:
+#   IOS_DEVELOPMENT_TEAM  — bypass Team-ID auto-detect; pin
+#                            to a specific Apple Developer
+#                            Team (10-char alphanumeric). Used
+#                            by scripts/ios-team-id.sh and by
+#                            the release.yml CI workflow
+#                            (which sets this from a repo or
+#                            org secret for tag builds).
+
+# Auto-bump SMARTCHATAPP_MARKETING_VERSION (and project.yml mirror)
+# and pre-fill the CHANGELOG. Does NOT auto-commit or auto-tag —
+# review the diff first. Append --dry-run to preview.
+bump-patch: ; @bash scripts/bump-version.sh patch
+bump-minor: ; @bash scripts/bump-version.sh minor
+bump-major: ; @bash scripts/bump-version.sh major
 
 # Like build, but skips code signing and uses a generic iOS destination —
 # runs with no device connected. Useful on a machine without an Apple ID /
