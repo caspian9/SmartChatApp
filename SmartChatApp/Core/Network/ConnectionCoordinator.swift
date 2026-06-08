@@ -45,6 +45,17 @@ actor ConnectionCoordinator {
     // causing the "Failed → Disconnect" flicker on Switch.
     private var connectGeneration: Int = 0
 
+    // Set to true by `disconnect()` so the SDK's onDisconnected
+    // callbacks (which fire when the WebSocket closes — including
+    // a user-initiated close) don't write `state.setReconnecting`
+    // over our explicit `state.setDisconnected(reason: nil)`. The
+    // SDK fires onDisconnected ASYNCHRONOUSLY: it can land AFTER
+    // `disconnect()` returns, so without this flag the UI gets
+    // stuck on "Reconnecting..." with no actual reconnect attempt.
+    // Reset to false at the start of every `connectWithRole()` so
+    // a subsequent connect is free to surface reconnect state.
+    private var userInitiatedDisconnect: Bool = false
+
     // Transport cache: sessionKey -> GatewayChatTransport (conforms to
     // OpenClawChatTransport). One actor per session key for the lifetime of
     // the app.
@@ -92,6 +103,12 @@ actor ConnectionCoordinator {
         role: GatewayConnectionRole,
         enabledCaps: Set<String>
     ) async throws {
+        // A new connect attempt means the user wants to be
+        // connected again. Reset the user-initiated-disconnect
+        // flag so the next disconnect is judged fresh, and so
+        // the new connect's success path doesn't see a stale
+        // "true" from a previous explicit disconnect.
+        userInitiatedDisconnect = false
         switch role {
         case .operatorOnly:
             try await connectOperator(gatewayURL: gatewayURL, authToken: authToken)
@@ -153,6 +170,13 @@ actor ConnectionCoordinator {
     }
 
     func disconnect() async {
+        // Mark as user-initiated BEFORE the SDK tears down the
+        // WebSocket. The SDK fires `onDisconnected` asynchronously,
+        // and the callback can land AFTER this method returns and
+        // after our explicit `state.setDisconnected(reason: nil)`.
+        // The flag tells the onDisconnected handler to stay quiet
+        // for this disconnect.
+        userInitiatedDisconnect = true
         cancelInFlight()
         await operatorSession.disconnect()
         await nodeSession.disconnect()
@@ -240,6 +264,42 @@ actor ConnectionCoordinator {
         transports[sessionKey] = nil
     }
 
+    /// Handle an SDK `onDisconnected` callback. The SDK fires this
+    /// callback when the WebSocket closes — INCLUDING for a
+    /// user-initiated close via `disconnect()`. Two cases must be
+    /// suppressed to avoid clobbering state:
+    ///
+    /// 1. **User-initiated disconnect**: `disconnect()` set
+    ///    `userInitiatedDisconnect = true` BEFORE the SDK teardown.
+    ///    Without this guard, the callback would land after our
+    ///    `state.setDisconnected(reason: nil)` and overwrite it with
+    ///    `state.setReconnecting(reason:)` — leaving the UI stuck on
+    ///    "Reconnecting..." with no actual reconnect attempt.
+    ///
+    /// 2. **Stale callback from a previous session**: when
+    ///    `switchToProfile` calls `cancelInFlight`, `connectGeneration`
+    ///    is bumped. The OLD session's onDisconnected callback
+    ///    captures the OLD `generation`. When it fires (late), the
+    ///    handler sees a mismatch and stays quiet — preventing the
+    ///    stale callback from clobbering the NEW connect's
+    ///    `.connecting` state with `.reconnecting`. (This is the
+    ///    "Failed → Disconnect" flicker pattern, ported to the
+    ///    onDisconnected path.)
+    ///
+    /// `internal` so tests can drive the handler directly (the SDK
+    /// callback path can't be exercised without a real WebSocket).
+    func handleTransportDisconnect(role: GatewayRole, reason: String, generation: Int) async {
+        if userInitiatedDisconnect {
+            AppLogger.log("\(role.rawValue) onDisconnected suppressed (user-initiated): \(reason)", category: .network)
+            return
+        }
+        if generation != connectGeneration {
+            AppLogger.log("\(role.rawValue) onDisconnected suppressed (stale generation=\(generation), current=\(connectGeneration)): \(reason)", category: .network)
+            return
+        }
+        await MainActor.run { state.setReconnecting(reason: reason) }
+    }
+
     func createSession(agentId: String? = nil, customKey: String? = nil) async throws -> String {
         var params: [String: String] = [:]
         if let agentId, !agentId.isEmpty { params["agentId"] = agentId }
@@ -306,9 +366,7 @@ actor ConnectionCoordinator {
                 },
                 onDisconnected: { reason in
                     AppLogger.log("Operator disconnected: \(reason)", category: .network)
-                    Task { @MainActor in
-                        state.setReconnecting(reason: reason)
-                    }
+                    Task { await self.handleTransportDisconnect(role: .operator, reason: reason, generation: generation) }
                 },
                 onInvoke: { request in
                     BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
@@ -455,9 +513,7 @@ actor ConnectionCoordinator {
                 },
                 onDisconnected: { reason in
                     AppLogger.log("Node disconnected: \(reason)", category: .network)
-                    Task { @MainActor in
-                        state.setReconnecting(reason: reason)
-                    }
+                    Task { await self.handleTransportDisconnect(role: .node, reason: reason, generation: generation) }
                 },
                 onInvoke: { request in
                     await router.handle(request)
