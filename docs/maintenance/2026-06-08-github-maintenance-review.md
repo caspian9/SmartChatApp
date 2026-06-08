@@ -550,18 +550,16 @@ item references the section number above for context.
 
 ### This week (1–4 hours)
 
-- [ ] **1** — README: add "Versioning" + "scripts/" + "config/" sections.
-- [ ] **2** — CI: cache `~/Library/Caches/org.swift.swiftpm` + `build/SourcePackages`.
-- [ ] **2** — CI: parameterize `OPENCLAW_REPO` env.
-- [ ] **2** — CI: pin `actions/checkout`, `setup-xcode`, `cache` to commit SHAs.
-- [ ] **10** — Add CI status badge to README.
-- [ ] **30** — Enable secret scanning.
-- [ ] **31** — Enable private vulnerability reporting.
-- [ ] **29** — Configure branch protection on `main`.
-- [ ] **27** — Add `THIRD_PARTY_LICENSES.md`.
-- [ ] **37** — Standardize labels (`bug`, `enhancement`, `security`,
-            `docs`, `question`, `node-capability`, `good first issue`,
-            `help wanted`, `priority: high/medium/low`).
+- [x] **1** — README: add "Versioning" + "scripts/" + "config/" sections. Done 2026-06-08 (b7b5088).
+- [x] **2** — CI: cache `~/Library/Caches/org.swift.swiftpm` + `build/SourcePackages`. Done 2026-06-08 (8154012).
+- [x] **2** — CI: parameterize `OPENCLAW_REPO` env. Done 2026-06-08 (8154012).
+- [x] **2** — CI: pin `actions/checkout`, `setup-xcode`, `cache` to commit SHAs. Done 2026-06-08 (8154012).
+- [x] **10** — Add CI status badge to README. Done 2026-06-08 (b7b5088).
+- [ ] **30** — Enable secret scanning. **Blocked** by plan tier (user-owned private repo on Free). See `2026-06-08-plan-limits-blockers.md`. Unlocks with Pro / Team / Enterprise Cloud, or with a flip to public.
+- [ ] **31** — Enable private vulnerability reporting. **Blocked** by plan tier. Same doc.
+- [ ] **29** — Configure branch protection on `main`. **Blocked** by plan tier (`Upgrade to GitHub Pro or make this repository public`). Runbook at `docs/BRANCH_PROTECTION.md` is verified-correct and copy-pasteable once the plan permits.
+- [x] **27** — Add `THIRD_PARTY_LICENSES.md`. Done 2026-06-08 (0072120).
+- [x] **37** — Standardize labels. Done 2026-06-08 (11 labels created via `gh label create --force`; see commit 87753ee for the record).
 
 ### When you're ready for releases
 
