@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+### Changed
+### Removed
+
+## [0.0.1] - 2026-06-08
+
+First user-driven release: the maintenance-tier (now / this-week /
+release / optional+security) work landed in 18 commits since
+the version pipeline in 6858a3f.
+
+### Added
 - CI status badge in README.
 - `scripts/` and `config/` reference tables in README.
 - SECURITY.md and BRANCH_PROTECTION.md.
@@ -36,12 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hardcoded `"Hai's iPhone"`; superseded by `HomeView`'s
   `connectionBanner`).
 
-## [0.0.1] - 2026-06-08
+## [0.0.0] - 2026-06-08
 
-First versioned release. The `MARKETING_VERSION = 0.0.1` baseline
-was established when the version pipeline (xcconfig + xcodegen +
-Apple-mandated CFBundleVersion) was added; everything in the
-pre-pipeline history is squashed under this initial tag.
+Baseline tag, marked *after* the fact. The `MARKETING_VERSION = 0.0.0`
+placeholder was set when the version pipeline
+(xcconfig + xcodegen + Apple-mandated CFBundleVersion) was added.
+Everything in the pre-pipeline history is included in this
+initial tag; the [0.0.1] release adds the version-pipeline
+itself, the README tech-stack / roadmap / version-floor fixes,
+the CI hygiene, the GitHub-maintenance docs, the simulator
+matrix, and the AppLogger.redact defense in depth.
 
 ### Added
 - Native chat UI with per-message bubbles for assistant, thinking,
@@ -66,4 +80,5 @@ pre-pipeline history is squashed under this initial tag.
 - Issue / PR templates; CLAUDE.md.
 
 [Unreleased]: https://github.com/caspian9/SmartChatApp/compare/v0.0.1...HEAD
-[0.0.1]: https://github.com/caspian9/SmartChatApp/releases/tag/v0.0.1
+[0.0.1]: https://github.com/caspian9/SmartChatApp/compare/v0.0.0...v0.0.1
+[0.0.0]: https://github.com/caspian9/SmartChatApp/releases/tag/v0.0.0
