@@ -1,5 +1,34 @@
 # Branch protection — `main`
 
+## Status (as of 2026-06-08)
+
+The `gh api` PUT in this runbook is **blocked by plan tier**:
+user-owned private repos on GitHub Free cannot apply
+branch protection. Attempted 2026-06-08; got `403 Upgrade
+to GitHub Pro or make this repository public`.
+
+Three paths to enable these rules (pick one):
+
+- **Upgrade to GitHub Pro** (~$4/mo, single user). Branch
+  protection, secret scanning, private vulnerability
+  reporting, and Discussions all become available for
+  the same private repo.
+- **Move the repo to a GitHub organization** on GitHub
+  Team. Branch protection on Team is free for org-owned
+  private repos.
+- **Flip the repo to public**. Everything in this runbook
+  becomes available for free; you also accept the
+  privacy audit work in `docs/maintenance/2026-06-08-plan-limits-blockers.md`.
+
+Until then, **branch protection is not enforced**. Direct
+pushes to `main` succeed (all 25 commits since `e63e4b0`
+have been direct pushes, not PRs). The CI workflows
+(`ci.yml`, `codeql.yml`, `release.yml`) still run on every
+push and act as the de-facto gate; if a push is broken,
+the next push fixes it. This is acceptable for a
+single-maintainer pre-1.0 project, not for a multi-contributor
+post-1.0 one.
+
 ## What this applies
 
 The `main` branch is the default and the only deployment surface.
@@ -14,7 +43,7 @@ multi-contributor path cheap when it happens).
 | Require a pull request before merging | Yes | Forces review trail; even solo, the diff is reviewed before push. |
 | Required approving reviews | 1 | Cheap insurance. Bump to 2 if a co-maintainer joins. |
 | Dismiss stale pull request approvals when new commits are pushed | Yes | Re-review after force-push / new commits. |
-| Require status checks to pass before merging | Yes | `build` (the job name in `ci.yml`) must be green. |
+| Require status checks to pass before merging | Yes | Both `Build & Test (iOS 18 (latest))` and `Build & Test (iOS 18 (penultimate))` (the two matrix jobs in `ci.yml`) must be green. |
 | Require branches to be up to date before merging | Yes | Avoids the "PR was green at HEAD~3" surprise. |
 | Require linear history | Yes | Keeps `main` a straight line; no merge commits from feature branches. |
 | Include administrators | Yes | Don't let admins bypass the rules. |
@@ -37,7 +66,10 @@ gh api \
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["build"]
+    "contexts": [
+      "Build & Test (iOS 18 (latest))",
+      "Build & Test (iOS 18 (penultimate))"
+    ]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {
