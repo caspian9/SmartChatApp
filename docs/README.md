@@ -27,3 +27,6 @@ document was written; the content is not edited as the code evolves.
   by the `brainstorming` skill during feature planning.
 - [`superpowers/plans/`](superpowers/plans/) — implementation plans
   produced by the `writing-plans` skill.
+- [`superpowers/README.md`](superpowers/README.md) — internal-docs
+  policy: what's in this tree, what personal info gets scrubbed
+  before going public, and what to keep out of new design docs.
