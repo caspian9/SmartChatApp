@@ -9,12 +9,9 @@
 
 > **Status:** early development (v0.0.1). See [CHANGELOG.md](CHANGELOG.md) for the most recent changes.
 
-<!-- Hero image: drop a screenshot or animated GIF at docs/hero.png. This is the single biggest conversion lever for an iOS project. Until then the README shows text only. -->
-
 ## Contents
 
 - [Why SmartChatApp?](#why-smartchatapp)
-- [Screenshots](#screenshots)
 - [What this is NOT](#what-this-is-not)
 - [Features](#features)
 - [Quick Start](#quick-start)
@@ -50,21 +47,6 @@ If you're building a custom chat surface on top of OpenClawKit and
 need per-message rendering, SmartChatApp is a working reference. If
 you just need a generic chat UI, use `OpenClawChatView` from
 OpenClawKit directly.
-
-## Screenshots
-
-<!--
-  Drop screenshots / GIFs in docs/ and link them here. Suggested
-  captures (in priority order):
-  1. NativeChatView streaming a multi-step agent run (assistant +
-     tool call + tool result in one screenshot)
-  2. MusicCardView with a playing track
-  3. SessionPickerView with multiple profiles
-  4. SettingsView's profile list + connect button
--->
-
-_Screenshots are not part of the public tree yet. The maintainer
-will add them before flipping the repo to public._
 
 ## What this is NOT
 
