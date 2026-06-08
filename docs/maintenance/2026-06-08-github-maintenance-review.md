@@ -28,7 +28,7 @@
 | Asset | Present | Notes |
 |---|---|---|
 | `README.md` | ✅ | Stale "TCA" claim; missing scripts/config/ version pipeline |
-| `CLAUDE.md` | ✅ | Internal — keep in repo, link from a public note if making public |
+| `CLAUDE.md` | ↪ moved to `.claude/CLAUDE.md` (gitignored) | AI-assistant prompt material, not user-facing. The maintainer's local file is the source of truth; the equivalent content for the public tree lives in `README.md` + `docs/`. |
 | `LICENSE` | ✅ | MIT, but copyright holder is the literal string `"SmartChatApp"` |
 | `CODEOWNERS` | ❌ | |
 | `CONTRIBUTING.md` | ❌ | Embedded in README; no standalone file |
