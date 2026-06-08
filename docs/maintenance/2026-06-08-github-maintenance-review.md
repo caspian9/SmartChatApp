@@ -376,14 +376,14 @@ shouldn't ship.
     "personal info" the Team ID is fine; treat this as "be aware
     before going public with a username-mapped commit graph".
 
-24. **Internal design docs** (`docs/superpowers/specs/...`,
-    `docs/superpowers/plans/...`) are *internal thinking* documents.
-    They mention **personal information** (device names, the
-    maintainer's GitHub username, etc.). The literal values are
-    PII and would not be appropriate in a public tree. Decide
-    whether to:
+24. **Internal design docs** (`.claude/superpowers/specs/...`,
+    `.claude/superpowers/plans/...`) are *internal thinking*
+    documents. They mention **personal information** (device
+    names, the maintainer's GitHub username, etc.). The literal
+    values are PII and would not be appropriate in a public tree.
+    Decide whether to:
     - keep `docs/` public and scrub the personal references, or
-    - move them to a `docs-internal/` (gitignored) tree, or
+    - move them to a gitignored tree, or
     - leave them; they read as a development journal, not customer docs.
 
     **Decision (see item #24 below): moved to gitignored** — see
@@ -595,15 +595,20 @@ item references the section number above for context.
             information** mention in a public document
             (CHANGELOG.md:46) was redacted in commit `7a5920d`.
             The remaining personal information references live
-            in `docs/superpowers/`, which is now gitignored
+            in `.claude/superpowers/`, which is gitignored
             (item #24) — so the scrub is moot: the directory is
             no longer part of the public tree. This file (the
             maintenance review) also scrubbed its own narrative
             references to PII in the same batch.
 - [x] **24** — Move `docs/superpowers/` to a gitignored
-            internal tree. Done 2026-06-08 (`git rm --cached -r
-            docs/superpowers/` + `.gitignore` rule; directory kept
-            on the maintainer's local working tree).
+            internal tree. Done 2026-06-08: `git rm --cached -r
+            docs/superpowers/` removed the directory from
+            tracking, then the directory was relocated to
+            `.claude/superpowers/` (already gitignored via the
+            existing `.claude/` rule) so a separate
+            `docs/superpowers/` rule in `.gitignore` is no
+            longer needed. The files stay on the maintainer's
+            local working tree.
 - [x] **25** — `git ls-files | grep -E '\.DS_Store|Icon\r'`. Done 2026-06-08 (no hits; `.gitignore` covers `.DS_Store`).
 - [x] **26** — Replace `"SmartChatApp"` in `LICENSE` with the
             actual legal copyright holder. Done 2026-06-08 (840b21a — placeholder `<Your Name or Company>` added for the user to fill in).
