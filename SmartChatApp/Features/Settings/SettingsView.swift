@@ -12,20 +12,54 @@ struct SettingsView: View {
     @State private var messageCacheStats: (sessionCount: Int, messageCount: Int) = (0, 0)
     @State private var profileListRefresh: Bool = false
 
-    private static let buildDate: Date = {
-        return Date()
-    }()
+    /// App version + build display, read from the installed bundle.
+    ///
+    /// `CFBundleShortVersionString` (MARKETING_VERSION in
+    /// config/Version.xcconfig) and `CFBundleVersion` (CURRENT_PROJECT_VERSION,
+    /// populated at build time by scripts/inject-build-timestamp.sh) come
+    /// from the Info.plist embedded in the .app.
+    ///
+    /// `SMARTCHATAPPGitSHA` is a non-standard Info.plist key injected via
+    /// the `$(SMARTCHATAPP_GIT_SHA)` xcconfig placeholder. It's used for
+    /// dev-only display (Settings → About) and never reaches CFBundleVersion
+    /// — that field must stay a pure integer for App Store Connect.
+    ///
+    /// Reading from the bundle (instead of `Date()`) means the value is
+    /// stable across cold restarts: it reflects when the .app was built,
+    /// not when the user launched it.
+    private struct AppVersion {
+        let marketing: String
+        let build: String
 
-    private var buildDateString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        return formatter.string(from: Self.buildDate)
-    }
+        static let current: AppVersion = {
+            let info = Bundle.main.infoDictionary
+            let marketing = info?["CFBundleShortVersionString"] as? String ?? "0.0.1"
+            let buildNumber = info?["CFBundleVersion"] as? String ?? "0"
+            let rawSha = info?["SMARTCHATAPPGitSHA"] as? String ?? ""
+            let sha = rawSha.isEmpty ? nil : rawSha
+            return AppVersion(
+                marketing: marketing,
+                build: formatBuild(buildNumber: buildNumber, sha: sha)
+            )
+        }()
 
-    private var openClawVersion: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(version) (\(build))"
+        /// Build a human-readable build string.
+        ///
+        /// - Debug: include the SHA so devs can tell "I built 5 min ago"
+        ///   from "I built before the last commit" at a glance.
+        /// - Release: show only the integer — users get the Apple-mandated
+        ///   build number, no internal info leaks.
+        private static func formatBuild(buildNumber: String, sha: String?) -> String {
+            #if DEBUG
+            if let sha = sha {
+                return "\(buildNumber).\(sha)"
+            }
+            return "\(buildNumber) (local)"
+            #else
+            _ = sha
+            return buildNumber
+            #endif
+        }
     }
 
     var body: some View {
@@ -151,14 +185,14 @@ struct SettingsView: View {
                 HStack {
                     Text("Version")
                     Spacer()
-                    Text("1.0.0")
+                    Text(AppVersion.current.marketing)
                         .foregroundColor(theme.textSecondary)
                 }
 
                 HStack {
                     Text("Build")
                     Spacer()
-                    Text(buildDateString)
+                    Text(AppVersion.current.build)
                         .foregroundColor(theme.textSecondary)
                 }
             }
