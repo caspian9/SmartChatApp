@@ -62,6 +62,18 @@ final class NativeChatScrollRequestTests: XCTestCase {
         }
     }
 
+    /// The manual pull-up refresh path uses `.manualRefresh` so the view's
+    /// scroll handler can bypass the `userHasScrolled` gate. A user who
+    /// previously scrolled up to read history has `userHasScrolled == true`,
+    /// but if they then pull up to refresh at the bottom, the resulting
+    /// scroll MUST land on the new message — that's the whole point of the
+    /// pull. `.historyLoaded` would silently no-op in that case.
+    func testNativeChatScrollKind_hasManualRefreshCase() {
+        let manualKind: NativeChatScrollKind = .manualRefresh
+        XCTAssertNotEqual(manualKind, .newMessage)
+        XCTAssertNotEqual(manualKind, .historyLoaded)
+    }
+
     // MARK: - Helpers
 
     private func makeMessage(id: String, text: String, role: String, state: String) -> ChatMessage {

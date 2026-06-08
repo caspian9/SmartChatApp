@@ -18,8 +18,14 @@ enum NativeChatScrollKind: Equatable {
     /// (new user message, new tool bubble) actually moves the viewport.
     case newMessage
     /// Cached or network history just loaded — multi-poll scroll catches
-    /// the `MarkdownViewTextKit` async height measurement.
+    /// the `MarkdownViewTextKit` async height measurement. Gated on
+    /// `!userHasScrolled` so reading history isn't yanked to the bottom.
     case historyLoaded
+    /// Manual pull-up refresh landed new messages — single scroll, no
+    /// `userHasScrolled` gate. The user explicitly pulled up to fetch,
+    /// so they want the scroll to land on the new message even if they
+    /// had previously scrolled away from the bottom.
+    case manualRefresh
 }
 
 struct NativeChatScrollRequest: Equatable {
@@ -49,6 +55,11 @@ final class NativeChatViewModel {
     var isSwitchingGateway: Bool = false
     var error: String?
     var isRestoringFromCache: Bool = false
+    /// True while a user-initiated pull-up refresh is in flight. The
+    /// view's `refreshIndicator` reads this to show the spinner; the
+    /// HistoryLoader's `defer` block resets it to false when the
+    /// network task completes (success or error).
+    var isManualRefreshing: Bool = false
     /// Unified scroll signal. See `NativeChatScrollRequest` doc for the
     /// rationale. Each writer must increment the token exactly once per
     /// event — multiple increments in the same beat used to produce
@@ -185,6 +196,19 @@ final class NativeChatViewModel {
 
     func loadHistory() {
         historyLoader.loadHistory()
+    }
+
+    /// User-initiated pull-up refresh. Re-runs the network step of
+    /// `loadHistory()` for the current session without showing the
+    /// cache first (the user is already looking at the cache). Sets
+    /// `isManualRefreshing = true` for the duration so the view can
+    /// show a spinner. Re-entrancy is guarded by the same per-session
+    /// lock as `loadHistory()`. On new messages, fires a
+    /// `.manualRefresh` scroll request (single scroll, bypasses
+    /// `userHasScrolled`); on no new messages or network error, stays
+    /// silent.
+    func refreshFromServer() {
+        historyLoader.refreshFromServer()
     }
 
     func loadMoreHistory() {}

@@ -13,6 +13,33 @@ struct NativeChatView: View {
     /// scrolls from yanking the user back to the bottom while they're
     /// reading history above.
     @State private var userHasScrolled = false
+    /// True when the message ScrollView's bottom edge is visible. Used
+    /// to gate the pull-up gesture so it only responds when the user
+    /// is at the bottom of the list (not when they're reading history
+    /// above). Tracked via `onScrollGeometryChange` (iOS 17+).
+    @State private var isAtBottom: Bool = true
+    /// How far the user has pulled up beyond the bottom, in points.
+    /// 0 when not pulling, up to `pullUpMaxOffset` when at the limit.
+    /// Drives the `refreshIndicator`'s height for visual feedback.
+    @State private var pullUpOffset: CGFloat = 0
+    /// True once `pullUpOffset` exceeds the activation threshold (8pt).
+    /// Used to distinguish "user is touching the screen" from "user
+    /// is actually performing the pull gesture". Reset on release.
+    @State private var isPullingUp: Bool = false
+
+    /// Minimum pull distance before the refresh indicator appears.
+    /// Prevents accidental triggers from light scroll momentum.
+    private let pullUpActivationThreshold: CGFloat = 8
+    /// Minimum pull distance at release to actually trigger the
+    /// network refresh. Below this, the gesture snaps back to 0.
+    private let pullUpTriggerThreshold: CGFloat = 40
+    /// Maximum pull distance — beyond this the offset clamps. Prevents
+    /// the gesture from racing past reasonable visual feedback.
+    private let pullUpMaxOffset: CGFloat = 80
+    /// Scroll-position tolerance for `isAtBottom`. Treats the user as
+    /// "at the bottom" if the content's bottom edge is within 4pt of
+    /// the viewport's bottom edge.
+    private let isAtBottomEpsilon: CGFloat = 4
 
     init() {
         AppLogger.log("NativeChatView init", category: .nativeChat)
@@ -96,6 +123,18 @@ struct NativeChatView: View {
             ScrollView {
                 messageList
             }
+            // Overlay the pull-up refresh indicator on the bottom edge
+            // of the ScrollView itself, so it floats *over* the last
+            // message instead of pushing the message list up by 28pt
+            // (which is what the old VStack bar did — covering the
+            // bottom 28pt of the conversation). `.allowsHitTesting(false)`
+            // keeps the spinner from intercepting touches, so the
+            // DragGesture and tap-to-dismiss-keyboard still reach the
+            // ScrollView underneath.
+            .overlay(alignment: .bottom) {
+                refreshIndicator
+                    .allowsHitTesting(false)
+            }
             // No `.defaultScrollAnchor(.bottom)`: that modifier re-anchors
             // on *any* content-size change, including the height growth
             // from a "show more" expansion. When a user scrolls into a
@@ -107,6 +146,52 @@ struct NativeChatView: View {
             // (send button ↔ ProgressView frame change) and `isInputFocused`
             // (keyboard up/down).
             .onTapGesture { isInputFocused = false }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                // contentOffset.y is the viewport's top; containerSize
+                // is the viewport height; contentSize is the total
+                // content height. Distance from bottom = (content -
+                // offset - viewport). Within epsilon means at-bottom.
+                let distanceFromBottom = geometry.contentSize.height
+                                      - geometry.contentOffset.y
+                                      - geometry.containerSize.height
+                return distanceFromBottom < isAtBottomEpsilon
+            } action: { _, newIsAtBottom in
+                if self.isAtBottom != newIsAtBottom {
+                    self.isAtBottom = newIsAtBottom
+                }
+            }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: pullUpActivationThreshold)
+                    .onChanged { value in
+                        // Only upward swipes (negative translation).
+                        guard value.translation.height < 0 else { return }
+                        // Gate the *initial* pull on `isAtBottom` (prevents
+                        // the gesture from fighting with normal upward
+                        // scroll through history). Once committed
+                        // (`isPullingUp == true`), keep following the finger
+                        // even if the ScrollView's rubber-banding has caused
+                        // `onScrollGeometryChange` to flip `isAtBottom` back
+                        // to false mid-pull.
+                        if !isPullingUp, !isAtBottom { return }
+                        let pullDistance = -value.translation.height
+                        pullUpOffset = min(pullDistance, pullUpMaxOffset)
+                        if !isPullingUp, pullUpOffset >= pullUpActivationThreshold {
+                            isPullingUp = true
+                        }
+                    }
+                    .onEnded { _ in
+                        // Defer snap-back so the trigger check uses the
+                        // final pullUpOffset / isPullingUp values.
+                        defer {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                pullUpOffset = 0
+                                isPullingUp = false
+                            }
+                        }
+                        guard isPullingUp, pullUpOffset >= pullUpTriggerThreshold else { return }
+                        viewModel.refreshFromServer()
+                    }
+            )
             .onAppear {
                 AppLogger.log("messageScrollView onAppear, messages: \(viewModel.messages.count)", category: .nativeChat)
             }
@@ -161,6 +246,17 @@ struct NativeChatView: View {
                             }
                         }
                     }
+                case .manualRefresh:
+                    // User pulled up to refresh. Bypasses the
+                    // userHasScrolled gate — the user explicitly
+                    // requested the scroll, so we land on the new
+                    // message even if they had previously scrolled up.
+                    // Single scroll (not multi-poll) because by the
+                    // time the network returns, the layout is stable
+                    // (we're not in the middle of a fresh history
+                    // load with async height measurement).
+                    AppLogger.log("manualRefresh scrolling to \(String(id.prefix(8)))", category: .nativeChat)
+                    proxy.scrollTo(id, anchor: .bottom)
                 }
             }
             .onChange(of: viewModel.isSending) { _, isSending in
@@ -202,6 +298,28 @@ struct NativeChatView: View {
             }
         }
         .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var refreshIndicator: some View {
+        // Visible only while the user is actively pulling OR while a
+        // network refresh is in flight. Floats over the bottom of the
+        // ScrollView (via `.overlay(alignment: .bottom)` in
+        // `messageScrollView`) so it never covers messages — the
+        // underlying message list keeps its full height. The overlay
+        // has `.allowsHitTesting(false)` so the spinner never blocks
+        // touches or drag gestures.
+        if isPullingUp || viewModel.isManualRefreshing {
+            HStack(spacing: 8) {
+                Spacer()
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
+                    .scaleEffect(0.7)
+                Spacer()
+            }
+            .frame(height: isPullingUp ? max(pullUpOffset, 24) : 28)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
     }
 
     private var chatInput: some View {
