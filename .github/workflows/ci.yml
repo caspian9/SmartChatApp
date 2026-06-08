@@ -16,24 +16,17 @@ on:
 # Cancel in-progress runs for the same ref on rapid pushes. Limited to
 # pull_request events so a push to main never yanks a main-branch
 # build mid-flight (pushes serialize naturally on the group key).
-# Note: concurrency moved to job level (see `build.concurrency` below).
-# Workflow-level concurrency can't see the matrix dimension, so the
-# group key resolves to the same empty string for all matrix slots
-# and they collide. Job-level concurrency has the matrix in scope.
+concurrency:
+  # Matrix dimension is part of the group key so two concurrent
+  # PRs each spin up their own matrix slots without stomping.
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ matrix.destination.name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: Build & Test (${{ matrix.destination.label }})
     runs-on: macos-15
     timeout-minutes: 30  # bumped from 25 to absorb the matrix
-    # Job-level concurrency has the matrix in scope, so the
-    # group key differs per destination and the slots don't
-    # stomp on each other. Workflow-level concurrency can't
-    # see matrix.* so the key would resolve to the same
-    # empty string for all slots and they'd collide.
-    concurrency:
-      group: ci-${{ github.workflow }}-${{ github.ref }}-${{ matrix.destination.name }}
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     strategy:
       fail-fast: false  # see the per-destination result
       matrix:
