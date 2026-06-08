@@ -21,10 +21,10 @@ document was written; the content is not edited as the code evolves.
 
 > **Internal design docs are not part of this public repo.**
 > Per-feature specs and implementation plans produced during development
-> live in the maintainer's local working tree under `docs/superpowers/`
-> (gitignored). The design rationale is preserved in commit messages
-> and PR descriptions, so removing the directory from the public tree
-> doesn't lose the institutional memory — it just stops shipping
-> internal-thinking documents with the released code. See
-> `docs/maintenance/2026-06-08-github-maintenance-review.md` (item #24)
-> for the policy decision.
+> live in the maintainer's local working tree under `.claude/superpowers/`
+> (gitignored along with the rest of `.claude/`). The design rationale
+> is preserved in commit messages and PR descriptions, so removing the
+> directory from the public tree doesn't lose the institutional memory
+> — it just stops shipping internal-thinking documents with the released
+> code. See `docs/maintenance/2026-06-08-github-maintenance-review.md`
+> (item #24) for the policy decision.
