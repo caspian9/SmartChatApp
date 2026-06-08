@@ -16,9 +16,9 @@ iOS chat client for [OpenClaw Gateway](https://github.com/openclaw/openclaw), wi
 
 ## Requirements
 
-- macOS with **Xcode 15+**
-- iOS **18.0+** deployment target
-- A connected iPhone for device builds (Xcode 15+ uses the CoreDevice framework, not the legacy `lockdownd`)
+- macOS with **Xcode 16.4** (project local) / **Xcode 26.3** (CI to match the OpenClawKit sibling's swift-tools-version 6.2)
+- iOS **18.0** deployment target
+- A connected iPhone for device builds (Xcode 15+ uses the CoreDevice framework, not the legacy `lockdownd`). `make compile-only` works without one.
 - An [OpenClaw Gateway](https://github.com/openclaw/openclaw) instance to connect to
 
 ## Build
@@ -39,10 +39,35 @@ make list-devices
 
 The `Makefile` auto-detects the first connected iPhone via `xcrun devicectl list devices`.
 
+## Sourcing OpenClawKit
+
+`project.yml` declares `OpenClawKit` as a path-linked Swift package (see `packages.OpenClawKit.path` in `project.yml`). This means the local working tree must have OpenClawKit at `../openclaw/apps/shared/OpenClawKit/` relative to the `SmartChatApp/` checkout — they must be siblings:
+
+```
+workspace/
+├── SmartChatApp/   ← this repo
+└── openclaw/       ← OpenClawKit fork
+    └── apps/shared/OpenClawKit/
+```
+
+The CI workflow (`.github/workflows/ci.yml`) clones the fork automatically into `../openclaw` before invoking `xcodegen`, so you don't need to do anything on CI. Locally, clone (or symlink) the fork into the sibling position before running `make build`.
+
+## Versioning
+
+`config/Version.xcconfig` is the source of truth for the human-facing version (`SMARTCHATAPP_MARKETING_VERSION = 0.0.1`). The Apple-mandated `CFBundleVersion` is filled in at build time by `scripts/inject-build-timestamp.sh`:
+
+- **Local:** `git rev-list --count HEAD` (monotonic commit count)
+- **CI:** `$BUILD_NUMBER` env (= `${{ github.run_number }}`)
+- **Default:** `0` (safe for compile-only runs without git)
+
+The script also writes a short git SHA into the non-standard Info.plist key `SMARTCHATAPPGitSHA`. **Settings → About** shows this in Debug builds (`Build 348.abc1234`) for at-a-glance "which commit am I on" feedback; Release builds show the integer only (per App Store Connect rules).
+
+To bump the marketing version: edit `config/Version.xcconfig` (and mirror it in `project.yml` `settings.base.MARKETING_VERSION` as a fallback), then `make build`.
+
 ## Tech Stack
 
 - **SwiftUI** for the UI
-- **[The Composable Architecture](https://github.com/pointfreeco/swift-composable-architecture) 1.9.3** for state management
+- **iOS 17 Observation** (`@Observable` + `@MainActor`) for state management
 - **[XcodeGen](https://github.com/yonaskolb/XcodeGen)** for the project file (also the source of truth for `Info.plist`)
 - **[OpenClawKit](https://github.com/openclaw/openclaw)** (path-linked from `../openclaw`) for the gateway protocol and chat UI
 - **[MarkdownDisplayView](https://github.com/zjc19891106/MarkdownDisplayView)** for streaming markdown rendering
@@ -64,7 +89,7 @@ SmartChatApp/
 │                              # MarkdownStreamManager, CollapseStateCache
 ├── Features/
 │   ├── Chat/                  # SDK chat view (OpenClawChatUI wrapper)
-│   ├── ChatList/              # TCA-driven session list
+│   ├── ChatList/              # Session list (@Observable view model)
 │   ├── Home/                  # Home screen with entry cards
 │   ├── NativeChat/            # Custom native chat (ViewModel, View, BubbleView,
 │   │                          # SessionPickerView, SessionTabBar, ChatInputView)
@@ -110,7 +135,7 @@ When promoting a stub to a real implementation that touches a privacy-protected 
 - [ ] Real implementations for the stubbed node capabilities (camera, photos, contacts, calendar, reminders, talk, canvas, screen)
 - [x] GitHub Actions CI (`.github/workflows/ci.yml`) — real `xcodebuild build` + `xcodebuild test` on `macos-15`
 - [x] Issue and PR templates (`.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.md`)
-- [ ] Test coverage for `NativeChatViewModel` agent event stream handling
+- [x] Test coverage for `NativeChatViewModel` and event-stream handling (9 test files: scroll request, formatter, connection coordinator coalescing, state machine, transport, logger, session key, chat message converter, app logger)
 
 ## Contributing
 
