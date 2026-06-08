@@ -1,0 +1,8 @@
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/caspian9/SmartChatApp/discussions
+    about: Questions and open-ended discussion (when Discussions are enabled).
+  - name: Report a security issue
+    url: https://github.com/caspian9/SmartChatApp/security/advisories/new
+    about: Please report security issues privately, not as a public bug.
+blank_issues_enabled: false
