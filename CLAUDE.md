@@ -227,7 +227,7 @@ SmartChatApp/
 │   ├── Features/
 │   │   ├── Chat/           # ChatView (wraps OpenClawChatView from the SDK)
 │   │   ├── ChatList/       # ChatListFeature, ChatListView
-│   │   ├── Home/           # HomeView, DeviceInfoView, EntryCard
+│   │   ├── Home/           # HomeView, EntryCard
 │   │   ├── NativeChat/     # NativeChatViewModel, NativeChatView, MessageBubbleView,
 │   │   │                     SessionPickerView, SessionTabBar, ChatInputView
 │   │   └── Settings/       # SettingsView, ProfileListView, EditProfileSheet, DiscoveryLogsView
