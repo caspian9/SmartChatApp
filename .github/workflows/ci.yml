@@ -138,6 +138,13 @@ jobs:
       # well-known pointfreeco packages), so the security caveat in
       # the flag's help text does not apply.
       #
+      # GCC_TREAT_WARNINGS_AS_ERRORS=YES turns any compiler warning
+      # into a build failure. Cheap ABI / deprecation catch — the
+      # project is pre-1.0 so the warning surface is small enough
+      # that the gate is mostly a "don't ship a new deprecation"
+      # guard. Per docs/maintenance/2026-06-08-github-maintenance-
+      # review.md item #43.
+      #
       # CI runs the simulator path with CODE_SIGNING_ALLOWED=NO,
       # so the Team ID isn't needed here. The release.yml
       # workflow (tag-driven, runs on .archive) does need it;
@@ -156,6 +163,7 @@ jobs:
             -derivedDataPath build \
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES \
             build
 
       - name: Test (iOS Simulator)
@@ -168,7 +176,8 @@ jobs:
             -destination "platform=iOS Simulator,name=${{ matrix.destination.name }}" \
             -derivedDataPath build \
             -skipMacroValidation \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES
 
       # Upload the raw Xcode test report as a workflow artifact
       # so a future debugging session can open it in Xcode and
