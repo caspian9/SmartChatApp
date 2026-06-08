@@ -614,6 +614,49 @@ item references the section number above for context.
             actual legal copyright holder. Done 2026-06-08 (840b21a — placeholder `<Your Name or Company>` added for the user to fill in).
 - [ ] **30** — `gitleaks detect` sweep.
 
+### Going-public follow-up: PII in git history
+
+The HEAD of `main` is **clean of PII** (verified
+`git grep -lE "Hai's iPhone" HEAD -- docs/` returns 0 hits;
+verified `git ls-files` does not contain `.claude/` or
+`docs/superpowers/`). However, **`git log -p` still contains
+the original PII values** in commits that predate the
+2026-06-08 cleanup batch (notably the
+`Hai's iPhone` / `caspian9` mentions in the early versions
+of this maintenance review, and any personal references in
+the original `docs/superpowers/` content that was
+subsequently untracked).
+
+**Decision: do NOT rewrite history now.** Three options
+were on the table:
+
+- (A) Accept history as-is. HEAD is clean; only
+  `git log -p` exposes the old values. Privacy cost: low
+  for a private single-maintainer repo, but inherits any
+  future public release.
+- (B) Rewrite history today (via `git filter-repo` or
+  `bfg`). Privacy cost: zero. **Cost**: every commit SHA
+  changes; all commit references in markdown / runbooks
+  break; `git push --force` overwrites the remote history
+  (any external clone / GitHub fork / backup of the old
+  history still has the PII); every contributor must
+  re-clone.
+- (C) **Chosen.** Defer the rewrite to the next "big
+  version" release. Until then, the repo is private, so
+  history exposure is local-only. At the next major
+  release, do a single coordinated `git filter-repo`
+  pass + force-push right before flipping the repo to
+  public. After that, all future history is PII-clean by
+  construction (the audit above guarantees it).
+
+The trigger for option (C) → executing the rewrite is the
+release of `v1.0.0` (or whichever is the first public tag).
+At that point: clone the repo into a fresh worktree, run
+`git filter-repo --invert-paths --path docs/superpowers/
+--path .claude/` (to also strip the .claude/ entries that
+ever snuck in), `git push --force`, and update any
+in-repo commit references that no longer resolve.
+
 ---
 
 ## Summary
