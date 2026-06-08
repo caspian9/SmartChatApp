@@ -617,45 +617,61 @@ item references the section number above for context.
 ### Going-public follow-up: PII in git history
 
 The HEAD of `main` is **clean of PII** (verified
-`git grep -lE "Hai's iPhone" HEAD -- docs/` returns 0 hits;
-verified `git ls-files` does not contain `.claude/` or
-`docs/superpowers/`). However, **`git log -p` still contains
-the original PII values** in commits that predate the
-2026-06-08 cleanup batch (notably the
-`Hai's iPhone` / `caspian9` mentions in the early versions
-of this maintenance review, and any personal references in
-the original `docs/superpowers/` content that was
-subsequently untracked).
+`git grep -lE 'personal information' HEAD -- docs/`
+returns 0 hits; verified `git ls-files` does not contain
+`.claude/` or `docs/superpowers/`). However,
+**`git log -p` still contains the original PII values**
+in commits that predate the 2026-06-08 cleanup batch
+(notably the literal personal-information mentions in
+the early versions of this maintenance review, and any
+personal references in the original `docs/superpowers/`
+content that was subsequently untracked).
 
-**Decision: do NOT rewrite history now.** Three options
-were on the table:
+**Decision: rewrite history now (Option B).** At the time
+this review was written, the plan was to defer to the
+next "big version" release (Option C). The repo went
+public before that release landed, so the rewrite was
+done immediately before the public flip instead. The
+two paths are functionally equivalent — both end with a
+filter-repo + force-push right before public visibility
+— they only differ on timing relative to a tagged
+release.
+
+The other options on the table, for reference:
 
 - (A) Accept history as-is. HEAD is clean; only
   `git log -p` exposes the old values. Privacy cost: low
   for a private single-maintainer repo, but inherits any
   future public release.
-- (B) Rewrite history today (via `git filter-repo` or
-  `bfg`). Privacy cost: zero. **Cost**: every commit SHA
-  changes; all commit references in markdown / runbooks
-  break; `git push --force` overwrites the remote history
-  (any external clone / GitHub fork / backup of the old
-  history still has the PII); every contributor must
-  re-clone.
-- (C) **Chosen.** Defer the rewrite to the next "big
-  version" release. Until then, the repo is private, so
-  history exposure is local-only. At the next major
-  release, do a single coordinated `git filter-repo`
-  pass + force-push right before flipping the repo to
-  public. After that, all future history is PII-clean by
-  construction (the audit above guarantees it).
+- (C) Defer the rewrite to the next "big version" release.
+  Not chosen because the public flip happened before
+  the next release was cut.
 
-The trigger for option (C) → executing the rewrite is the
-release of `v1.0.0` (or whichever is the first public tag).
-At that point: clone the repo into a fresh worktree, run
-`git filter-repo --invert-paths --path docs/superpowers/
---path .claude/` (to also strip the .claude/ entries that
-ever snuck in), `git push --force`, and update any
-in-repo commit references that no longer resolve.
+(B) is what was done. The cost paid was: every commit
+SHA changes, all commit references in markdown / runbooks
+break, `git push --force` overwrites the remote history.
+For this single-maintainer private repo (no external
+clones, no GitHub forks, no backup outside of
+`~/workspace/bak/`), this is acceptable. After the rewrite,
+all future history is PII-clean by construction (the
+audit above guarantees it).
+
+The exact filter-repo invocation that was used:
+
+```
+git filter-repo --force \
+  --invert-paths \
+  --path docs/superpowers/ \
+  --path-glob '.claude/**' \
+  --path CLAUDE.md
+```
+
+This strips three categories of paths from every commit:
+- `docs/superpowers/` — the internal design + plan docs
+- `.claude/**` — anything that ever landed in `.claude/`
+  (CLAUDE.md, settings, agent notes)
+- `CLAUDE.md` (root) — the AI-assistant prompt that lived
+  at the repo root before being moved to `.claude/`
 
 ---
 
