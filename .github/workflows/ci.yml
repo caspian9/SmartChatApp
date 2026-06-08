@@ -26,19 +26,28 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 25
 
+    # OPENCLAW_REPO is "owner/name" of the OpenClawKit fork to clone
+    # as a sibling before xcodegen runs. Re-pointable via repo or org
+    # variable (Settings → Secrets and variables → Actions → Variables);
+    # defaults to the upstream fork so existing behavior is preserved.
+    env:
+      OPENCLAW_REPO: ${{ vars.OPENCLAW_REPO || 'caspian9/openclaw' }}
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
 
       # project.yml references OpenClawKit as a path-linked package
       # (../openclaw/apps/shared/OpenClawKit). Check out the openclaw
       # fork as a sibling so the relative path resolves. actions/checkout
       # refuses paths outside the workspace, so we git clone directly
-      # using the runner's GITHUB_TOKEN.
+      # using the runner's GITHUB_TOKEN. Owner is parameterized via the
+      # OPENCLAW_REPO env (default: caspian9/openclaw) so fork PRs can
+      # re-point to a different fork without editing the workflow file.
       - name: Clone OpenClaw sibling
         run: |
           git clone \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/caspian9/openclaw.git" \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${OPENCLAW_REPO}.git" \
             ../openclaw
 
       # The openclaw fork and its ElevenLabsKit dependency declare
@@ -47,7 +56,7 @@ jobs:
       # bundles Swift 6.2+ so xcodebuild can resolve the full
       # dependency graph.
       - name: Set up Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1 (= v1.7.0)
         with:
           xcode-version: '26.3'
 
@@ -70,14 +79,34 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
         run: bash scripts/inject-build-timestamp.sh
 
+      # Cache SwiftPM artifacts keyed on Package.resolved. Subsequent
+      # PRs that don't touch the manifest skip the cold-start (~60-90s
+      # saved on iOS builds). Cache is restored BEFORE the clear step
+      # below; if the manifest hash matches a previous run, the clear
+      # is skipped via the cache-hit output gate.
+      - name: Cache SwiftPM artifacts
+        id: cache
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a  # v4.1.2
+        with:
+          path: |
+            build/SourcePackages
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
       # Clear any stale SwiftPM artifacts left by previous jobs on this
-      # runner. The TCA / swift-perception / swift-case-paths macro
-      # plugins are sensitive to having a half-built cache: when their
-      # .build directories exist but the macro executable wasn't produced
-      # in the current toolchain, xcodebuild reports "Macro ... must be
-      # enabled before it can be used". A clean source-packages checkout
-      # is the only reliable fix.
-      - name: Clear stale SwiftPM artifacts
+      # runner, but ONLY when the cache step above didn't restore a
+      # matching manifest hash. The TCA / swift-perception / swift-case-
+      # paths macro plugins are sensitive to having a half-built cache:
+      # when their .build directories exist but the macro executable
+      # wasn't produced in the current toolchain, xcodebuild reports
+      # "Macro ... must be enabled before it can be used". A clean
+      # source-packages checkout is the only reliable fix — but only
+      # when the manifest actually changed.
+      - name: Clear stale SwiftPM artifacts (only when manifest changed)
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           rm -rf build/SourcePackages
           rm -rf ~/Library/Caches/org.swift.swiftpm
