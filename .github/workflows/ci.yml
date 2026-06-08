@@ -17,14 +17,24 @@ on:
 # pull_request events so a push to main never yanks a main-branch
 # build mid-flight (pushes serialize naturally on the group key).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Matrix dimension is part of the group key so two concurrent
+  # PRs each spin up their own matrix slots without stomping.
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ matrix.destination.name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
-    name: Build & Test
+    name: Build & Test (${{ matrix.destination.label }})
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 30  # bumped from 25 to absorb the matrix
+    strategy:
+      fail-fast: false  # see the per-destination result
+      matrix:
+        destination:
+          - name: "iPhone 17 Pro"
+            label: "iOS 18 (latest)"
+          - name: "iPhone 16"
+            label: "iOS 18 (penultimate)"
 
     # OPENCLAW_REPO is "owner/name" of the OpenClawKit fork to clone
     # as a sibling before xcodegen runs. Re-pointable via repo or org
@@ -136,7 +146,7 @@ jobs:
           set -o pipefail
           xcodebuild build \
             -scheme SmartChatApp \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+            -destination "platform=iOS Simulator,name=${{ matrix.destination.name }}" \
             -derivedDataPath build \
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
@@ -149,7 +159,20 @@ jobs:
           set -o pipefail
           xcodebuild test \
             -scheme SmartChatApp \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+            -destination "platform=iOS Simulator,name=${{ matrix.destination.name }}" \
             -derivedDataPath build \
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO
+
+      # Upload the raw Xcode test report as a workflow artifact
+      # so a future debugging session can open it in Xcode and
+      # see per-test results, screenshots, and console output.
+      # 30-day retention matches release.yml's .xcarchive.
+      - name: Upload .xcresult
+        if: always()  # upload on test failure too — that's when you need it most
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+        with:
+          name: SmartChatApp-xcresult-${{ matrix.destination.name }}
+          path: build/Logs/Test/*.xcresult
+          if-no-files-found: warn
+          retention-days: 30
