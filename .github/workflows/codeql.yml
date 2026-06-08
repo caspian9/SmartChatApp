@@ -21,11 +21,29 @@ jobs:
   analyze:
     name: Analyze (Swift)
     runs-on: macos-15
-    timeout-minutes: 20
+    # Bumped from 20 to absorb the xcodebuild + codeql analyze
+    # budget together. The build preflight alone is ~5-7 min on
+    # the macos-15 runner; analyze is another 3-5 min.
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+
+      # The openclaw fork and its ElevenLabsKit dependency
+      # declare swift-tools-version: 6.2, so the default
+      # macos-15 Xcode 16.4 (Swift 6.1) is too old to
+      # resolve the dependency graph. Same as ci.yml.
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1 (= v1.7.0)
+        with:
+          xcode-version: '26.3'
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
 
       # CodeQL's official Swift support is still in beta (as of
       # 2026). The 'security-and-quality' query suite is the
@@ -37,6 +55,25 @@ jobs:
         with:
           languages: swift
           queries: security-and-quality
+
+      # CodeQL's Swift extractor hooks into the Swift compiler
+      # during a real build. Without this step the analyze
+      # step fails with 'CodeQL detected code written in
+      # Swift but could not process any of it'. The
+      # 'generic/platform=iOS' destination + CODE_SIGNING_ALLOWED=NO
+      # matches the simulator path in ci.yml — the produced
+      # .app is discarded; CodeQL just needs the compiler
+      # to run.
+      - name: Build (for CodeQL extraction)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -scheme SmartChatApp \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            build
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
