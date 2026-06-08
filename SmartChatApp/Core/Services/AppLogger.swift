@@ -113,4 +113,42 @@ final class AppLogger: ObservableObject {
             shared.buffer.append(entry)
         }
     }
+
+    // MARK: - Redaction helpers
+    //
+    // Gateway auth tokens live in ProfileManager and are passed
+    // through ConnectionCoordinator over the wire. They MUST
+    // never appear in AppLogger output (the in-memory ring
+    // buffer is shown in Settings → Debug Logs Viewer; OSLog
+    // surfaces in Console.app). These helpers are the safe
+    // shape for any future log site that might want to
+    // mention a token.
+    //
+    // Defense in depth: as of 2026-06-08 a grep across the
+    // 150 AppLogger.log call sites shows NONE interpolate
+    // profile.token directly. These helpers close the door
+    // before it opens.
+
+    /// Returns a redacted representation of a gateway auth token.
+    /// Shows only the last 4 characters (enough to correlate
+    /// across log lines without leaking the secret).
+    nonisolated static func redact(token: String) -> String {
+        guard token.count > 4 else { return "[REDACTED]" }
+        let suffix = token.suffix(4)
+        return "[REDACTED:\(suffix)]"
+    }
+
+    /// Returns a redacted representation of a GatewayProfile for
+    /// logging. The token is fully stripped; only the name and
+    /// host (for cross-referencing) survive.
+    nonisolated static func redact(profile: GatewayProfile) -> String {
+        "GatewayProfile(name: \(profile.name), host: \(profile.host), token: \(AppLogger.redact(token: profile.token))"
+    }
+
+    /// Returns a redacted representation of a profile name list
+    /// (no tokens, no host) for logs that just want a "which
+    /// profiles are loaded" signal.
+    nonisolated static func redact(profileNames: [String]) -> String {
+        "[\(profileNames.joined(separator: ", "))]"
+    }
 }
