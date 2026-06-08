@@ -1,0 +1,35 @@
+# CODEOWNERS — GitHub auto-assigns these folks to PRs.
+# Syntax: path @owner (one per line; last match wins).
+# Wildcards: * matches any, ** matches across directories.
+
+# Default: every change needs a review from the repo owner.
+# `caspian9` is the GitHub username (also configured in
+# .github/workflows/ci.yml's OPENCLAW_REPO env). When a
+# second maintainer joins, add their handle here and use
+# @caspian9 @newmaintainer in the rules below.
+*                       @caspian9
+
+# Tighter rules for the build/signing/version layer — these
+# files control Apple Developer account access, code-signing
+# identity, and the Apple-mandated CFBundleVersion. Review
+# should always look at these even if the change is a
+# one-line edit.
+config/Signing.xcconfig                @caspian9
+config/LocalSigning.xcconfig.example   @caspian9
+config/Version.xcconfig                @caspian9
+config/LocalVersion.xcconfig.example   @caspian9
+config/ExportOptions.plist             @caspian9
+scripts/ios-team-id.sh                 @caspian9
+scripts/ios-configure-signing.sh       @caspian9
+scripts/inject-build-timestamp.sh      @caspian9
+scripts/bump-version.sh                @caspian9
+
+# CI workflows touch token scopes, runner images, and
+# artifact retention — also need a second look.
+.github/workflows/                    @caspian9
+
+# CLAUDE.md / LICENSE / CHANGELOG are project-level governance
+# and shouldn't get merged without the owner reading them.
+CLAUDE.md                              @caspian9
+LICENSE                                @caspian9
+CHANGELOG.md                           @caspian9
