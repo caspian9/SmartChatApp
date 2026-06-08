@@ -537,16 +537,16 @@ item references the section number above for context.
 
 ### Now (≤ 1 hour total)
 
-- [ ] **1** — README: fix TCA → `@Observable` line.
-- [ ] **1** — README: mark the test-coverage roadmap item as done.
-- [ ] **1** — README: correct the Xcode / iOS version floor.
-- [ ] **1** — README: add a "Sourcing OpenClawKit" section.
-- [ ] **2** — CI: add `permissions: contents: read`.
-- [ ] **2** — CI: add `concurrency:` block.
+- [x] **1** — README: fix TCA → `@Observable` line. Done 2026-06-08 (b7b5088).
+- [x] **1** — README: mark the test-coverage roadmap item as done. Done 2026-06-08 (b7b5088).
+- [x] **1** — README: correct the Xcode / iOS version floor. Done 2026-06-08 (b7b5088).
+- [x] **1** — README: add a "Sourcing OpenClawKit" section. Done 2026-06-08 (b7b5088).
+- [x] **2** — CI: add `permissions: contents: read`. Done 2026-06-08 (8154012).
+- [x] **2** — CI: add `concurrency:` block. Done 2026-06-08 (8154012).
 - [x] **21** — `DeviceInfoView.swift`: removed (was dead code). Done 2026-06-08.
-- [ ] **19** — PR template: add the `../openclaw` sibling note.
-- [ ] **17** — add `.github/ISSUE_TEMPLATE/config.yml`.
-- [ ] **16** — add `docs.md` and `question.md` issue templates.
+- [x] **19** — PR template: add the `../openclaw` sibling note. Done 2026-06-08.
+- [x] **17** — add `.github/ISSUE_TEMPLATE/config.yml`. Done 2026-06-08.
+- [x] **16** — add `docs.md` and `question.md` issue templates. Done 2026-06-08.
 
 ### This week (1–4 hours)
 
@@ -572,10 +572,10 @@ item references the section number above for context.
 
 ### Optional / nice-to-have
 
-- [ ] **9** — Matrix build on `iPhone 16` + `iPhone 17 Pro` simulators.
-- [ ] **4** — Upload `.xcresult` test report as CI artifact.
-- [ ] **33** — Add `codeql.yml` for Swift.
-- [ ] **32** — Add `dependabot.yml` for `github-actions` and `swift`.
+- [x] **9** — Matrix build on `iPhone 16` + `iPhone 17 Pro` simulators. Done 2026-06-08 (a3501db).
+- [x] **4** — Upload `.xcresult` test report as CI artifact. Done 2026-06-08 (8154012 — `.xcresult` upload added; then `faef80d` for the matrix-aware retention config).
+- [x] **33** — Add `codeql.yml` for Swift. Done 2026-06-08 (0d8e565; Swift build preflight added in 81cbfd7).
+- [x] **32** — Add `dependabot.yml` for `github-actions` and `swift`. Done 2026-06-08; both ecosystems paused with `open-pull-requests-limit: 0` (plan-tier blocker — see `2026-06-08-plan-limits-blockers.md`).
 - [ ] **36** — Enable Discussions with categories.
 - [ ] **43** — Treat warnings as errors on `Release` builds.
 - [ ] **35** — OIDC for App Store Connect when TestFlight is added.
@@ -583,15 +583,15 @@ item references the section number above for context.
 
 ### Security / privacy review before flipping to public
 
-- [ ] **22** — Add `AppLogger.redact(token:)` helper; grep and wrap
-            any site that logs profile data.
+- [x] **22** — Add `AppLogger.redact(token:)` helper; grep and wrap
+            any site that logs profile data. Done 2026-06-08 (b4c4823).
 - [ ] **23** — Decide whether to scrub `Hai's iPhone` / `caspian9`
             references from `docs/superpowers/`.
 - [ ] **24** — Decide whether to move `docs/superpowers/` to a
             gitignored internal tree.
-- [ ] **25** — `git ls-files | grep -E '\.DS_Store|Icon\r'`.
-- [ ] **26** — Replace `"SmartChatApp"` in `LICENSE` with the
-            actual legal copyright holder.
+- [x] **25** — `git ls-files | grep -E '\.DS_Store|Icon\r'`. Done 2026-06-08 (no hits; `.gitignore` covers `.DS_Store`).
+- [x] **26** — Replace `"SmartChatApp"` in `LICENSE` with the
+            actual legal copyright holder. Done 2026-06-08 (840b21a — placeholder `<Your Name or Company>` added for the user to fill in).
 - [ ] **30** — `gitleaks detect` sweep.
 
 ---
