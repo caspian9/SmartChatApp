@@ -1,0 +1,44 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday 06:00 UTC scan so old code is re-checked
+    # against new queries. The per-push runs are the canonical
+    # gating scans; this catches zero-day queries landing mid-week.
+    - cron: "0 6 * * 1"
+
+permissions:
+  # CodeQL needs read-only access to the repo for checkout +
+  # write access to the Security tab for the alerts view.
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (Swift)
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+
+      # CodeQL's official Swift support is still in beta (as of
+      # 2026). The 'security-and-quality' query suite is the
+      # right default — it surfaces the most common bug classes
+      # (injection, path traversal, weak crypto) without the
+      # noise of the 'security-experimental' pack.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: swift
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:swift"
