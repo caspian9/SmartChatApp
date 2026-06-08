@@ -63,6 +63,12 @@ Carthage/Carthage.resolved
 .env.*.local
 *.xcconfig
 !default.xcconfig
+# SmartChatApp iOS signing layer (committed to repo):
+!config/Signing.xcconfig
+!config/Tests.xcconfig
+!config/LocalSigning.xcconfig.example
+# Auto-generated local override (NEVER commit):
+config/.local-signing.xcconfig
 
 # macOS
 .DS_Store
