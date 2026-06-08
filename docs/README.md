@@ -19,14 +19,12 @@ in this directory, trust these.
 Historical and per-feature design work. The filename date is when the
 document was written; the content is not edited as the code evolves.
 
-- [`spec/`](spec/) — original and ad-hoc design docs. Files here may
-  predate the current code by a wide margin and are preserved as a
-  record of original design intent. See the **Status** notice at the
-  top of each file.
-- [`superpowers/specs/`](superpowers/specs/) — design specs produced
-  by the `brainstorming` skill during feature planning.
-- [`superpowers/plans/`](superpowers/plans/) — implementation plans
-  produced by the `writing-plans` skill.
-- [`superpowers/README.md`](superpowers/README.md) — internal-docs
-  policy: what's in this tree, what personal info gets scrubbed
-  before going public, and what to keep out of new design docs.
+> **Internal design docs are not part of this public repo.**
+> Per-feature specs and implementation plans produced during development
+> live in the maintainer's local working tree under `docs/superpowers/`
+> (gitignored). The design rationale is preserved in commit messages
+> and PR descriptions, so removing the directory from the public tree
+> doesn't lose the institutional memory — it just stops shipping
+> internal-thinking documents with the released code. See
+> `docs/maintenance/2026-06-08-github-maintenance-review.md` (item #24)
+> for the policy decision.

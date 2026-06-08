@@ -258,5 +258,10 @@ All gateway connections use `ProfileManager` and `GatewayProfile`:
 
 ## Documentation
 
-- Spec: `docs/spec/2026-05-08-smartchatapp-design.md`
-- Plan: `docs/superpowers/plans/2026-05-08-smartchatapp-implementation.md`
+Internal design docs and implementation plans (the original spec +
+the per-feature design docs) are not part of the public repo —
+they live in the maintainer's local working tree under
+`docs/superpowers/` (gitignored). The design rationale is
+preserved in commit messages and PR descriptions; see
+`docs/maintenance/2026-06-08-github-maintenance-review.md`
+(item #24) for the policy decision.

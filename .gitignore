@@ -123,3 +123,10 @@ Build/
 
 # Claude Code
 .claude/
+
+# Internal design docs (untracked after 2026-06-08 — see
+# docs/maintenance/2026-06-08-github-maintenance-review.md item
+# #24). Kept on disk for the maintainer's own reference but no
+# longer part of the public repo. The directory still appears
+# in `git status` as untracked-but-ignored.
+docs/superpowers/
