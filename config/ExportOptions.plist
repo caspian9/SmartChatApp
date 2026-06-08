@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>development</string>
+    <!--
+      Other valid values:
+        - "app-store"       (TestFlight / App Store Connect upload)
+        - "ad-hoc"          (limited device list, no App Store)
+        - "development"     (any device the team can install to)
+        - "enterprise"      (in-house distribution; Enterprise team only)
+      For sideload-only distribution, "development" is the
+      safest default — installs without a UDID in the profile.
+    -->
+
+    <!--
+      The team ID is resolved at build time by scripts/ios-team-id.sh
+      (or overridden via the IOS_DEVELOPMENT_TEAM env on CI). The
+      placeholder here is the same string xcodebuild would write
+      if you let it auto-fill; on the command line the file is
+      passed to -exportOptionsPlist and xcodebuild reads
+      signingStyle + provisioningStyle from the project's
+      xcconfig chain.
+    -->
+    <key>teamID</key>
+    <string>$(SMARTCHATAPP_DEVELOPMENT_TEAM)</string>
+
+    <key>uploadSymbols</key>
+    <true/>
+    <key>uploadBitcode</key>
+    <false/>
+
+    <!--
+      Signing style. Matches config/Signing.xcconfig which sets
+      CODE_SIGN_STYLE = Automatic. For App Store / TestFlight
+      builds switch to "manual" and provide
+      provisioningProfiles.<bundle-id>.{name,UUID} below.
+    -->
+    <key>signingStyle</key>
+    <string>automatic</string>
+
+    <!--
+      Compile-time bitcode is no longer supported by Xcode 14+.
+      Leave off.
+    -->
+</dict>
+</plist>
