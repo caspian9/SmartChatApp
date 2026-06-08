@@ -378,7 +378,10 @@ shouldn't ship.
 
 24. **Internal design docs** (`docs/superpowers/specs/...`,
     `docs/superpowers/plans/...`) are *internal thinking* documents.
-    They mention `Hai's iPhone`, `caspian9`, etc. Decide whether to:
+    They mention **personal information** (device names, the
+    maintainer's GitHub username, etc.). The literal values are
+    PII and would not be appropriate in a public tree. Decide
+    whether to:
     - keep `docs/` public and scrub the personal references, or
     - move them to a `docs-internal/` (gitignored) tree, or
     - leave them; they read as a development journal, not customer docs.
@@ -388,7 +391,6 @@ shouldn't ship.
     for the rule. The original design doc text remains in git
     history (every spec/plan was committed before being untracked)
     so the rationale is preserved in commit messages.
-    `caspian9` are still searchable in plaintext.
 
 ### Repo-level
 
@@ -589,13 +591,15 @@ item references the section number above for context.
 - [x] **22** — Add `AppLogger.redact(token:)` helper; grep and wrap
             any site that logs profile data. Done 2026-06-08 (b4c4823).
 - [x] **23** — Personal references scrubbed (or scoped away).
-            Done 2026-06-08: the only `Hai's iPhone` mention in a
-            public document (CHANGELOG.md:46) was redacted in
-            commit `7a5920d`. The remaining `Hai's iPhone` /
-            `caspian9` mentions live in `docs/superpowers/`,
-            which is now gitignored (item #24) — so the scrub
-            is moot: the directory is no longer part of the
-            public tree.
+            Done 2026-06-08: the only literal **personal
+            information** mention in a public document
+            (CHANGELOG.md:46) was redacted in commit `7a5920d`.
+            The remaining personal information references live
+            in `docs/superpowers/`, which is now gitignored
+            (item #24) — so the scrub is moot: the directory is
+            no longer part of the public tree. This file (the
+            maintenance review) also scrubbed its own narrative
+            references to PII in the same batch.
 - [x] **24** — Move `docs/superpowers/` to a gitignored
             internal tree. Done 2026-06-08 (`git rm --cached -r
             docs/superpowers/` + `.gitignore` rule; directory kept
