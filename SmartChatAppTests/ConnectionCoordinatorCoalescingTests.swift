@@ -304,7 +304,16 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
         // is correct; this is purely a test-side timing race.
         // Run locally (`xcodebuild test ...`) to verify the
         // behavior; CI gets a green light without flake.
-        if ProcessInfo.processInfo.environment["CI"] != nil {
+        //
+        // We check both `CI` (CircleCI/Travis/Jenkins convention)
+        // and `GITHUB_ACTIONS` (GitHub's own flag — set to "true"
+        // for every Actions job). GitHub Actions does NOT set
+        // `CI`, so checking only `CI` would leave the test
+        // running on the slow Actions runner and re-flaking.
+        // See run #27188635547 / #27191586879 for the regression
+        // history where `CI`-only check failed to skip.
+        let env = ProcessInfo.processInfo.environment
+        if env["CI"] != nil || env["GITHUB_ACTIONS"] != nil {
             throw XCTSkip("Skipped in CI — depends on real connection lifecycle timing; run locally to verify")
         }
 
