@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       # project.yml path-links OpenClawKit from
       # ../openclaw/apps/shared/OpenClawKit, and xcodegen
@@ -72,7 +72,7 @@ jobs:
       # cache so each workflow can have its own warm state.
       - name: Cache SwiftPM artifacts
         id: cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: |
             build/SourcePackages
@@ -100,10 +100,7 @@ jobs:
       # (injection, path traversal, weak crypto) without the
       # noise of the 'security-experimental' pack.
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: swift
-          queries: security-and-quality
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4
 
       # CodeQL's Swift extractor hooks into the Swift compiler
       # during a real build. Without this step the analyze
@@ -125,6 +122,6 @@ jobs:
             build
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4
         with:
           category: "/language:swift"
