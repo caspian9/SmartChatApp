@@ -21,10 +21,14 @@ jobs:
   analyze:
     name: Analyze (Swift)
     runs-on: macos-15
-    # Bumped from 20 to absorb the xcodebuild + codeql analyze
-    # budget together. The build preflight alone is ~5-7 min on
-    # the macos-15 runner; analyze is another 3-5 min.
-    timeout-minutes: 30
+    # Bumped 20 → 30 → 60 across the maintenance windows. The
+    # cold-cache build + codeql analyze budget on the macos-15
+    # runner is ~25-30 min combined. The first run after a
+    # workflow edit can tip past 30 (we hit 30:46 in run
+    # #36 / 27183042124), so 60 leaves headroom for a worst-
+    # case cold cache + slow runner. Subsequent warm-cache
+    # runs are 5-10 min total.
+    timeout-minutes: 60
 
     # OPENCLAW_REPO is "owner/name" of the OpenClawKit fork to
     # clone as a sibling before xcodegen runs. Re-pointable via
@@ -110,12 +114,21 @@ jobs:
       # matches the simulator path in ci.yml — the produced
       # .app is discarded; CodeQL just needs the compiler
       # to run.
+      # Destination was 'generic/platform=iOS' previously; we
+      # switched to the simulator destination because (a)
+      # 'generic/platform=iOS' compiles the device slice which
+      # is significantly slower than the simulator slice
+      # (consistent 30+ min cold builds that bumped into the
+      # 30-min job timeout — see run #36 / 27183042124), and
+      # (b) CodeQL only cares that the Swift compiler runs to
+      # extract the AST — it does not need a device slice.
+      # The .app produced is discarded.
       - name: Build (for CodeQL extraction)
         run: |
           set -o pipefail
           xcodebuild build \
             -scheme SmartChatApp \
-            -destination 'generic/platform=iOS' \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
             -derivedDataPath build \
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
