@@ -335,6 +335,7 @@ actor ConnectionCoordinator {
     /// `internal` so tests can drive the handler directly (the SDK
     /// callback path can't be exercised without a real WebSocket).
     func handleTransportDisconnect(role: GatewayRole, reason: String, generation: Int) async {
+        print("[DEBUG] handleTransportDisconnect role=\(role.rawValue) reason=\(reason) gen=\(generation) connectGen=\(connectGeneration) userInit=\(userInitiatedDisconnect)")
         if userInitiatedDisconnect {
             AppLogger.log("\(role.rawValue) onDisconnected suppressed (user-initiated): \(reason)", category: .network)
             return
