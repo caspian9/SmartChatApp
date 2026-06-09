@@ -39,17 +39,18 @@ jobs:
         destination:
           - name: "iPhone 17 Pro"
             label: "iOS 18 (latest)"
-          # iPhone 16e (not iPhone 16) — the iOS 26 simulator
-          # runtime shipped with Xcode 26.3 on the macos-15 runner
-          # dropped the iPhone 16 device template. iPhone 16e is
-          # the cheapest 16-generation device, present in the
-          # GitHub-hosted runner's simulator catalog, and uses
-          # the same A18 chip class as iPhone 16. See run
-          # #27193610858 for the regression history. The label
-          # is unchanged so branch protection's required check
+          # iPhone 17 (non-Pro) is the second matrix slot. Earlier
+          # iterations used iPhone 16 (run #27193610858 — dropped
+          # from the macos-15 runner's simulator catalog after
+          # iOS 26 SDK) and iPhone 16e (run #27194034590 — also
+          # absent from the runner). iPhone 17 is the 2025 base
+          # model, shares the A19 chip class with iPhone 17 Pro,
+          # and is in the same simulator catalog we already use
+          # as the "latest" slot. The label stays "iOS 18
+          # (penultimate)" so branch protection's required check
           # name (Build & Test (iOS 18 (penultimate))) keeps
           # matching.
-          - name: "iPhone 16e"
+          - name: "iPhone 17"
             label: "iOS 18 (penultimate)"
 
     # OPENCLAW_REPO is "owner/name" of the OpenClawKit fork to clone
