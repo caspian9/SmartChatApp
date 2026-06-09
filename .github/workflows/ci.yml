@@ -102,7 +102,7 @@ jobs:
       # is skipped via the cache-hit output gate.
       - name: Cache SwiftPM artifacts
         id: cache
-        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a  # v4.1.2
+        uses: actions/cache@0057852bfaa8a4b5e61c1c93df3e57a89d0c0db9  # v4.3.0
         with:
           path: |
             build/SourcePackages
