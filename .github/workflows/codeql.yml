@@ -26,9 +26,28 @@ jobs:
     # the macos-15 runner; analyze is another 3-5 min.
     timeout-minutes: 30
 
+    # OPENCLAW_REPO is "owner/name" of the OpenClawKit fork to
+    # clone as a sibling before xcodegen runs. Re-pointable via
+    # repo or org variable (Settings → Secrets and variables →
+    # Actions → Variables); defaults to the upstream fork so
+    # existing behavior is preserved. Mirrors ci.yml.
+    env:
+      OPENCLAW_REPO: ${{ vars.OPENCLAW_REPO || 'caspian9/openclaw' }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+
+      # project.yml path-links OpenClawKit from
+      # ../openclaw/apps/shared/OpenClawKit, and xcodegen
+      # validation runs in the very next step. Without this
+      # clone, xcodegen fails with "Invalid local package
+      # 'OpenClawKit'". Same step as ci.yml.
+      - name: Clone OpenClaw sibling
+        run: |
+          git clone \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${OPENCLAW_REPO}.git" \
+            ../openclaw
 
       # The openclaw fork and its ElevenLabsKit dependency
       # declare swift-tools-version: 6.2, so the default
