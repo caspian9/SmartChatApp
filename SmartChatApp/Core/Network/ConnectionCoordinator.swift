@@ -346,6 +346,39 @@ actor ConnectionCoordinator {
         await MainActor.run { state.setReconnecting(reason: reason) }
     }
 
+    /// Symmetric counterpart to `handleTransportDisconnect`. The SDK fires
+    /// `onConnected` both on the initial connect AND on every successful
+    /// reconnect (after `hasNotifiedConnected` is reset by
+    /// `handleChannelDisconnected`). Without this handler, a reconnect
+    /// leaves the UI stuck on `.reconnecting` forever even though the
+    /// WebSocket is actually up — `state.phase` is only updated by our
+    /// own `connectOperator` success path, which doesn't run when the
+    /// SDK's internal watchdog reconnects on its own.
+    ///
+    /// Same two guards as `handleTransportDisconnect`:
+    /// 1. **User-initiated disconnect**: if the user clicked "Disconnect",
+    ///    `userInitiatedDisconnect` is true and we must not clobber the
+    ///    `.disconnected` state with `.connected`.
+    /// 2. **Stale generation**: a previous connect's `onConnected` may
+    ///    fire after the user switched profiles / reconnected. The
+    ///    generation guard prevents the old connect from marking the
+    ///    new profile as connected.
+    func handleTransportConnect(role: GatewayRole, generation: Int) async {
+        if userInitiatedDisconnect {
+            AppLogger.log("\(role.rawValue) onConnected suppressed (user-initiated)", category: .network)
+            return
+        }
+        if generation != connectGeneration {
+            AppLogger.log("\(role.rawValue) onConnected suppressed (stale generation=\(generation), current=\(connectGeneration))", category: .network)
+            return
+        }
+        let deviceIdentity = DeviceIdentityStore.loadOrCreate()
+        let deviceName = deviceIdentity.deviceId.prefix(16).description
+        await MainActor.run {
+            state.setConnected(deviceName: deviceName)
+        }
+    }
+
     func createSession(agentId: String? = nil, customKey: String? = nil) async throws -> String {
         var params: [String: String] = [:]
         if let agentId, !agentId.isEmpty { params["agentId"] = agentId }
@@ -410,6 +443,7 @@ actor ConnectionCoordinator {
                 sessionBox: sessionBox,
                 onConnected: {
                     AppLogger.log("Operator connected to gateway", category: .network)
+                    Task { await self.handleTransportConnect(role: .operator, generation: generation) }
                 },
                 onDisconnected: { reason in
                     AppLogger.log("Operator disconnected: \(reason)", category: .network)
@@ -557,6 +591,7 @@ actor ConnectionCoordinator {
                 sessionBox: sessionBox,
                 onConnected: {
                     AppLogger.log("Node connected to gateway", category: .network)
+                    Task { await self.handleTransportConnect(role: .node, generation: generation) }
                 },
                 onDisconnected: { reason in
                     AppLogger.log("Node disconnected: \(reason)", category: .network)
