@@ -31,13 +31,11 @@ final class ConnectionState {
     static let shared = ConnectionState()
 
     func setConnecting(role: GatewayRole) {
-        print("[DEBUG] setConnecting role=\(role.rawValue) before phase=\(phase)")
         phase = .connecting(role: role)
         lastError = nil
     }
 
     func setConnected(deviceName: String?) {
-        print("[DEBUG] setConnected device=\(deviceName ?? "nil") before phase=\(phase)")
         phase = .connected
         connectedDeviceName = deviceName
         lastError = nil
@@ -47,17 +45,14 @@ final class ConnectionState {
     }
 
     func setDisconnected(reason: String?) {
-        print("[DEBUG] setDisconnected reason=\(reason ?? "nil") before phase=\(phase)")
         phase = .disconnected
         connectedDeviceName = nil
         lastError = reason
     }
 
     func setReconnecting(reason: String) {
-        print("[DEBUG] setReconnecting reason=\(reason) before phase=\(phase)")
         phase = .reconnecting(reason: reason)
         reconnectAttempts += 1
-        print("[DEBUG] setReconnecting after phase=\(phase)")
     }
 
     func setTestInProgress() {

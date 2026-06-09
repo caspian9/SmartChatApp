@@ -335,7 +335,6 @@ actor ConnectionCoordinator {
     /// `internal` so tests can drive the handler directly (the SDK
     /// callback path can't be exercised without a real WebSocket).
     func handleTransportDisconnect(role: GatewayRole, reason: String, generation: Int) async {
-        print("[DEBUG] handleTransportDisconnect role=\(role.rawValue) reason=\(reason) gen=\(generation) connectGen=\(connectGeneration) userInit=\(userInitiatedDisconnect)")
         if userInitiatedDisconnect {
             AppLogger.log("\(role.rawValue) onDisconnected suppressed (user-initiated): \(reason)", category: .network)
             return
@@ -365,7 +364,6 @@ actor ConnectionCoordinator {
     ///    generation guard prevents the old connect from marking the
     ///    new profile as connected.
     func handleTransportConnect(role: GatewayRole, generation: Int) async {
-        print("[DEBUG] handleTransportConnect role=\(role.rawValue) gen=\(generation) connectGen=\(connectGeneration) userInit=\(userInitiatedDisconnect)")
         if userInitiatedDisconnect {
             AppLogger.log("\(role.rawValue) onConnected suppressed (user-initiated)", category: .network)
             return
@@ -445,11 +443,21 @@ actor ConnectionCoordinator {
                 sessionBox: sessionBox,
                 onConnected: {
                     AppLogger.log("Operator connected to gateway", category: .network)
-                    Task { await self.handleTransportConnect(role: .operator, generation: generation) }
+                    // Structured await — the SDK's own caller awaits the
+                    // closure (see `await self.onConnected?(...)` in
+                    // GatewayNodeSession), so a fire-and-forget `Task { }`
+                    // would lose ordering between handleTransportConnect
+                    // and the rest of the test/state pipeline. Awaiting
+                    // directly keeps state writes deterministic.
+                    await self.handleTransportConnect(role: .operator, generation: generation)
                 },
                 onDisconnected: { reason in
                     AppLogger.log("Operator disconnected: \(reason)", category: .network)
-                    Task { await self.handleTransportDisconnect(role: .operator, reason: reason, generation: generation) }
+                    // See comment on `onConnected` above — fire-and-forget
+                    // here would let the test's `simulateDisconnected`
+                    // return BEFORE the handler wrote `.reconnecting`,
+                    // causing the test to observe stale `.connecting`.
+                    await self.handleTransportDisconnect(role: .operator, reason: reason, generation: generation)
                 },
                 onInvoke: { request in
                     BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
@@ -593,11 +601,15 @@ actor ConnectionCoordinator {
                 sessionBox: sessionBox,
                 onConnected: {
                     AppLogger.log("Node connected to gateway", category: .network)
-                    Task { await self.handleTransportConnect(role: .node, generation: generation) }
+                    // See the matching comment on the operator install
+                    // site — structured await is required to keep state
+                    // writes deterministic when the SDK's onConnected
+                    // callback path is exercised by tests.
+                    await self.handleTransportConnect(role: .node, generation: generation)
                 },
                 onDisconnected: { reason in
                     AppLogger.log("Node disconnected: \(reason)", category: .network)
-                    Task { await self.handleTransportDisconnect(role: .node, reason: reason, generation: generation) }
+                    await self.handleTransportDisconnect(role: .node, reason: reason, generation: generation)
                 },
                 onInvoke: { request in
                     await router.handle(request)
