@@ -3,13 +3,20 @@ name: CodeQL
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   schedule:
-    # Weekly Monday 06:00 UTC scan so old code is re-checked
-    # against new queries. The per-push runs are the canonical
-    # gating scans; this catches zero-day queries landing mid-week.
-    - cron: "0 6 * * 1"
+    # Daily 06:00 UTC scan, gated by a `should-scan` job (below)
+    # that only forwards to the heavy `analyze` job if the last
+    # commit on main was within the last 24 hours. This means:
+    #   - active development day → daily CodeQL run (catches new
+    #     zero-day queries on recent code)
+    #   - quiet day (no commits in 24h) → only the cheap ubuntu
+    #     `should-scan` job runs, skipping the 25-30 min macos-15
+    #     `analyze` job
+    # Compared to a blind weekly cron, this trades one extra
+    # ubuntu minute per day for ~25 min/week saved when the repo
+    # is quiet. On a busy week (commits every day) it costs the
+    # same as blind-daily.
+    - cron: "0 6 * * *"
 
 permissions:
   # CodeQL needs read-only access to the repo for checkout +
@@ -18,9 +25,51 @@ permissions:
   security-events: write
 
 jobs:
+  # Cheap ubuntu gate that decides whether the heavy macos-15
+  # analyze job should run. On schedule events, only forward to
+  # `analyze` if the last commit on main was within the last 24
+  # hours. On push events, the gate always says "go" — pushes
+  # are by definition recent commits, and we want every main
+  # push to be scanned immediately.
+  should-scan:
+    name: Should scan (commit recency gate)
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.should-run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          fetch-depth: 1
+      - id: check
+        name: Decide whether to forward to the heavy analyze job
+        run: |
+          # Push-triggered runs are always forwarded — the commit
+          # that triggered the run is by definition recent, and
+          # the user wants immediate CodeQL feedback on main pushes.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "should-run=true" >> "$GITHUB_OUTPUT"
+            echo "Push event — running CodeQL."
+            exit 0
+          fi
+          # Schedule events use a 24h commit-recency gate.
+          LAST_COMMIT_TS=$(git log -1 --format=%ct)
+          NOW=$(date +%s)
+          HOURS_SINCE=$(( (NOW - LAST_COMMIT_TS) / 3600 ))
+          echo "Last commit was ${HOURS_SINCE}h ago."
+          if [ "$HOURS_SINCE" -lt 24 ]; then
+            echo "should-run=true" >> "$GITHUB_OUTPUT"
+            echo "Recent commit (${HOURS_SINCE}h) — running CodeQL."
+          else
+            echo "should-run=false" >> "$GITHUB_OUTPUT"
+            echo "No recent commit (${HOURS_SINCE}h) — skipping CodeQL."
+          fi
+
   analyze:
     name: Analyze (Swift)
     runs-on: macos-15
+    needs: should-scan
+    if: needs.should-scan.outputs.should-run == 'true'
     # Bumped 20 → 30 → 60 across the maintenance windows. The
     # cold-cache build + codeql analyze budget on the macos-15
     # runner is ~25-30 min combined. The first run after a
