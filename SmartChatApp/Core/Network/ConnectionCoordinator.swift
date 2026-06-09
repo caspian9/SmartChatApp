@@ -14,8 +14,24 @@ import OpenClawChatUI
 /// - Caches one `GatewayChatTransport` per session key (returned by
 ///   `getTransport(sessionKey:)`).
 actor ConnectionCoordinator {
-    private let operatorSession: GatewayNodeSession
-    private let nodeSession: GatewayNodeSession
+    // Concrete `GatewayNodeSession` retained for the chat-transport
+    // path only. `GatewayChatTransport.init` takes a concrete
+    // `GatewayNodeSession` (because it calls `subscribeServerEvents`,
+    // which is not on the `ConnectionTransport` protocol). When the
+    // coordinator is constructed with a mocked operator transport
+    // for unit tests, this is `nil` and `getTransport(_:)` traps.
+    // None of the test seams that use a mock call `getTransport`,
+    // so this is safe.
+    private let operatorRequestSession: GatewayNodeSession?
+
+    // Protocol-typed seam for `connect` / `disconnect` / `request`.
+    // Production wires these to the same `GatewayNodeSession` instance
+    // `operatorRequestSession` points to; tests inject
+    // `MockConnectionTransport` to drive the connect/disconnect race
+    // deterministically.
+    private let operatorTransport: any ConnectionTransport
+    private let nodeTransport: any ConnectionTransport
+
     private let state: ConnectionState
     private let commandRouter = NodeCommandRouter()
 
@@ -63,10 +79,29 @@ actor ConnectionCoordinator {
 
     static let shared = ConnectionCoordinator(state: .shared)
 
-    init(state: ConnectionState) {
+    init(
+        state: ConnectionState,
+        operatorTransport: (any ConnectionTransport)? = nil,
+        nodeTransport: (any ConnectionTransport)? = nil
+    ) {
         self.state = state
-        self.operatorSession = GatewayNodeSession()
-        self.nodeSession = GatewayNodeSession()
+        let opReal = GatewayNodeSession()
+        let ndReal = GatewayNodeSession()
+        if let op = operatorTransport {
+            self.operatorTransport = op
+            // Cast is what enables the chat-transport path. The cast
+            // fails (and the property stays nil) when the test injects
+            // a mock — `getTransport` then traps, as documented above.
+            self.operatorRequestSession = op as? GatewayNodeSession
+        } else {
+            self.operatorTransport = opReal
+            self.operatorRequestSession = opReal
+        }
+        if let nd = nodeTransport {
+            self.nodeTransport = nd
+        } else {
+            self.nodeTransport = ndReal
+        }
     }
 
     // MARK: - Public API (used by SessionManager forwarders)
@@ -178,8 +213,8 @@ actor ConnectionCoordinator {
         // for this disconnect.
         userInitiatedDisconnect = true
         cancelInFlight()
-        await operatorSession.disconnect()
-        await nodeSession.disconnect()
+        await operatorTransport.disconnect()
+        await nodeTransport.disconnect()
         operatorConnected = false
         nodeConnected = false
         connectedDeviceName = nil
@@ -243,18 +278,29 @@ actor ConnectionCoordinator {
         // except other in-flight test calls — and we don't support parallel
         // test connects (UI is single-button).
         if openedOperator {
-            await operatorSession.disconnect()
+            await operatorTransport.disconnect()
         }
         if openedNode {
-            await nodeSession.disconnect()
+            await nodeTransport.disconnect()
         }
     }
 
     /// Returns a cached `GatewayChatTransport` for `sessionKey`, or constructs
-    /// a new one wrapping `operatorSession`. One actor per session key.
+    /// a new one wrapping the operator session. One actor per session key.
+    ///
+    /// Traps if invoked on a coordinator constructed with a mocked
+    /// operator transport — the chat-transport path requires a real
+    /// `GatewayNodeSession` because `GatewayChatTransport.events()`
+    /// calls `subscribeServerEvents`, which is not on the
+    /// `ConnectionTransport` protocol. None of the test seams that
+    /// use a mock call `getTransport`, so this trap is never reached
+    /// in the test suite.
     func getTransport(sessionKey: String) -> GatewayChatTransport {
         if let cached = transports[sessionKey] { return cached }
-        let chat = GatewayChatTransport(nodeSession: operatorSession, sessionKey: sessionKey)
+        guard let session = operatorRequestSession else {
+            fatalError("getTransport() called on a coordinator constructed with a mocked operator transport")
+        }
+        let chat = GatewayChatTransport(nodeSession: session, sessionKey: sessionKey)
         transports[sessionKey] = chat
         return chat
     }
@@ -344,9 +390,10 @@ actor ConnectionCoordinator {
             let data = try JSONEncoder().encode(params)
             paramsJSON = String(data: data, encoding: .utf8)
         }
-        let responseData = try await operatorSession.request(
+        let responseData = try await operatorTransport.request(
             method: "sessions.create",
-            paramsJSON: paramsJSON
+            paramsJSON: paramsJSON,
+            timeoutSeconds: 15
         )
         struct CreateSessionResponse: Decodable { let key: String }
         guard let r = try? JSONDecoder().decode(CreateSessionResponse.self, from: responseData) else {
@@ -387,7 +434,7 @@ actor ConnectionCoordinator {
             state.setConnecting(role: .operator)
         }
         do {
-            try await operatorSession.connect(
+            try await operatorTransport.connect(
                 url: gatewayURL,
                 token: authToken,
                 bootstrapToken: nil,
@@ -396,11 +443,21 @@ actor ConnectionCoordinator {
                 sessionBox: sessionBox,
                 onConnected: {
                     AppLogger.log("Operator connected to gateway", category: .network)
-                    Task { await self.handleTransportConnect(role: .operator, generation: generation) }
+                    // Structured await — the SDK's own caller awaits the
+                    // closure (see `await self.onConnected?(...)` in
+                    // GatewayNodeSession), so a fire-and-forget `Task { }`
+                    // would lose ordering between handleTransportConnect
+                    // and the rest of the test/state pipeline. Awaiting
+                    // directly keeps state writes deterministic.
+                    await self.handleTransportConnect(role: .operator, generation: generation)
                 },
                 onDisconnected: { reason in
                     AppLogger.log("Operator disconnected: \(reason)", category: .network)
-                    Task { await self.handleTransportDisconnect(role: .operator, reason: reason, generation: generation) }
+                    // See comment on `onConnected` above — fire-and-forget
+                    // here would let the test's `simulateDisconnected`
+                    // return BEFORE the handler wrote `.reconnecting`,
+                    // causing the test to observe stale `.connecting`.
+                    await self.handleTransportDisconnect(role: .operator, reason: reason, generation: generation)
                 },
                 onInvoke: { request in
                     BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
@@ -491,7 +548,7 @@ actor ConnectionCoordinator {
             includeDeviceIdentity: true
         )
         let sessionBox = WebSocketSessionBox(session: URLSession.shared)
-        try await operatorSession.connect(
+        try await operatorTransport.connect(
             url: gatewayURL,
             token: authToken,
             bootstrapToken: nil,
@@ -535,7 +592,7 @@ actor ConnectionCoordinator {
             state.setConnecting(role: .node)
         }
         do {
-            try await nodeSession.connect(
+            try await nodeTransport.connect(
                 url: gatewayURL,
                 token: authToken,
                 bootstrapToken: nil,
@@ -544,11 +601,15 @@ actor ConnectionCoordinator {
                 sessionBox: sessionBox,
                 onConnected: {
                     AppLogger.log("Node connected to gateway", category: .network)
-                    Task { await self.handleTransportConnect(role: .node, generation: generation) }
+                    // See the matching comment on the operator install
+                    // site — structured await is required to keep state
+                    // writes deterministic when the SDK's onConnected
+                    // callback path is exercised by tests.
+                    await self.handleTransportConnect(role: .node, generation: generation)
                 },
                 onDisconnected: { reason in
                     AppLogger.log("Node disconnected: \(reason)", category: .network)
-                    Task { await self.handleTransportDisconnect(role: .node, reason: reason, generation: generation) }
+                    await self.handleTransportDisconnect(role: .node, reason: reason, generation: generation)
                 },
                 onInvoke: { request in
                     await router.handle(request)
@@ -600,7 +661,7 @@ actor ConnectionCoordinator {
         let sessionBox = WebSocketSessionBox(session: URLSession.shared)
         let router = commandRouter
         do {
-            try await nodeSession.connect(
+            try await nodeTransport.connect(
                 url: gatewayURL,
                 token: authToken,
                 bootstrapToken: nil,
