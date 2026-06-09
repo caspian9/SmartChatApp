@@ -106,7 +106,14 @@ struct EditProfileSheet: View {
     /// without spinning up a SwiftUI view. Kept fileprivate to the
     /// same module — the view is the only consumer in production.
     static func matchesHost(_ cleanHost: String) -> Bool {
-        let domainPattern = "^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?)+$"
+        // Disjoint alternations: each label accepts `[a-zA-Z0-9-]*`
+        // (no dots) so the inner repetition is unambiguous. The
+        // previous form `[a-zA-Z0-9.-]*` allowed dots inside labels,
+        // and combined with the outer `\\.[a-zA-Z0-9]...` repetition
+        // gave CodeQL's ReDoS analyzer something to flag. The
+        // disjoint form is also empirically fast (verified at 0.0000s
+        // for 200-char "0." × 100 inputs).
+        let domainPattern = "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$"
         let ipPattern = "^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$"
         guard !cleanHost.isEmpty else { return false }
         guard let domainRegex = try? NSRegularExpression(pattern: domainPattern, options: .caseInsensitive),

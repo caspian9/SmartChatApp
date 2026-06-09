@@ -3,12 +3,19 @@ name: CodeQL
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   schedule:
     # Weekly Monday 06:00 UTC scan so old code is re-checked
     # against new queries. The per-push runs are the canonical
     # gating scans; this catches zero-day queries landing mid-week.
+    #
+    # Note: `pull_request` is NOT a trigger. The per-PR run was
+    # ~25-30 min of macos-15 runner time per PR and surfaced
+    # mostly false-positive alerts on benign regex patterns
+    # (e.g. alert #1 hit on a documented "this was the buggy form"
+    # comment in EditProfileSheet.swift, and on a domain regex that
+    # took 0.0000s to run). For a single-maintainer pre-1.0 project,
+    # post-merge weekly scans are sufficient — new alerts are
+    # surfaced within 7 days and don't block merge.
     - cron: "0 6 * * 1"
 
 permissions:
