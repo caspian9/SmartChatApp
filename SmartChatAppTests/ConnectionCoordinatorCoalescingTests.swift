@@ -341,6 +341,18 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
         _ = await firstTask.value
         _ = await secondTask.value
 
+        // Stabilization wait: the old (cancelled) connect's
+        // `onDisconnected` callback lands async after the task
+        // body returns. Without this sleep the callback can fire
+        // AFTER both await values, calling setReconnecting via
+        // `handleTransportDisconnect` (the generation guard
+        // correctly lets it through because the new connect IS
+        // the current generation) — and then the test sees
+        // `reconnecting` instead of `disconnected`. 100ms is
+        // empirically enough on macOS-15 for the SDK's
+        // WebSocket teardown to land on a slow runner.
+        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+
         // After both: state should be .disconnected (the new
         // connect eventually also wrote setDisconnected). The
         // invariant is: no half-set state from the old connect
