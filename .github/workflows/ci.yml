@@ -12,6 +12,29 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # Paths filter: a PR only triggers the build matrix if it
+    # touches code, tests, build config, or CI. Pure-doc or
+    # comment-only PRs (e.g. README polish, CLAUDE.md typo
+    # fixes) skip the 30-min macos-15 build entirely. The
+    # filter is intentionally inclusive — anything that
+    # could plausibly affect a Swift build or test is in
+    # the include list, and `main` pushes always run (no
+    # paths filter on `push:`).
+    #
+    # Maintenance tip: when adding a new top-level source dir,
+    # add it to this list. Until then, PRs that ONLY touch
+    # files in the new dir will silently skip CI — easy to
+    # miss in code review. The current paths match the
+    # directory layout documented in CLAUDE.md.
+    paths:
+      - 'SmartChatApp/**'
+      - 'SmartChatAppTests/**'
+      - 'project.yml'
+      - 'Package.resolved'
+      - 'Makefile'
+      - 'config/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
 
 # Note: concurrency moved to job level (see `build.concurrency` below).
 # Workflow-level concurrency can't see the matrix dimension, so
