@@ -365,6 +365,7 @@ actor ConnectionCoordinator {
     ///    generation guard prevents the old connect from marking the
     ///    new profile as connected.
     func handleTransportConnect(role: GatewayRole, generation: Int) async {
+        print("[DEBUG] handleTransportConnect role=\(role.rawValue) gen=\(generation) connectGen=\(connectGeneration) userInit=\(userInitiatedDisconnect)")
         if userInitiatedDisconnect {
             AppLogger.log("\(role.rawValue) onConnected suppressed (user-initiated)", category: .network)
             return
