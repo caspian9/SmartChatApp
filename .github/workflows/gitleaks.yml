@@ -1,0 +1,50 @@
+name: gitleaks
+
+# Second-line defense against accidentally committed secrets.
+# GitHub's built-in secret scanning (see Settings → Code security)
+# is the primary defense; this workflow runs gitleaks against every
+# push and PR as a redundant check, with rules that include
+# patterns GitHub's scanner doesn't cover (e.g., custom patterns
+# in CLAUDE.md / project config).
+#
+# The runner is ubuntu-latest because gitleaks is a Go binary and
+# doesn't need macOS. This saves runner minutes vs. running on
+# macos-15 alongside the iOS workflows.
+#
+# Gitleaks v8.30.1 (matches the version we run locally; the
+# manifest lives in the project's docs/ for reproducibility).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan for secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          # Full history so a secret squashed in the current commit
+          # but present in a past commit is still caught. For
+          # very large repos this can be slow; the SmartChatApp
+          # repo is small enough that fetch-depth: 0 is fine.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        env:
+          # The action's default config (.gitleaks.toml at repo
+          # root) is fine for this repo — we don't ship a custom
+          # config. GITHUB_TOKEN is provided by the action itself
+          # for posting the SARIF results back to the Security
+          # tab; the action docs say to forward it explicitly.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

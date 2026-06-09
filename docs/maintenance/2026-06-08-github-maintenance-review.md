@@ -560,9 +560,9 @@ item references the section number above for context.
 - [x] **2** — CI: parameterize `OPENCLAW_REPO` env. Done 2026-06-08 (8154012).
 - [x] **2** — CI: pin `actions/checkout`, `setup-xcode`, `cache` to commit SHAs. Done 2026-06-08 (8154012).
 - [x] **10** — Add CI status badge to README. Done 2026-06-08 (b7b5088).
-- [ ] **30** — Enable secret scanning. **Blocked** by plan tier (user-owned private repo on Free). See `2026-06-08-plan-limits-blockers.md`. Unlocks with Pro / Team / Enterprise Cloud, or with a flip to public.
-- [ ] **31** — Enable private vulnerability reporting. **Blocked** by plan tier. Same doc.
-- [ ] **29** — Configure branch protection on `main`. **Blocked** by plan tier (`Upgrade to GitHub Pro or make this repository public`). Runbook at `docs/BRANCH_PROTECTION.md` is verified-correct and copy-pasteable once the plan permits.
+- [x] **30** — Enable secret scanning. Done 2026-06-09 (flipped repo to public on the same day, then PATCHed `security_and_analysis.secret_scanning.status = enabled` and `secret_scanning_push_protection.status = enabled` via the API; both confirmed in the response). Also added `.github/workflows/gitleaks.yml` as a redundant second-line scanner with a different rule set.
+- [ ] **31** — Enable private vulnerability reporting. **Still unsupported** — the API endpoint (`security_and_analysis.private_vulnerability_reporting`) returned no field in the response after the PATCH that enabled the other two. User-owned public repos do not have this feature available at any plan tier; it requires an org-owned repo on Team / Enterprise. See `2026-06-08-plan-limits-blockers.md` for the unlock paths.
+- [x] **29** — Configure branch protection on `main`. Done 2026-06-09 (`gh api PUT` against the runbook payload in `docs/BRANCH_PROTECTION.md`; one field had to be trimmed — `dismissal_restrictions: {}` is org-only and was removed; with `restrictions: null` the PUT succeeded). Status: required CI matrix × 2, 1 approver, dismiss stale reviews, linear history, no force-push, no deletions, admins included. Verified the protected-branch hook is active: a direct push to main (as admin) was rejected as expected.
 - [x] **27** — Add `THIRD_PARTY_LICENSES.md`. Done 2026-06-08 (0072120).
 - [x] **37** — Standardize labels. Done 2026-06-08 (11 labels created via `gh label create --force`; see commit 87753ee for the record).
 
@@ -580,7 +580,7 @@ item references the section number above for context.
 - [x] **9** — Matrix build on `iPhone 16` + `iPhone 17 Pro` simulators. Done 2026-06-08 (a3501db).
 - [x] **4** — Upload `.xcresult` test report as CI artifact. Done 2026-06-08 (8154012 — `.xcresult` upload added; then `faef80d` for the matrix-aware retention config).
 - [x] **33** — Add `codeql.yml` for Swift. Done 2026-06-08 (0d8e565; Swift build preflight added in 81cbfd7).
-- [x] **32** — Add `dependabot.yml` for `github-actions` and `swift`. Done 2026-06-08; both ecosystems paused with `open-pull-requests-limit: 0` (plan-tier blocker — see `2026-06-08-plan-limits-blockers.md`).
+- [x] **32** — Add `dependabot.yml` for `github-actions` and `swift`. Done 2026-06-08; the github-actions ecosystem was re-enabled on 2026-06-09 (`483a59a`) after the repo flipped to public (the plan-tier rationale no longer applies; CI can now run). Swift ecosystem is still paused with `open-pull-requests-limit: 0` for a structural reason — Dependabot's swift ecosystem looks for a top-level `Package.swift`, and our SPM manifest lives in `SmartChatApp.xcodeproj/.../swiftpm/Package.resolved`. Re-enabling requires migrating to a top-level `Package.swift` and rewriting `project.yml`'s `packages:` block.
 - [ ] **36** — Enable Discussions with categories.
 - [x] **43** — Treat warnings as errors on `Release` builds. Done 2026-06-08 (`dcefd7a` — `GCC_TREAT_WARNINGS_AS_ERRORS=YES` added to both build and test steps in `ci.yml`). The same flag applies to Debug builds too (the matrix has no Debug/Release split today), so the gate acts as a "don't ship a new deprecation" guard for every CI run, not just Release.
 - [ ] **35** — OIDC for App Store Connect when TestFlight is added.
