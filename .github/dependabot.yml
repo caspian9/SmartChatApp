@@ -1,61 +1,57 @@
 version: 2
 updates:
-  # GitHub Actions ecosystem is currently paused because
-  # the CI runs that Dependabot's auto-PRs trigger are
-  # failing with the same plan-tier blocker that affects
-  # direct pushes to main (see docs/maintenance/2026-06-08-
-  # plan-limits-blockers.md — `macos-15` runner availability
-  # is restricted on user-owned private repos on Free).
-  # The PRs Dependabot opens all fail in ~4s with empty
-  # jobs, regardless of which action the PR bumps. Until
-  # the repo moves to Pro / an org with Team / public,
-  # the auto-PRs are noise: the human has to act on every
-  # one, and the action they take is always "close as
-  # not-planned" because CI can never go green.
+  # GitHub Actions ecosystem — re-enabled 2026-06-09 after the
+  # repo flipped to public. The original plan-tier rationale
+  # (see docs/maintenance/2026-06-08-plan-limits-blockers.md)
+  # no longer applies: on public repos, macOS-15 runners are
+  # available without a Pro upgrade. If Dependabot's auto-PRs
+  # start failing CI again with a plan-tier error, the right
+  # fix is to enable branch protection + required CI checks
+  # (so the PR is gated on green) rather than re-pausing
+  # the ecosystem.
   #
-  # `open-pull-requests-limit: 0` keeps the ecosystem
-  # enabled (so version-detection still runs) but
-  # suppresses new PRs. When plan-tier changes, set this
-  # back to 5 (the default) to re-enable.
-  #
-  # To re-enable: change `open-pull-requests-limit: 0` to
-  # `open-pull-requests-limit: 5`, or remove the line.
+  # `open-pull-requests-limit: 5` is the default; the cap
+  # exists so a flood of stale action bumps doesn't bury
+  # real PRs in the queue.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     groups:
       github-actions-minor:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+  # Swift ecosystem — kept paused. Structural reasons, not
+  # plan-tier:
+  # 1. Dependabot looks for Package.swift / Package.resolved
+  #    at the directory it scans. Our SPM manifest lives in
+  #    SmartChatApp.xcodeproj/project.xcworkspace/xcshareddata/
+  #    swiftpm/Package.resolved (Xcode's internal location),
+  #    so every Dependabot run errors with:
+  #      dependency_file_not_found: No files found in /,
+  #      file-path: null
+  #    Dependabot has no config to point at a different
+  #    manifest path.
+  # 2. Even if Dependabot could find Package.resolved, our
+  #    SPM deps are versioned in project.yml's `packages:`
+  #    block (the path-linked OpenClawKit plus 8 URL-pinned
+  #    libraries); bumping Package.resolved doesn't change
+  #    the project — you'd need a project.yml edit +
+  #    xcodegen regenerate, which is a human-driven change
+  #    anyway.
+  #
+  # To re-enable: when SPM moves to a top-level
+  # Package.swift (a refactor in its own right), change
+  # `open-pull-requests-limit: 0` to `5` and update the
+  # documentation here.
   - package-ecosystem: "swift"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
-    # Same plan-tier rationale as the github-actions block
-    # above. The Swift ecosystem is ALSO disabled because
-    # Dependabot looks for a Package.swift / Package.resolved
-    # at the directory it scans. Our SPM manifest lives in
-    # SmartChatApp.xcodeproj/project.xcworkspace/xcshareddata/
-    # swiftpm/Package.resolved (Xcode's internal location),
-    # so every Dependabot run errors with:
-    #   dependency_file_not_found: No files found in /,
-    #   file-path: null
-    # and no PR is opened. Even if Dependabot could find
-    # the manifest, our SPM deps are versioned in
-    # project.yml's `packages:` block (the path-linked
-    # OpenClawKit plus 8 URL-pinned libraries); bumping
-    # them is a project.yml edit + xcodegen regenerate, not
-    # a Package.resolved change.
-    #
-    # To re-enable: when SPM moves to a top-level
-    # Package.swift (a refactor in its own right), change
-    # `open-pull-requests-limit: 0` to `5` and update the
-    # documentation here.
     open-pull-requests-limit: 0
     # SwiftPM updates can break iOS-targeted APIs without
     # warning (MarkdownDisplayView / swiftui-math are tightly
