@@ -53,6 +53,43 @@ final class MessageCacheStoreTests: XCTestCase {
         XCTAssertEqual(store.messages(for: key, since: nil).count, 2)
     }
 
+    // —— append ——
+
+    func test_append_updatesMessagesBySession() async {
+        let key = "session-1"
+        let msg = makeMsg()
+        await store.append([msg], for: key)
+        let messages = store.messages(for: key, since: nil)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages[0].id, msg.id)
+    }
+
+    func test_append_updatesLastSeenTimestampToMax() async {
+        let key = "session-1"
+        await store.append([makeMsg(timestamp: 1000), makeMsg(timestamp: 5000), makeMsg(timestamp: 3000)],
+                           for: key)
+        XCTAssertEqual(store.lastSeenTimestamp(for: key), 5000)
+    }
+
+    func test_append_emptyArray_doesNothing() async {
+        let key = "session-1"
+        await store.append([], for: key)
+        XCTAssertNil(store.lastSeenTimestamp(for: key))
+        XCTAssertEqual(store.messages(for: key).count, 0)
+    }
+
+    func test_append_emptyTimestamp_skipsLastSeenUpdate() async {
+        let key = "session-1"
+        let noTs = OpenClawChatMessage(
+            id: UUID(), role: "assistant",
+            content: [OpenClawChatMessageContent(type: "text", text: "x", thinking: nil,
+                                                 thinkingSignature: nil, mimeType: nil, fileName: nil,
+                                                 content: nil)],
+            timestamp: nil, toolCallId: nil, toolName: nil, usage: nil, stopReason: nil, errorMessage: nil)
+        await store.append([noTs], for: key)
+        XCTAssertNil(store.lastSeenTimestamp(for: key))
+    }
+
     // —— helpers ——
 
     private func makeMsg(id: UUID = UUID(), role: String = "assistant",
