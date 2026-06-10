@@ -27,14 +27,13 @@ final class HistoryLoader {
     @ObservationIgnored
     private static let loadHistoryLock = OSAllocatedUnfairLock<String?>(initialState: nil)
 
-    /// Tracks the last session key we ran a `loadHistory` (or
-    /// `loadedCachedHistory`) for, so the next call can tell whether
-    /// the session actually changed. Used to set `forceScroll` on the
-    /// scroll request: when the user switches sessions, the new load
-    /// must scroll to the bottom regardless of `userHasScrolled` (set
-    /// while reading the previous session). When the same session
-    /// re-loads (entering NativeChat, re-fetch), we respect
-    /// `userHasScrolled` so reading history isn't yanked down.
+    /// Tracks the last session key we ran a `loadHistory` for, so the
+    /// next call can tell whether the session actually changed. Used to
+    /// set `forceScroll` on the scroll request: when the user switches
+    /// sessions, the new load must scroll to the bottom regardless of
+    /// `userHasScrolled` (set while reading the previous session). When
+    /// the same session re-loads (entering NativeChat, re-fetch), we
+    /// respect `userHasScrolled` so reading history isn't yanked down.
     @ObservationIgnored
     private var lastLoadedSessionKey: String?
 
@@ -46,192 +45,58 @@ final class HistoryLoader {
         let isRestoring = vm.isRestoringFromCache
         vm.isRestoringFromCache = false
 
-        let cachedSessionKey = sessionKey
-        let cachedSessionKeyPreview = sessionKeyPreview
-        let cachedIsRestoring = isRestoring
-
         // Acquire lock BEFORE creating task closure to prevent concurrent Tasks
         let alreadyInProgress = Self.loadHistoryLock.withLock { state -> Bool in
-            let isInProgress = state == cachedSessionKey
-            if !isInProgress {
-                state = cachedSessionKey
-            }
+            let isInProgress = state == sessionKey
+            if !isInProgress { state = sessionKey }
             return isInProgress
         }
         if alreadyInProgress {
-            AppLogger.log("[loadHistory] already in progress for \(cachedSessionKeyPreview)", category: .nativeChat)
+            AppLogger.log("[loadHistory] already in progress for \(sessionKeyPreview)",
+                         category: .nativeChat)
         }
 
         let taskIdStr = String(UUID().uuidString.prefix(8))
 
-        Task { [cachedSessionKey, cachedSessionKeyPreview, cachedIsRestoring, taskIdStr] in
-            AppLogger.log("[\(taskIdStr)] loadHistory Task started, sessionKey: \(cachedSessionKeyPreview)", category: .nativeChat)
+        Task { [sessionKey, sessionKeyPreview, isRestoring, taskIdStr] in
+            AppLogger.log("[\(taskIdStr)] loadHistory Task started, sessionKey: \(sessionKeyPreview)",
+                         category: .nativeChat)
             defer {
                 Self.loadHistoryLock.withLock { state in
-                    if state == cachedSessionKey {
-                        state = nil
-                    }
+                    if state == sessionKey { state = nil }
                 }
             }
-            // Load cache first and send to UI immediately
-            let cachedMessages = await MessageCache.shared.getMessages(for: cachedSessionKey)
-            AppLogger.log("cache returned \(cachedMessages.count) messages, sessionKey: \(cachedSessionKeyPreview)", category: .nativeChat)
-            if !cachedMessages.isEmpty {
-                let chatMessages = cachedMessages.compactMap { msg in ChatMessageConverter.toChatMessage(from: msg) }
-                AppLogger.log("Loaded \(chatMessages.count) cached messages for session: \(cachedSessionKeyPreview), isRestoring: \(cachedIsRestoring)", category: .nativeChat)
-                // Precompute collapse and markdown states BEFORE sending to UI
+
+            // 1. 从磁盘 hydrate 进 store 内存
+            await store?.hydrate(for: sessionKey)
+            // 2. precompute caches(view 端依赖) — 需要把 OpenClawChatMessage
+            //    转成 ChatMessage,因为 caches 是按 ChatMessage id 索引的
+            if let openclawMessages = store?.messages(for: sessionKey, since: nil) {
+                let chatMessages = openclawMessages.compactMap { msg in
+                    ChatMessageConverter.toChatMessage(from: msg)
+                }
                 await MainActor.run {
                     MarkdownCache.shared.precomputeForMessages(chatMessages)
                     CollapseStateCache.shared.precompute(for: chatMessages)
                 }
-                // Send cached messages to UI
-                self.loadedCachedHistory(chatMessages, isRestoring: cachedIsRestoring)
             }
-
-            // Then fetch from network (multi-poll scroll: history-load bubbles
-            // render through UIViewRepresentable which measures async).
-            await self.fetchAndMergeFromNetwork(
-                sessionKey: cachedSessionKey,
-                sessionKeyPreview: cachedSessionKeyPreview,
+            // 3. 触发 historyLoaded multi-poll scroll(forceScroll = true 首次)
+            let forceScroll = (self.lastLoadedSessionKey != sessionKey)
+            self.lastLoadedSessionKey = sessionKey
+            let currentToken = viewModel?.scrollRequest.token ?? 0
+            viewModel?.scrollRequest = NativeChatScrollRequest(
+                token: currentToken &+ 1,
+                kind: .historyLoaded,
+                forceScroll: forceScroll
+            )
+            // 4. 拉网络(走 store.append + hasNewContent 判定)
+            await fetchAndMergeFromNetwork(
+                sessionKey: sessionKey,
+                sessionKeyPreview: sessionKeyPreview,
                 taskIdStr: taskIdStr,
-                cachedMessagesCount: cachedMessages.count,
                 scrollKind: .historyLoaded
             )
         }
-    }
-
-    private func loadedCachedHistory(_ messages: [ChatMessage], isRestoring: Bool) {
-        guard let vm = viewModel else { return }
-        AppLogger.log("loadedCachedHistory setting \(messages.count) messages, isRestoring: \(isRestoring)", category: .nativeChat)
-        // Precompute BEFORE setting `vm.messages`: the view re-renders
-        // synchronously off the assignment, and `MessageBubbleView`
-        // reads `MarkdownCache.needsMarkdown(id)` for each message.
-        // If the precompute is deferred (Task + MainActor.run), the view
-        // sees `false` for any new IDs and renders raw markdown text
-        // instead of the rendered card. The incremental cache makes
-        // this a no-op for IDs already cached.
-        MarkdownCache.shared.precomputeForMessages(messages)
-        CollapseStateCache.shared.precompute(for: messages)
-        // Skip the wholesale `vm.messages = messages` assignment if
-        // the new payload is the same set of IDs the view is already
-        // showing. Without this guard, every network refresh that
-        // returns the same 100 messages (the hard cap in
-        // `GatewayChatTransport.requestHistory`) re-evaluates the
-        // entire `LazyVStack` body, which can produce visible
-        // viewport jitter — the user described it as "the page
-        // jumps up even when nothing changed". The `applyMergedHistory`
-        // path already does this; bringing the cache path in line
-        // makes both load sources behave consistently.
-        let currentIds: Set<String> = Set(vm.messages.map(\.id))
-        let newIds: Set<String> = Set(messages.map(\.id))
-        let hasNewContent = !newIds.subtracting(currentIds).isEmpty
-        if hasNewContent {
-            // Merge `isUserExpanded` from the messages the view is
-            // currently showing onto the freshly-cached ones. Without
-            // this, a user's "Show more..." choice would be wiped out
-            // every time the cache re-hydrated from disk after a view
-            // tear-down / session re-entry — the `ChatMessageConverter`
-            // populates `isUserExpanded = nil` for messages coming
-            // from `MessageCache`, even when the user had previously
-            // marked the same id expanded in this session.
-            let oldExpanded: [String: Bool] = Dictionary(
-                uniqueKeysWithValues: vm.messages.compactMap { msg in
-                    guard let v = msg.isUserExpanded else { return nil }
-                    return (msg.id, v)
-                }
-            )
-            let merged: [ChatMessage] = messages.map { msg in
-                guard let v = oldExpanded[msg.id], msg.isUserExpanded == nil else { return msg }
-                var u = msg
-                u.isUserExpanded = v
-                return u
-            }
-            vm.messages = merged
-        } else {
-            AppLogger.log("loadedCachedHistory: no new IDs vs current (\(currentIds.count) -> \(newIds.count)), skipping vm.messages reassignment to avoid viewport jitter", category: .nativeChat)
-        }
-        // `forceScroll` flips to true when the session changed since the
-        // last load. The view's `.historyLoaded` handler honors that to
-        // bypass the `userHasScrolled` gate on cross-session transitions.
-        // (See `NativeChatScrollRequest.forceScroll` for the full rationale.)
-        let currentKey = vm.selectedSession?.key
-        let forceScroll = currentKey.map { $0 != self.lastLoadedSessionKey } ?? false
-        if let currentKey { self.lastLoadedSessionKey = currentKey }
-        vm.scrollRequest = NativeChatScrollRequest(
-            token: vm.scrollRequest.token &+ 1,
-            kind: .historyLoaded,
-            forceScroll: forceScroll
-        )
-    }
-
-    /// Apply merged history to the VM, with the staleness check
-    /// (`vm.selectedSession?.key` still matches the session we fetched for).
-    /// Renamed from the previous `loadedNetworkHistory` so both
-    /// `.historyLoaded` and `.manualRefresh` paths can use it. The
-    /// behavior is identical — the only thing that differs is the scroll
-    /// kind the view will dispatch on.
-    private func applyMergedHistory(sessionKey: String, messages: [ChatMessage], scrollKind: NativeChatScrollKind) {
-        guard let vm = viewModel else { return }
-        // Drop the result if the user has switched to a different
-        // session since this fetch started. Comparing against
-        // `selectedSession?.key` (the only source of truth
-        // for what the user is looking at) avoids the race the
-        // old `SessionManager.getCurrentSessionKey()` guard had
-        // with the concurrent `makeTransport("")` from
-        // `loadSessions`.
-        let currentKey = vm.selectedSession?.key
-        if currentKey != sessionKey {
-            let currentKeyLog = currentKey ?? "nil"
-            AppLogger.log("applyMergedHistory dropped: session \(String(sessionKey.prefix(8))) is no longer selected (current: \(String(currentKeyLog.prefix(8))))", category: .nativeChat, level: .warning)
-            return
-        }
-        AppLogger.log("applyMergedHistory applying \(messages.count) messages for session: \(String(sessionKey.prefix(8))), kind=\(scrollKind)", category: .nativeChat)
-        // Precompute BEFORE setting `vm.messages`: see `loadedCachedHistory`
-        // for the full rationale. The pull-up refresh path goes
-        // `refreshFromServer → fetchAndMergeFromNetwork → applyMergedHistory`,
-        // and there is no cache-first precompute in that path, so the
-        // precompute here is the only chance to populate the cache for
-        // newly-arrived IDs before the view re-renders.
-        MarkdownCache.shared.precomputeForMessages(messages)
-        CollapseStateCache.shared.precompute(for: messages)
-        // Merge `isUserExpanded` from the messages the view is currently
-        // showing onto the freshly-networked ones. `ChatMessageConverter`
-        // leaves the field nil for messages built from server payloads,
-        // so without this re-merge a refresh would wipe out any bubble
-        // the user had expanded via "Show more..." (or via the
-        // `MessageReceiver` lifecycle-end mark). `loadedCachedHistory`
-        // has the same merge — the network and cache paths now match.
-        let oldExpanded: [String: Bool] = Dictionary(
-            uniqueKeysWithValues: vm.messages.compactMap { msg in
-                guard let v = msg.isUserExpanded else { return nil }
-                return (msg.id, v)
-            }
-        )
-        let merged: [ChatMessage] = messages.map { msg in
-            guard let v = oldExpanded[msg.id], msg.isUserExpanded == nil else { return msg }
-            var u = msg
-            u.isUserExpanded = v
-            return u
-        }
-        // `forceScroll` must propagate here too — not just in
-        // `loadedCachedHistory`. A cross-session switch where the
-        // new session has no cache hits takes the
-        // `fetchAndMergeFromNetwork → applyMergedHistory` path
-        // (because `loadedCachedHistory` is gated by
-        // `if !cachedMessages.isEmpty`). Without `forceScroll=true`
-        // in that path, the view's `.historyLoaded` handler honors
-        // `userHasScrolled` (which is sticky from the previous
-        // session's scroll activity) and the viewport stays anchored
-        // at the previous session's bottom instead of jumping to the
-        // new session's latest message.
-        let forceScroll = currentKey.map { $0 != self.lastLoadedSessionKey } ?? false
-        if let currentKey { self.lastLoadedSessionKey = currentKey }
-        vm.messages = merged
-        vm.scrollRequest = NativeChatScrollRequest(
-            token: vm.scrollRequest.token &+ 1,
-            kind: scrollKind,
-            forceScroll: forceScroll
-        )
     }
 
     /// User-initiated pull-up refresh. Skips the cache-first step (the user
@@ -279,28 +144,23 @@ final class HistoryLoader {
                 vm.isManualRefreshing = false
             }
 
-            // No cache step: the user is already looking at the cache. Use
-            // vm.messages.count as the comparison base so we only update
-            // the UI when network actually returned something new.
+            // No cache step: the user is already looking at the cache. The
+            // water-line `hasNewContent` check in `fetchAndMergeFromNetwork`
+            // is the new comparison base.
             await self.fetchAndMergeFromNetwork(
                 sessionKey: sessionKey,
                 sessionKeyPreview: sessionKeyPreview,
                 taskIdStr: taskIdStr,
-                cachedMessagesCount: vm.messages.count,
                 scrollKind: .manualRefresh
             )
         }
     }
 
     /// Network step shared by `loadHistory()` and `refreshFromServer()`.
-    /// Fetches the latest 100 messages via the transport, merges them into
-    /// the per-session cache (dedup via `MessageCache.setMessages`), and
-    /// conditionally applies the result to the UI.
-    ///
-    /// `cachedMessagesCount` is the count of messages already shown to the
-    /// user (ChatMessage count for `refreshFromServer`, OpenClawChatMessage
-    /// count for `loadHistory` — see the call sites for context). Used as
-    /// the threshold for the "did anything new arrive?" check.
+    /// Fetches the latest 100 messages via the transport, writes them
+    /// to the per-session `MessageCacheStore` (which dedupes + persists),
+    /// then conditionally fires a scroll request based on the water-line
+    /// `hasNewContent` check.
     ///
     /// `scrollKind` is the scroll request kind to fire on success. The
     /// caller picks `.historyLoaded` (multi-poll) or `.manualRefresh`
@@ -309,7 +169,6 @@ final class HistoryLoader {
         sessionKey: String,
         sessionKeyPreview: String,
         taskIdStr: String,
-        cachedMessagesCount: Int,
         scrollKind: NativeChatScrollKind
     ) async {
         do {
@@ -317,76 +176,62 @@ final class HistoryLoader {
             let transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
             let history = try await transport.requestHistory(sessionKey: sessionKey)
 
-            // Staleness check moved here: this task dispatches
-            // `applyMergedHistory` carrying the session key, and
-            // the method verifies `selectedSession?.key` still matches
-            // before applying. The old check used
-            // `SessionManager.getCurrentSessionKey()`, which
-            // is overwritten by `loadSessions`'s concurrent
-            // `makeTransport("")` and caused the history to
-            // be silently dropped when the message cache was
-            // empty (so this is the only path that can
-            // repopulate the UI).
+            // Staleness check:user 可能已经切到其他 session
+            let currentKey = viewModel?.selectedSession?.key
+            if currentKey != sessionKey {
+                AppLogger.log(
+                    "[\(taskIdStr)] fetchAndMergeFromNetwork dropped: session \(sessionKeyPreview) no longer selected",
+                    category: .nativeChat, level: .warning)
+                return
+            }
 
             let messageCount = history.messages?.count ?? 0
-            AppLogger.log("[\(taskIdStr)] fetchAndMergeFromNetwork: \(messageCount) raw messages for session: \(sessionKeyPreview)", category: .nativeChat)
-            let chatMessages: [ChatMessage] = (history.messages ?? []).enumerated().compactMap { index, anyCodable -> ChatMessage? in
-                guard let msg = try? JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(anyCodable)) else {
-                    AppLogger.log("[\(taskIdStr)] message[\(index)] failed to decode", category: .nativeChat, level: .warning)
+            AppLogger.log(
+                "[\(taskIdStr)] fetchAndMergeFromNetwork: \(messageCount) raw messages for session: \(sessionKeyPreview)",
+                category: .nativeChat)
+
+            // 把 server payload 转成 OpenClawChatMessage
+            let openclawMessages: [OpenClawChatMessage] = (history.messages ?? []).enumerated().compactMap {
+                index, anyCodable -> OpenClawChatMessage? in
+                guard let msg = try? JSONDecoder().decode(OpenClawChatMessage.self,
+                                                          from: JSONEncoder().encode(anyCodable)) else {
+                    AppLogger.log("[\(taskIdStr)] message[\(index)] failed to decode",
+                                 category: .nativeChat, level: .warning)
                     return nil
                 }
-                // DIAG: surface server's per-message usage so we can tell
-                // whether toolResult / thinking / toolCall messages ship
-                // usage from the gateway. If the gateway attaches usage to
-                // these roles, ChatMessageConverter copies it to ChatMessage
-                // and the bubble renders the token row. If usage is nil, the
-                // absence is server-side and the frontend can't recover it.
-                let usage = msg.usage
-                let usageStr = usage.map {
-                    "in=\($0.input ?? -1) out=\($0.output ?? -1) cr=\($0.cacheRead ?? -1) cw=\($0.cacheWrite ?? -1) total=\($0.total ?? -1)"
-                } ?? "nil"
-                AppLogger.log("[\(taskIdStr)] server msg[\(index)] id=\(msg.id.uuidString.prefix(8)) role=\(msg.role) toolName=\(msg.toolName ?? "-") usage=\(usageStr)", category: .nativeChat)
-                return ChatMessageConverter.toChatMessage(from: msg)
+                return msg
             }
-            AppLogger.log("[\(taskIdStr)] chatMessages count=\(chatMessages.count)", category: .nativeChat)
-            // Cache the fetched messages (setMessages handles deduplication)
-            let openClawMessages = chatMessages.compactMap { ChatMessageConverter.toOpenClawChatMessage(from: $0) }
-            AppLogger.log("[\(taskIdStr)] openClawMessages count=\(openClawMessages.count)", category: .nativeChat)
-            await MessageCache.shared.setMessages(openClawMessages, for: sessionKey)
 
-            // Reload from cache to get accurate message count (cache now has all messages deduplicated)
-            let finalCachedMessages = await MessageCache.shared.getMessages(for: sessionKey)
-            let finalChatMessages = finalCachedMessages.compactMap { msg in ChatMessageConverter.toChatMessage(from: msg) }
-            AppLogger.log("[\(taskIdStr)] finalCachedMessages from cache: \(finalChatMessages.count)", category: .nativeChat)
+            // 写 store(内存 + 磁盘 dedup-by-content)
+            await store?.append(openclawMessages, for: sessionKey)
 
-            // Decide whether to apply the merged result to the UI.
-            //
-            // We compare ID SETS, not counts. Count comparison is
-            // insufficient when the user is already at the request
-            // limit (100 messages shown) and a new message arrives:
-            // the server's `requestHistory` returns the *latest 100*
-            // (hard cap in `GatewayChatTransport`), so the new
-            // message replaces the oldest in the response. The cache
-            // merges to 100 entries (dedup by content+timestamp
-            // bucket), and `100 > 100` is false — the new message is
-            // in the cache but the count check would silently skip
-            // the UI update.
-            //
-            // The staleness check inside `applyMergedHistory` still
-            // handles the "user switched sessions mid-fetch" race;
-            // the ID diff here catches "new content arrived for the
-            // same session" regardless of whether the count changed.
-            let currentIds: Set<String> = Set(self.viewModel?.messages.map(\.id) ?? [])
-            let newIds: Set<String> = Set(finalChatMessages.map(\.id))
-            let hasNewContent = !newIds.subtracting(currentIds).isEmpty
+            // 计算 hasNewContent
+            let newMaxTimestamp = openclawMessages.compactMap(\.timestamp).max()
+            let hasNewContent = self.hasNewContent(
+                newMaxTimestamp: newMaxTimestamp, sessionKey: sessionKey)
+
             if hasNewContent {
-                AppLogger.log("[\(taskIdStr)] fetchAndMergeFromNetwork: new IDs detected (current=\(cachedMessagesCount) final=\(finalChatMessages.count)), updating UI (kind=\(scrollKind))", category: .nativeChat)
-                self.applyMergedHistory(sessionKey: sessionKey, messages: finalChatMessages, scrollKind: scrollKind)
+                AppLogger.log(
+                    "[\(taskIdStr)] fetchAndMergeFromNetwork: new content (newMax=\(newMaxTimestamp ?? -1)), scrollKind=\(scrollKind)",
+                    category: .nativeChat)
+                // 触发 scrollRequest(forceScroll 由调用方传)
+                let forceScroll = currentKey.map { $0 != self.lastLoadedSessionKey } ?? false
+                if let currentKey { self.lastLoadedSessionKey = currentKey }
+                let currentToken = viewModel?.scrollRequest.token ?? 0
+                viewModel?.scrollRequest = NativeChatScrollRequest(
+                    token: currentToken &+ 1,
+                    kind: scrollKind,
+                    forceScroll: forceScroll
+                )
             } else {
-                AppLogger.log("[\(taskIdStr)] fetchAndMergeFromNetwork: no new IDs (current=\(cachedMessagesCount) final=\(finalChatMessages.count)), skipping UI update", category: .nativeChat)
+                AppLogger.log(
+                    "[\(taskIdStr)] fetchAndMergeFromNetwork: no new content (newMax=\(newMaxTimestamp ?? -1) <= lastSeen), skipping scroll",
+                    category: .nativeChat)
             }
         } catch {
-            AppLogger.log("[\(taskIdStr)] fetchAndMergeFromNetwork error: \(error.localizedDescription)", category: .nativeChat, level: .error)
+            AppLogger.log(
+                "[\(taskIdStr)] fetchAndMergeFromNetwork error: \(error.localizedDescription)",
+                category: .nativeChat, level: .error)
         }
     }
 }
