@@ -51,7 +51,12 @@ final class MessageCacheStorageTests: XCTestCase {
         XCTAssertEqual(loaded[0].content.first?.text, msg.content.first?.text)
     }
 
-    func test_append_dedupsByContent_replacesExisting() async {
+    func test_append_dedupsByContent_keepsExistingOnDedupMatch() async {
+        // KEEP (not REPLACE) on dedup key match: the existing message's
+        // id is preserved so callers keying expand state on the id
+        // (e.g. CollapseStateCache via streaming-time synthesized UUID)
+        // survive server re-fetches that return the same content with
+        // a server-assigned UUID.
         let key = "session-1"
         let id1 = UUID()
         let id2 = UUID()
@@ -62,7 +67,7 @@ final class MessageCacheStorageTests: XCTestCase {
 
         let loaded = await storage.load(for: key)
         XCTAssertEqual(loaded.count, 1)
-        XCTAssertEqual(loaded[0].id, id2, "Newer copy replaces older by content dedup")
+        XCTAssertEqual(loaded[0].id, id1, "Dedup hit: keep the existing entry (id stability > content authority)")
     }
 
     func test_append_dedupsByContent_firstLineForToolCall() async {

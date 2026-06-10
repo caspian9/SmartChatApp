@@ -81,8 +81,13 @@ final class HistoryLoader {
                 }
             }
             // 3. 触发 historyLoaded multi-poll scroll(forceScroll = true 首次)
+            // Do NOT update lastLoadedSessionKey yet — we want
+            // fetchAndMergeFromNetwork's hasNewContent branch to also
+            // see forceScroll=true on the cross-session transition, so
+            // the post-network-arrival scrollRequest (fired after the
+            // server response lands the messages in the store) is
+            // forced and lands the viewport at the new bottom.
             let forceScroll = (self.lastLoadedSessionKey != sessionKey)
-            self.lastLoadedSessionKey = sessionKey
             let currentToken = viewModel?.scrollRequest.token ?? 0
             viewModel?.scrollRequest = NativeChatScrollRequest(
                 token: currentToken &+ 1,
@@ -96,6 +101,9 @@ final class HistoryLoader {
                 taskIdStr: taskIdStr,
                 scrollKind: .historyLoaded
             )
+            // 5. 现在才更新 lastLoadedSessionKey:之后的同 session 重新
+            // 进入 (loadHistory 再次被同一 session 触发) 不会 forceScroll。
+            self.lastLoadedSessionKey = sessionKey
         }
     }
 
