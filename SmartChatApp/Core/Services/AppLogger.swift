@@ -68,6 +68,7 @@ private let osLogs: [LogCategory: OSLog] = [
     .cache:      OSLog(subsystem: "SmartChatApp", category: "Cache"),
     .nativeChat: OSLog(subsystem: "SmartChatApp", category: "NativeChat"),
     .markdown:   OSLog(subsystem: "SmartChatApp", category: "Markdown"),
+    .commands:   OSLog(subsystem: "SmartChatApp", category: "Commands"),
 ]
 
 @MainActor
