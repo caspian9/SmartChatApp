@@ -135,8 +135,15 @@ final class SessionCoordinator {
         // Only clear messages if switching to a different session
         let didSwitch = previousKey != session.key
         if didSwitch {
-            vm.messages = []
             vm.isRestoringFromCache = true
+            // Reset manual-expanded bubbles. Per the user requirement:
+            // expanded bubbles only collapse on session switch / view
+            // exit. Switching sessions matches that reset condition —
+            // the new session's bubbles start in the collapsed form
+            // (driven by `shouldCollapse`), and any stale IDs from the
+            // previous session can never reappear in this one's
+            // `expandedMessageIds` set.
+            CollapseStateCache.shared.clear()
         }
 
         // Save selected session key (per profile)
@@ -163,9 +170,13 @@ final class SessionCoordinator {
         let previousProfileId = vm.selectedProfileId
         vm.selectedProfileId = newProfileId
         vm.selectedSession = nil
-        vm.messages = []
         vm.isSwitchingGateway = true
         vm.error = nil
+        // Reset manual-expanded bubbles. Profile switch is a hard
+        // boundary — the new profile's sessions are a different
+        // message space, so any persisted expand IDs from the old
+        // profile are stale and must not leak across.
+        CollapseStateCache.shared.clear()
         AppLogger.log("switchProfile from \(previousProfileId?.uuidString.prefix(8) ?? "nil") to \(newProfileId.uuidString.prefix(8))", category: .nativeChat)
 
         // Load cache immediately for fast display, consistent with loadSessions flow
