@@ -24,8 +24,40 @@ public actor MessageCacheStorage {
         return messages
     }
 
-    // 占位 - Task 2 实现
-    public func append(_ messages: [OpenClawChatMessage], for sessionKey: String) {}
+    public func append(_ messages: [OpenClawChatMessage], for sessionKey: String) {
+        var allMessages = load(for: sessionKey)  // 内存优先
+        let originalCount = allMessages.count
+
+        var added = 0
+        var replaced = 0
+        var skippedEmpty = 0
+        for msg in messages {
+            if isEmptyTextPlaceholder(msg) {
+                skippedEmpty += 1
+                continue
+            }
+            let key = dedupKey(for: msg)
+            if let existingIndex = allMessages.firstIndex(where: { dedupKey(for: $0) == key }) {
+                allMessages[existingIndex] = msg
+                replaced += 1
+            } else {
+                allMessages.append(msg)
+                added += 1
+            }
+        }
+
+        allMessages.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
+        if allMessages.count > maxLocalMessages {
+            allMessages = Array(allMessages.suffix(maxLocalMessages))
+        }
+
+        cache[sessionKey] = allMessages
+        saveToDisk(allMessages, for: sessionKey)
+
+        AppLogger.log(
+            "[MessageCacheStorage append] sessionKey=\(String(sessionKey.prefix(8))) original=\(originalCount) added=\(added) replaced=\(replaced) skippedEmpty=\(skippedEmpty) final=\(allMessages.count)",
+            category: .cache)
+    }
 
     // 占位 - Task 3 实现
     public func clear(for sessionKey: String) {}
@@ -52,7 +84,7 @@ public actor MessageCacheStorage {
     }
 
     // 内部 helper - 从旧 MessageCache.swift:79-107 搬过来
-    fileprivate func dedupKey(for message: OpenClawChatMessage) -> String {
+    private func dedupKey(for message: OpenClawChatMessage) -> String {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -77,7 +109,7 @@ public actor MessageCacheStorage {
         return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
-    fileprivate func isEmptyTextPlaceholder(_ message: OpenClawChatMessage) -> Bool {
+    private func isEmptyTextPlaceholder(_ message: OpenClawChatMessage) -> Bool {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return rawText.isEmpty
