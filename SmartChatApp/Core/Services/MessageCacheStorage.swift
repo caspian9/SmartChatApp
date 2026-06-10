@@ -2,7 +2,16 @@ import Foundation
 import OpenClawChatUI
 import CryptoKit
 
-public actor MessageCacheStorage {
+public protocol MessageCacheStorageProtocol: Sendable {
+    func load(for sessionKey: String) async -> [OpenClawChatMessage]
+    func append(_ messages: [OpenClawChatMessage], for sessionKey: String) async
+    func clear(for sessionKey: String) async
+    func clearAll() async
+    func maxTimestamp(for sessionKey: String) async -> Double?
+    func messageIds(for sessionKey: String) async -> Set<String>
+}
+
+public actor MessageCacheStorage: MessageCacheStorageProtocol {
     public static let shared = MessageCacheStorage()
 
     private var cache: [String: [OpenClawChatMessage]] = [:]
@@ -15,7 +24,7 @@ public actor MessageCacheStorage {
         self.maxLocalMessages = maxLocalMessages
     }
 
-    public func load(for sessionKey: String) -> [OpenClawChatMessage] {
+    public func load(for sessionKey: String) async -> [OpenClawChatMessage] {
         if let cached = cache[sessionKey] {
             return cached
         }
@@ -24,8 +33,8 @@ public actor MessageCacheStorage {
         return messages
     }
 
-    public func append(_ messages: [OpenClawChatMessage], for sessionKey: String) {
-        var allMessages = load(for: sessionKey)  // 内存优先
+    public func append(_ messages: [OpenClawChatMessage], for sessionKey: String) async {
+        var allMessages = await load(for: sessionKey)  // 内存优先
         let originalCount = allMessages.count
 
         var added = 0
@@ -60,23 +69,23 @@ public actor MessageCacheStorage {
     }
 
     // 占位 - Task 3 实现
-    public func clear(for sessionKey: String) {
+    public func clear(for sessionKey: String) async {
         cache[sessionKey] = []
         defaults.removeObject(forKey: storageKey(for: sessionKey))
     }
-    public func clearAll() {
+    public func clearAll() async {
         cache.removeAll()
         let keys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(keyPrefix) }
         for key in keys {
             defaults.removeObject(forKey: key)
         }
     }
-    public func maxTimestamp(for sessionKey: String) -> Double? {
-        let messages = load(for: sessionKey)
+    public func maxTimestamp(for sessionKey: String) async -> Double? {
+        let messages = await load(for: sessionKey)
         return messages.compactMap(\.timestamp).max()
     }
-    public func messageIds(for sessionKey: String) -> Set<String> {
-        Set(load(for: sessionKey).map { $0.id.uuidString })
+    public func messageIds(for sessionKey: String) async -> Set<String> {
+        Set(await load(for: sessionKey).map { $0.id.uuidString })
     }
 
     private func storageKey(for sessionKey: String) -> String {
