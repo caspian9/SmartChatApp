@@ -14,9 +14,8 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         store = MessageCacheStore(storage: fakeStorage)
         vm = NativeChatViewModel(store: store)  // 注入 test store
         // vm 初始化已经把 messageReceiver.viewModel = self 注好了,
-        // 我们只需要注入 store(等价于 HistoryLoader 注入 store 的方式)
+        // store 也在 init 里注入了,这里不需要再设置
         receiver = vm.messageReceiver
-        receiver.store = store
         // 测试需要 selectedSession 给一个 sessionKey,
         // 否则 receiveMessage 会 guard let 早退。
         vm.selectedSession = makeTestSession()
@@ -32,12 +31,19 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         vm = nil
     }
 
-    func test_streamingMessage_appendsToStore() async {
+    func test_streamingMessage_appendsToStore() async throws {
         let key = "session-1"
         let chat = makeChat(text: "delta", state: "streaming")
         receiver.receiveMessage(chat)
-        // store.append 是 async,在 receiveMessage 返回前 schedule
-        try? await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+        // Poll for the async store write to complete (don't rely on a fixed sleep — flaky under CI)
+        let deadline = Date().addingTimeInterval(2.0)
+        while store.messages(for: key, since: nil).isEmpty {
+            if Date() > deadline {
+                XCTFail("store.append did not complete within 2s")
+                return
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)  // 10ms poll interval
+        }
         let messages = store.messages(for: key, since: nil)
         XCTAssertEqual(messages.count, 1)
         XCTAssertEqual(messages[0].content.first?.text, "delta")
