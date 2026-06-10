@@ -7,7 +7,7 @@ public enum CommandSource: String, Codable, Sendable, Hashable {
 }
 
 public typealias LocalExecutor =
-    @Sendable ([String]) async -> SlashCommandResult
+    @Sendable ([String]) async throws -> SlashCommandResult
 
 public struct SlashCommand: Identifiable, Hashable, Sendable {
     public let id: String

@@ -8,7 +8,7 @@ public protocol LocalCommandContext: AnyObject, Sendable {
 }
 
 @MainActor
-public final class LocalCommandRegistry {
+public class LocalCommandRegistry {
     public weak var context: LocalCommandContext?
 
     private var commands: [String: SlashCommand] = [:]
@@ -91,11 +91,11 @@ public final class LocalCommandRegistry {
         commands[cmd.id.lowercased()] = cmd
     }
 
-    public func lookup(_ token: String) -> SlashCommand? {
+    open func lookup(_ token: String) -> SlashCommand? {
         commands[token.lowercased()]
     }
 
-    public var all: [SlashCommand] {
+    open var all: [SlashCommand] {
         Array(commands.values).sorted { $0.id < $1.id }
     }
 

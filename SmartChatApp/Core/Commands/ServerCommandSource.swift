@@ -2,14 +2,14 @@ import Foundation
 import OpenClawProtocol
 
 @MainActor
-public final class ServerCommandSource {
+public class ServerCommandSource {
     public private(set) var entries: [CommandEntry] = []
     public private(set) var isFetched: Bool = false
     public private(set) var lastError: Error?
 
     public init() {}
 
-    public func contains(_ token: String) -> Bool {
+    open func contains(_ token: String) -> Bool {
         let normalized = token.lowercased()
         return entries.contains { entry in
             entry.name.lowercased() == normalized
@@ -19,7 +19,7 @@ public final class ServerCommandSource {
         }
     }
 
-    public var all: [SlashCommand] {
+    open var all: [SlashCommand] {
         entries.map(SlashCommand.fromCommandEntry)
     }
 
