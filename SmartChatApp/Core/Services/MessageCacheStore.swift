@@ -41,7 +41,27 @@ public final class MessageCacheStore {
         hydratedSessions.insert(sessionKey)
     }
 
-    public func append(_ messages: [OpenClawChatMessage], for sessionKey: String) async {}
+    public func append(_ messages: [OpenClawChatMessage], for sessionKey: String) async {
+        guard !messages.isEmpty else { return }
+        // 防御:如果内存没 hydrate,先 hydrate
+        if !isHydrated(for: sessionKey) {
+            let loaded = await storage.load(for: sessionKey)
+            messagesBySession[sessionKey] = loaded
+            hydratedSessions.insert(sessionKey)
+        }
+        // 委托 storage dedup + 写盘
+        await storage.append(messages, for: sessionKey)
+        // 重新从 storage 拿全量(dedup 后),更新内存
+        let updated = await storage.load(for: sessionKey)
+        messagesBySession[sessionKey] = updated
+        // 推进 lastSeenTimestamp
+        if let newMax = updated.compactMap(\.timestamp).max() {
+            let current = lastSeenTimestampBySession[sessionKey] ?? 0
+            if newMax > current {
+                lastSeenTimestampBySession[sessionKey] = newMax
+            }
+        }
+    }
     public func clear(for sessionKey: String) async {}
     public func clearAll() async {}
 }
