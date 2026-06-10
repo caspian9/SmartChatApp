@@ -1,16 +1,18 @@
 import Foundation
 import OpenClawProtocol
 
-/// Narrow seam for the upstream `commands.list` RPC. Keeping the
-/// protocol method count to one (string-in / string-out) means
-/// the production adapter (Task 7) and the test fake (Task 5)
-/// have identical surface area. `AnyObject` so the production
-/// adapter can be a reference type and the fake is one too;
-/// `Sendable` because the class is `@MainActor`-isolated and
-/// must travel across `await` boundaries.
+/// Narrow seam for the upstream `commands.list` RPC. Returns
+/// `Data` (not `String`) because the underlying `ConnectionTransport`
+/// already produces `Data` and the only consumer here is
+/// `JSONDecoder().decode(_:from:)` which wants `Data` — a `String`
+/// round-trip would just be a wasted UTF-8 encode + decode.
+///
+/// `AnyObject` so the production adapter can be a reference type
+/// and the fake is one too; `Sendable` because the class is
+/// `@MainActor`-isolated and must travel across `await` boundaries.
 @MainActor
 public protocol ServerCommandTransport: AnyObject, Sendable {
-    func send(method: String, paramsJSON: String) async throws -> String
+    func send(method: String, paramsJSON: String) async throws -> Data
 }
 
 @MainActor
@@ -55,11 +57,10 @@ open class ServerCommandSource {
             return
         }
         do {
-            let json = try await transport.send(
+            let data = try await transport.send(
                 method: "commands.list",
                 paramsJSON: "{\"includeArgs\":true,\"scope\":\"text\"}"
             )
-            let data = Data(json.utf8)
             let result = try JSONDecoder().decode(
                 CommandsListResult.self, from: data
             )
@@ -76,11 +77,10 @@ open class ServerCommandSource {
                           level: .warning)
             try? await Task.sleep(for: retryDelay)
             do {
-                let json = try await transport.send(
+                let data = try await transport.send(
                     method: "commands.list",
                     paramsJSON: "{\"includeArgs\":true,\"scope\":\"text\"}"
                 )
-                let data = Data(json.utf8)
                 let result = try JSONDecoder().decode(
                     CommandsListResult.self, from: data
                 )

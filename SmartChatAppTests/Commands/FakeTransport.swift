@@ -7,19 +7,19 @@ import SmartChatApp
 /// "transport unavailable" without inspecting the concrete type.
 ///
 /// `failures[method]` is decremented on every attempt; once it
-/// hits zero, the method returns its canned response (or `"{}"`
-/// if none was set). `responses[method]` is *not* consumed —
+/// hits zero, the method returns its canned response (or empty
+/// `Data` if none was set). `responses[method]` is *not* consumed —
 /// the same response is returned on every successful call.
 @MainActor
 final class FakeTransport: ServerCommandTransport {
-    var responses: [String: String] = [:]
+    var responses: [String: Data] = [:]
     var failures: [String: Int] = [:]
 
-    func send(method: String, paramsJSON: String) async throws -> String {
+    func send(method: String, paramsJSON: String) async throws -> Data {
         if let remaining = failures[method], remaining > 0 {
             failures[method] = remaining - 1
             throw URLError(.timedOut)
         }
-        return responses[method] ?? "{}"
+        return responses[method] ?? Data()
     }
 }

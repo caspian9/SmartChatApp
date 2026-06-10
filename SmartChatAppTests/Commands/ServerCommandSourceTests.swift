@@ -27,12 +27,12 @@ final class ServerCommandSourceTests: XCTestCase {
 
     func test_refresh_populatesFromTransport() async {
         let transport = FakeTransport()
-        transport.responses["commands.list"] = """
+        transport.responses["commands.list"] = Data(#"""
         {"commands":[
           {"name":"/status","description":"Show status",
            "acceptsArgs":false,"source":"native","scope":"text"}
         ]}
-        """
+        """#.utf8)
         let s = ServerCommandSource(transport: transport)
         await s.refresh()
         XCTAssertTrue(s.isFetched)
@@ -44,12 +44,12 @@ final class ServerCommandSourceTests: XCTestCase {
     func test_refresh_retriesOnceOnFailure() async {
         let transport = FakeTransport()
         transport.failures["commands.list"] = 1
-        transport.responses["commands.list"] = """
+        transport.responses["commands.list"] = Data(#"""
         {"commands":[
           {"name":"/x","description":"d",
            "acceptsArgs":false,"source":"native","scope":"text"}
         ]}
-        """
+        """#.utf8)
         let s = ServerCommandSource(transport: transport,
                                     retryDelay: .zero)
         await s.refresh()
@@ -68,7 +68,7 @@ final class ServerCommandSourceTests: XCTestCase {
 
     func test_refresh_handlesMalformedJSON() async {
         let transport = FakeTransport()
-        transport.responses["commands.list"] = "not json at all"
+        transport.responses["commands.list"] = Data("not json at all".utf8)
         let s = ServerCommandSource(transport: transport,
                                     retryDelay: .zero)
         await s.refresh()
