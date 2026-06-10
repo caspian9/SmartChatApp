@@ -109,4 +109,69 @@ final class MessageCacheStorageTests: XCTestCase {
         XCTAssertEqual(loaded.count, cap)
         XCTAssertEqual(loaded.compactMap { $0.content.first?.text }, ["m5", "m6", "m7", "m8", "m9"])
     }
+
+    // MARK: - clear / clearAll / maxTimestamp / messageIds tests (Task 3)
+
+    func test_clear_removesFromMemoryAndDisk() async {
+        let key = "session-1"
+        await storage.append([makeMsg()], for: key)
+        let before = await storage.load(for: key)
+        XCTAssertEqual(before.count, 1)
+
+        await storage.clear(for: key)
+        let after = await storage.load(for: key)
+        XCTAssertEqual(after.count, 0)
+
+        // Disk also cleared
+        let storage2 = MessageCacheStorage(defaults: defaults, maxLocalMessages: 200)
+        let fromDisk = await storage2.load(for: key)
+        XCTAssertEqual(fromDisk.count, 0)
+    }
+
+    func test_clear_doesNotAffectOtherSessions() async {
+        await storage.append([makeMsg()], for: "session-1")
+        await storage.append([makeMsg()], for: "session-2")
+        await storage.clear(for: "session-1")
+        let s1 = await storage.load(for: "session-1")
+        let s2 = await storage.load(for: "session-2")
+        XCTAssertEqual(s1.count, 0)
+        XCTAssertEqual(s2.count, 1)
+    }
+
+    func test_clearAll_removesAllSessions() async {
+        await storage.append([makeMsg()], for: "session-1")
+        await storage.append([makeMsg()], for: "session-2")
+        await storage.clearAll()
+        let s1 = await storage.load(for: "session-1")
+        let s2 = await storage.load(for: "session-2")
+        XCTAssertEqual(s1.count, 0)
+        XCTAssertEqual(s2.count, 0)
+    }
+
+    func test_maxTimestamp_returnsHighestTimestamp() async {
+        let key = "session-1"
+        await storage.append(
+            [makeMsg(text: "a", timestamp: 1000),
+             makeMsg(text: "b", timestamp: 5000),
+             makeMsg(text: "c", timestamp: 2000)],
+            for: key)
+        let max = await storage.maxTimestamp(for: key)
+        XCTAssertEqual(max, 5000)
+    }
+
+    func test_maxTimestamp_emptySessionReturnsNil() async {
+        let max = await storage.maxTimestamp(for: "nonexistent")
+        XCTAssertNil(max)
+    }
+
+    func test_messageIds_returnsAllIds() async {
+        let key = "session-1"
+        let id1 = UUID()
+        let id2 = UUID()
+        await storage.append(
+            [makeMsg(id: id1, text: "first"), makeMsg(id: id2, text: "second")],
+            for: key)
+        let ids = await storage.messageIds(for: key)
+        XCTAssertEqual(ids, Set([id1.uuidString, id2.uuidString]))
+    }
 }
