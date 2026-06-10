@@ -250,6 +250,109 @@ final class SlashCommandRouterTests: XCTestCase {
         }
         XCTAssertTrue(text.contains("no executor"))
     }
+
+    // --- merged ---
+
+    func test_merged_groupsLocalFirst() {
+        let localCmd = SlashCommand(
+            id: "/help", description: "d", source: .local,
+            executor: { _ in .silent }
+        )
+        let serverEntry = CommandEntry(
+            name: "/status", nativename: nil, textaliases: nil,
+            description: "d", category: nil,
+            source: .init("native"), scope: .init("text"),
+            acceptsargs: false, args: nil
+        )
+        let r = makeSUT(localCommands: [localCmd],
+                        serverEntries: [serverEntry])
+        XCTAssertEqual(r.merged.map(\.source), [.local, .server])
+    }
+
+    func test_merged_dedupesLocalOverServer() {
+        let localCmd = SlashCommand(
+            id: "/help", description: "local-help",
+            source: .local, executor: { _ in .silent }
+        )
+        let serverEntry = CommandEntry(
+            name: "/help", nativename: nil, textaliases: nil,
+            description: "server-help", category: nil,
+            source: .init("native"), scope: .init("text"),
+            acceptsargs: false, args: nil
+        )
+        let r = makeSUT(localCommands: [localCmd],
+                        serverEntries: [serverEntry])
+        let merged = r.merged
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.description, "local-help")
+    }
+
+    // --- filter ---
+
+    func test_filter_empty_returnsTop5() {
+        let entries = (0..<10).map { i in
+            CommandEntry(
+                name: "/c\(i)", nativename: nil, textaliases: nil,
+                description: "d\(i)", category: nil,
+                source: .init("native"), scope: .init("text"),
+                acceptsargs: false, args: nil
+            )
+        }
+        let r = makeSUT(serverEntries: entries)
+        XCTAssertEqual(r.filter("").count, 5)
+    }
+
+    func test_filter_slashAlone_returnsTop5() {
+        let entries = (0..<10).map { i in
+            CommandEntry(
+                name: "/c\(i)", nativename: nil, textaliases: nil,
+                description: "d\(i)", category: nil,
+                source: .init("native"), scope: .init("text"),
+                acceptsargs: false, args: nil
+            )
+        }
+        let r = makeSUT(serverEntries: entries)
+        XCTAssertEqual(r.filter("/").count, 5)
+    }
+
+    func test_filter_prefixMatch() {
+        let a = SlashCommand(id: "/help", description: "d",
+                             source: .local, executor: { _ in .silent })
+        let b = CommandEntry(
+            name: "/hello", nativename: nil, textaliases: nil,
+            description: "d", category: nil,
+            source: .init("native"), scope: .init("text"),
+            acceptsargs: false, args: nil
+        )
+        let r = makeSUT(localCommands: [a], serverEntries: [b])
+        let result = r.filter("/h")
+        XCTAssertEqual(result.map(\.id).sorted(), ["/hello", "/help"])
+    }
+
+    func test_filter_aliasMatch() {
+        let a = SlashCommand(
+            id: "/help", description: "d",
+            aliases: ["/h"], source: .local,
+            executor: { _ in .silent }
+        )
+        let r = makeSUT(localCommands: [a])
+        XCTAssertEqual(r.filter("/h").map(\.id), ["/help"])
+    }
+
+    func test_filter_noMatch_returnsEmpty() {
+        let a = SlashCommand(id: "/help", description: "d",
+                             source: .local, executor: { _ in .silent })
+        let r = makeSUT(localCommands: [a])
+        XCTAssertTrue(r.filter("/xyz").isEmpty)
+    }
+
+    func test_filter_isCaseInsensitive() {
+        let a = SlashCommand(id: "/help", description: "d",
+                             source: .local, executor: { _ in .silent })
+        let r = makeSUT(localCommands: [a])
+        XCTAssertEqual(r.filter("/H").map(\.id), ["/help"])
+        XCTAssertEqual(r.filter("/HELP").map(\.id), ["/help"])
+    }
 }
 
 // --- fakes ---

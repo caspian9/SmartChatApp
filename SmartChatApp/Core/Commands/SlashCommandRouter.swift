@@ -58,4 +58,29 @@ public final class SlashCommandRouter {
         }
         return .passthrough
     }
+
+    public var merged: [SlashCommand] {
+        let localCmds = local.all
+        let serverCmds = server.all
+        let localIds = Set(localCmds.map(\.id))
+        let dedupedServer = serverCmds.filter { !localIds.contains($0.id) }
+        let localSorted = localCmds.sorted { $0.id < $1.id }
+        let serverSorted = dedupedServer.sorted { $0.id < $1.id }
+        return localSorted + serverSorted
+    }
+
+    public func filter(_ query: String) -> [SlashCommand] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return Array(merged.prefix(5))
+        }
+        let q = trimmed.lowercased()
+        let matches = merged.filter { cmd in
+            cmd.id.lowercased().hasPrefix(q)
+                || cmd.aliases.contains(where: {
+                    $0.lowercased().hasPrefix(q)
+                })
+        }
+        return Array(matches.prefix(5))
+    }
 }
