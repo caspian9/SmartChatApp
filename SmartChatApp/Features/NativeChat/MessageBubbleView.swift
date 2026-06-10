@@ -10,9 +10,21 @@ struct ViewHeightKey: PreferenceKey {
 struct MessageBubbleView: View {
     @Environment(\.theme) private var theme
     let message: ChatMessage
+    /// Invoked when the user taps "Show more..." to expand this bubble,
+    /// or when an external caller (e.g. `MessageReceiver` at `lifecycle
+    /// end`) wants to mark it expanded. The callback is responsible for
+    /// writing through to `viewModel.messages[i] = updated` so the
+    /// `@Observable` setter on `messages` fires and the parent view
+    /// re-evaluates body. `MessageBubbleView` itself no longer reaches
+    /// into any external collapse-state cache — `isExpanded` reads
+    /// directly off `message.isUserExpanded`, so the value travels with
+    /// the message through `vm.messages = messages` reassignments
+    /// (refresh, session switch, history replace) without any cache
+    /// tracking dependency.
+    var onExpandChange: (Bool) -> Void
 
     @State private var animationOffset: CGFloat = 0
-    @State private var isExpanded: Bool = false
+    @ObservedObject private var collapseCache = CollapseStateCache.shared
     @State private var measuredHeight: CGFloat = 0
     @State private var isMarkdownCollapsed: Bool = false
     @State private var cachedShouldCollapse: Bool = false
@@ -194,6 +206,12 @@ struct MessageBubbleView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
+        // No `.onAppear` rehydration: the `isExpanded` computed reads
+        // `collapseCache.isExpanded(id)` from `body`, and SwiftUI's
+        // observation tracking handles all of the re-evaluation. The
+        // cache is `@Observable`, so the view registers a dependency
+        // on `expandedMessageIds` at first body computation; the
+        // `Show more` button mutates the cache; the bubble re-renders.
     }
 
     @ViewBuilder
@@ -218,22 +236,16 @@ struct MessageBubbleView: View {
             VStack(alignment: .leading, spacing: 6) {
                 messageText
                 // Trailing typing dots for non-assistant, non-user streaming
-                // roles (thinking, toolCall, toolResult). The slot is only
-                // emitted for those roles — user and assistant bubbles don't
-                // get an extra 10pt of empty space. Inside the slot, the
-                // Group reserves a fixed 6pt + 4pt top padding so the bubble
-                // height doesn't change when streaming ends and the indicator
-                // disappears.
-                if !message.isOutgoing && message.role != "assistant" {
-                    Group {
-                        if message.state == "streaming" {
-                            TypingIndicatorView()
-                        } else {
-                            Color.clear
-                        }
-                    }
-                    .frame(height: 6)
-                    .padding(.top, 4)
+                // roles (thinking, toolCall, toolResult). Only emitted while
+                // `state == "streaming"` — when the message reaches `final`,
+                // we drop the slot entirely so the bubble collapses to its
+                // real height instead of leaving a 10pt blank row under the
+                // text. The 10pt height jump is intentional: it's a clear
+                // visual signal that the message is done, and the next user
+                // gesture (tap to focus input, scroll) immediately anchors
+                // the viewport to the new bottom via scrollTo.
+                if !message.isOutgoing && message.role != "assistant" && message.state == "streaming" {
+                    TypingIndicatorView()
                 }
             }
             .padding(.horizontal, 12)
@@ -283,7 +295,12 @@ struct MessageBubbleView: View {
 
             if shouldCollapse && !isExpanded && message.state != "streaming" {
                 Button {
-                    isExpanded = true
+                    // Hand off to the parent so it can do
+                    // `viewModel.messages[i] = updated` (which fires
+                    // the `@Observable` setter on `messages` and
+                    // re-evaluates this view's body with the new
+                    // `isUserExpanded = true`).
+                    onExpandChange(true)
                 } label: {
                     Text("Show more...")
                         .font(.caption)
@@ -298,6 +315,21 @@ struct MessageBubbleView: View {
     /// Markdown plain text is also fine here (MarkdownViewTextKit renders plain text).
     private var isAssistantStreaming: Bool {
         message.state == "streaming" && !message.isOutgoing && message.role == "assistant"
+    }
+
+    /// User-driven expand state. Reads directly off `message.isUserExpanded`
+    /// — the value travels with the message through any
+    /// `vm.messages = messages` reassignment (refresh, session switch,
+    /// history replace). No external cache tracking required: when
+    /// `onExpandChange(true)` writes through to
+    /// `viewModel.messages[i] = updated` (the parent view's job), the
+    /// `@Observable` setter on `messages` fires, the parent re-evaluates
+    /// `ForEach`, and the new `message` (with `isUserExpanded = true`)
+    /// reaches this view's body. `HistoryLoader` is responsible for
+    /// merging old `isUserExpanded` values into freshly-networked
+    /// messages so refresh doesn't drop the user's expand state.
+    private var isExpanded: Bool {
+        message.isUserExpanded ?? false
     }
 
     private var collapseLineLimit: Int? {
@@ -315,7 +347,6 @@ struct MessageBubbleView: View {
 
     private var shouldShowExpandButton: Bool {
         let should = message.isOutgoing == false && !message.text.isEmpty && shouldCollapse && !isExpanded
-        AppLogger.log("[shouldShowExpandButton] id=\(String(message.id.prefix(8))) should=\(should ? 1 : 0)", category: .nativeChat)
         return should
     }
 
@@ -324,6 +355,14 @@ struct MessageBubbleView: View {
         // Collapse only applies to history messages loaded when the user
         // re-enters the native chat page.
         if message.isFresh {
+            return false
+        }
+        // Already-expanded messages (user tapped Show more, or
+        // `MessageReceiver` marked at lifecycle end) should never
+        // auto-collapse, even after a `vm.messages = messages` reassign
+        // — the `HistoryLoader` re-merges `isUserExpanded` on
+        // network-refreshed messages so the value flows through.
+        if message.isUserExpanded == true {
             return false
         }
         return CollapseStateCache.shared.shouldCollapse(for: message)
@@ -403,6 +442,20 @@ struct ChatMessage: Identifiable, Equatable {
     /// by the user or streamed from the agent). False for messages loaded
     /// from history.
     var isFresh: Bool = false
+    /// User-driven expand state. Lives on the message struct so the
+    /// parent view's `messages` computed property can merge it from
+    /// `CollapseStateCache.expandedMessageIds` per render. `nil` until
+    /// the user taps "Show more..." (or `MessageReceiver` marks it at
+    /// `lifecycle end`); then `true` keeps the bubble expanded, `false`
+    /// collapses it. **Included in `==` below** — when the parent
+    /// produces a new ChatMessage with a different `isUserExpanded`,
+    /// SwiftUI's ForEach diff must see it as != so the child
+    /// `MessageBubbleView.body` re-evaluates and the bubble actually
+    /// expands. The legacy rationale for excluding it (EventInterpreter
+    /// / MessageReceiver array diffs churning on expand toggles) no
+    /// longer applies in the new `MessageCacheStore` architecture —
+    /// those writers no longer mutate `vm.messages` in place.
+    var isUserExpanded: Bool? = nil
 
     var isOutgoing: Bool {
         role.lowercased() == "user"
@@ -418,6 +471,7 @@ struct ChatMessage: Identifiable, Equatable {
         lhs.startedAt == rhs.startedAt &&
         lhs.endedAt == rhs.endedAt &&
         lhs.livenessState == rhs.livenessState &&
-        lhs.isFresh == rhs.isFresh
+        lhs.isFresh == rhs.isFresh &&
+        lhs.isUserExpanded == rhs.isUserExpanded
     }
 }
