@@ -31,6 +31,16 @@ enum NativeChatScrollKind: Equatable {
 struct NativeChatScrollRequest: Equatable {
     var token: Int
     var kind: NativeChatScrollKind
+    /// When true, the view ignores `userHasScrolled` and forces a scroll
+    /// to the last message. Set by the HistoryLoader when the user
+    /// switched sessions (`sessionKey` changed since the last load) — in
+    /// that case the viewport is on the previous session's anchor and a
+    /// userHasScrolled=true (set while reading the old session) would
+    /// otherwise prevent the viewport from following the new session.
+    /// For the same-session-history-load case (entering NativeChat,
+    /// in-app refresh), this stays false so reading history isn't
+    /// yanked to the bottom.
+    var forceScroll: Bool = false
     static let initial = NativeChatScrollRequest(token: 0, kind: .newMessage)
 }
 
@@ -66,6 +76,29 @@ final class NativeChatViewModel {
     /// visible up-down jitter when the viewport kept re-anchoring against
     /// different layout states.
     var scrollRequest: NativeChatScrollRequest = .initial
+    /// Watchdog for `isSending = true`. If `lifecycle end` (or any
+    /// terminal signal) doesn't arrive within `sendTimeout`, the
+    /// watchdog flips `isSending` back to false and surfaces a
+    /// timeout error. Without this, a `chat.send` that the gateway
+    /// accepted but never followed up with a lifecycle event (e.g.,
+    /// dropped WebSocket frame, server crash mid-run) would leave
+    /// the chat input permanently disabled and the spinner spinning
+    /// — even after the user navigates away and back, because the
+    /// `isSending` flag is the only thing the view observes. We
+    /// hold the watchdog task here (instead of inside `sendMessage`'s
+    /// `Task { }`) so `lifecycle end` can cancel it from a different
+    /// async context.
+    @ObservationIgnored
+    private var sendTimeoutTask: Task<Void, Never>?
+    /// How long to wait between `chat.send` succeeding and a terminal
+    /// `lifecycle end` event arriving before declaring the run
+    /// orphaned. Tuned to comfortably exceed the longest legitimate
+    /// agent run (long thinking + multi-step tool calls can take
+    /// 30-60s) while still being short enough that a stuck UI
+    /// recovers within human attention span. Override via
+    /// `setSendTimeout(_:)` for tests.
+    @ObservationIgnored
+    private var sendTimeout: Duration = .seconds(90)
 
     // MARK: - Collaborators
 
@@ -73,14 +106,25 @@ final class NativeChatViewModel {
     let historyLoader: HistoryLoader
     let eventInterpreter: EventInterpreter
     let sessionCoordinator: SessionCoordinator
+    /// Cache store — single source of truth for persisted messages
+    /// (refactor: message-cache-sot). Held by the VM so the loader and
+    /// view can read from one `@Observable` instance. `@ObservationIgnored`
+    /// because the VM's observers care about the store's contents
+    /// (queried through `store.messages(for:)`), not the store reference
+    /// itself. Defaulted to `.shared` so existing `NativeChatViewModel()`
+    /// call sites in tests continue to work without an explicit injection.
+    @ObservationIgnored
+    let store: MessageCacheStore
 
-    init() {
+    init(store: MessageCacheStore = MessageCacheStore.shared) {
+        self.store = store
         self.messageReceiver = MessageReceiver()
         self.historyLoader = HistoryLoader()
         self.eventInterpreter = EventInterpreter()
         self.sessionCoordinator = SessionCoordinator()
         self.messageReceiver.viewModel = self
         self.historyLoader.viewModel = self
+        self.historyLoader.store = store
         self.eventInterpreter.viewModel = self
         self.sessionCoordinator.viewModel = self
     }
@@ -186,16 +230,41 @@ final class NativeChatViewModel {
                     attachments: []
                 )
                 AppLogger.log("Message sent, waiting for response...", category: .nativeChat)
+                // Arm the watchdog AFTER the RPC has been accepted.
+                // If we armed it before the await, the timeout would
+                // include the chat.send RTT (which is 35s ceiling in
+                // the gateway transport) plus the agent run — the
+                // user-perceived "still spinning" window would be
+                // much larger than the configured 90s. Starting here
+                // means the watchdog's 90s budget is for "server
+                // accepted but never followed up with lifecycle end",
+                // which is the only failure mode we can recover from
+                // by force-resetting isSending.
+                self.armSendTimeout()
             } catch {
                 AppLogger.log("Send message error: \(error.localizedDescription)", category: .nativeChat, level: .error)
                 self.setError(error.localizedDescription)
-                self.setSending(false)
+                // `setError` already calls `setSending(false)` which
+                // also cancels any pending watchdog.
             }
         }
     }
 
     func loadHistory() {
         historyLoader.loadHistory()
+    }
+
+    /// Reset `isSending` to false and cancel the send-watching
+    /// watchdog. Called from `EventInterpreter` when a terminal
+    /// `lifecycle end` event arrives, which is the normal
+    /// post-response signal. Going through this method (instead of
+    /// a direct `isSending = false` assignment) ensures the
+    /// watchdog gets cancelled; otherwise a `lifecycle end` that
+    /// lands within the timeout window would still race against
+    /// the watchdog's pending reset (harmless, but wastes a Task
+    /// wakeup and is harder to reason about).
+    func resetSendState() {
+        setSending(false)
     }
 
     /// User-initiated pull-up refresh. Re-runs the network step of
@@ -220,11 +289,48 @@ final class NativeChatViewModel {
     private func setError(_ error: String?) {
         self.error = error
         isLoading = false
-        isSending = false
+        setSending(false)
     }
 
     private func setSending(_ value: Bool) {
         isSending = value
+        // Cancel the watchdog on every transition. The watchdog's
+        // job is to flip `isSending` back to false if no terminal
+        // event lands in time; once `isSending` is false (or being
+        // re-armed by a fresh `sendMessage`), the watchdog for the
+        // previous run is moot. `lifecycle end` and the catch
+        // branch both go through `setSending(false)`, so this single
+        // cancel point covers every legitimate reset path.
+        sendTimeoutTask?.cancel()
+        sendTimeoutTask = nil
+    }
+
+    /// Arm the `isSending` watchdog. If `lifecycle end` doesn't
+    /// arrive within `sendTimeout`, this flips `isSending` back to
+    /// false and surfaces a timeout error. Called from `sendMessage`
+    /// after `chat.send` is dispatched. Re-arming is a no-op if a
+    /// watchdog is already running.
+    private func armSendTimeout() {
+        sendTimeoutTask?.cancel()
+        let timeout = sendTimeout
+        sendTimeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                // Cancelled (lifecycle end arrived in time, or the
+                // user sent another message). Nothing to do.
+                return
+            }
+            // Timed out. Only flip state if we're still waiting on
+            // the same run — re-check inside the actor, since the
+            // user may have cancelled-and-resent in the meantime.
+            await MainActor.run {
+                guard let self else { return }
+                guard self.isSending else { return }
+                AppLogger.log("sendMessage watchdog fired after \(timeout) — no lifecycle end; resetting isSending and surfacing timeout", category: .nativeChat, level: .warning)
+                self.setError("请求超时(\(timeout.components.seconds)s)未收到回复,请重试")
+            }
+        }
     }
 
     private func loadedMoreHistory(_ messages: [ChatMessage], hasMore: Bool) {
