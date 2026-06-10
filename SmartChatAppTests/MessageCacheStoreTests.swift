@@ -113,6 +113,27 @@ final class MessageCacheStoreTests: XCTestCase {
         XCTAssertEqual(store.lastSeenTimestamp(for: key), 5000, "older batch must not roll back the waterline")
     }
 
+    // —— clear ——
+
+    func test_clear_removesSession() async {
+        let key = "session-1"
+        await store.append([makeMsg()], for: key)
+        XCTAssertEqual(store.messages(for: key).count, 1)
+
+        await store.clear(for: key)
+        XCTAssertEqual(store.messages(for: key).count, 0)
+        XCTAssertNil(store.lastSeenTimestamp(for: key))
+        XCTAssertFalse(store.isHydrated(for: key), "clear 也清掉 hydrated 标记")
+    }
+
+    func test_clearAll_removesEverything() async {
+        await store.append([makeMsg()], for: "session-1")
+        await store.append([makeMsg()], for: "session-2")
+        await store.clearAll()
+        XCTAssertEqual(store.messages(for: "session-1").count, 0)
+        XCTAssertEqual(store.messages(for: "session-2").count, 0)
+    }
+
     // —— helpers ——
 
     private func makeMsg(id: UUID = UUID(), role: String = "assistant",
