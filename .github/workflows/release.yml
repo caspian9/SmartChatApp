@@ -90,6 +90,7 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/SmartChatApp.xcarchive \
+            -allowProvisioningUpdates \
             -skipMacroValidation \
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="${IOS_DEVELOPMENT_TEAM:-$(bash scripts/ios-team-id.sh)}" \
@@ -101,6 +102,7 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath build/SmartChatApp.xcarchive \
             -exportPath build/ipa \
+            -allowProvisioningUpdates \
             -exportOptionsPlist config/ExportOptions.plist
 
       - name: Upload .xcarchive
