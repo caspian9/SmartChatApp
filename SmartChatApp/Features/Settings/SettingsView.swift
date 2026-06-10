@@ -162,10 +162,7 @@ struct SettingsView: View {
 
                 Button("Clear Message Cache") {
                     Task {
-                        await MessageCache.shared.clearAll()
-                        await MainActor.run {
-                            messageCacheStats = (0, 0)
-                        }
+                        await MessageCacheStore.shared.clearAll()
                     }
                 }
                 .foregroundColor(.red)
@@ -173,10 +170,9 @@ struct SettingsView: View {
                 Button("Clear All Caches") {
                     SessionCache.clearAll()
                     Task {
-                        await MessageCache.shared.clearAll()
+                        await MessageCacheStore.shared.clearAll()
                     }
                     sessionCacheCount = 0
-                    messageCacheStats = (0, 0)
                 }
                 .foregroundColor(.red)
             }
@@ -257,10 +253,6 @@ struct SettingsView: View {
         let count = SessionCache.totalSessionCount()
         await MainActor.run {
             sessionCacheCount = count
-        }
-        let stats = await MessageCache.shared.getStats()
-        await MainActor.run {
-            messageCacheStats = stats
         }
     }
 }
