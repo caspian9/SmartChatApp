@@ -123,6 +123,7 @@ final class NativeChatViewModel {
         self.eventInterpreter = EventInterpreter()
         self.sessionCoordinator = SessionCoordinator()
         self.messageReceiver.viewModel = self
+        self.messageReceiver.store = store
         self.historyLoader.viewModel = self
         self.historyLoader.store = store
         self.eventInterpreter.viewModel = self
