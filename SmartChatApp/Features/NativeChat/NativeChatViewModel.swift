@@ -157,8 +157,44 @@ final class NativeChatViewModel {
     @ObservationIgnored
     let store: MessageCacheStore
 
-    init(store: MessageCacheStore = MessageCacheStore.shared) {
+// MARK: - Slash commands
+    //
+    // The router is the dispatch seam: it inspects the user's input
+    // and either returns a `SlashCommandResult` to render locally
+    // (categories A and B) or hands the text back to be sent as a
+    // regular message (categories C and D, plus non-slash input).
+    // The server handles the text — the LLM recognizes the slash
+    // pattern, no special `kind` field needed.
+    let slashCommandRouter: SlashCommandRouter
+    let serverCommandSource: ServerCommandSource
+    /// Injected test seam. `sendAsMessage` invokes this closure
+    /// instead of going through `SessionManager.shared` when set.
+    /// Production wiring leaves it `nil`; tests inject a closure
+    /// that records the call on a FakeTransport.
+    var sendInterceptor: (@MainActor (String) async -> Void)?
+    #endif
+    /// Top-5 candidates for the autocomplete popup. Refreshed
+    /// via `updateAutocomplete(_:)` as the user types in the
+    /// input field.
+    var autocompleteCandidates: [SlashCommand] = []
+
+    init(
+        store: MessageCacheStore = MessageCacheStore.shared,
+        slashCommandRouter: SlashCommandRouter? = nil,
+        serverCommandSource: ServerCommandSource? = nil,
+        sendInterceptor: (@MainActor (String) async -> Void)? = nil
+    ) {
+        let local = LocalCommandRegistry()
+        let server = serverCommandSource ?? ServerCommandSource()
+        let router = slashCommandRouter ?? SlashCommandRouter(
+            local: local, server: server
+        )
         self.store = store
+        self.slashCommandRouter = router
+        self.serverCommandSource = server
+        #if DEBUG
+        self.sendInterceptor = sendInterceptor
+        #endif
         self.messageReceiver = MessageReceiver()
         self.historyLoader = HistoryLoader()
         self.eventInterpreter = EventInterpreter()
@@ -169,6 +205,9 @@ final class NativeChatViewModel {
         self.historyLoader.store = store
         self.eventInterpreter.viewModel = self
         self.sessionCoordinator.viewModel = self
+        // Wire context for /help (merged list), /clear (clear
+        // messages), and /connect (active profile name).
+        local.context = self
     }
 
     // MARK: - Public API (called by NativeChatView)
@@ -499,14 +538,73 @@ final class NativeChatViewModel {
         sessionCoordinator.sessionCreated(sessionKey)
     }
 
-    func sendMessage() {
+    func sendMessage() async {
         guard !inputText.isEmpty else { return }
+        guard let sessionKey = selectedSession?.key else { return }
+        let text = inputText
+        inputText = ""
+        autocompleteCandidates = []
+
+        let dispatch = await slashCommandRouter.dispatch(text)
+        switch dispatch {
+        case .execute(let result):
+            await handleCommandResult(result, sessionKey: sessionKey)
+        case .passthrough:
+            await sendAsMessage(text)
+        }
+    }
+
+    private func handleCommandResult(_ result: SlashCommandResult, sessionKey: String) async {
+        switch result {
+        case .bubble(let text):
+            await appendSystemBubble(text, sessionKey: sessionKey)
+        case .clearAndBubble(let text):
+            // The clear + append happens here (awaited) so the
+            // bubble lands AFTER the wipe on the store actor.
+            // LocalCommandRegistry's /clear executor also calls
+            // `LocalCommandContext.clearLocalMessages()` before
+            // returning `.clearAndBubble` — that path is a
+            // fire-and-forget Task and may not have completed by
+            // the time we get here. Awaiting the clear here is the
+            // authoritative one; the protocol call is kept for
+            // symmetry with future local commands that want to
+            // clear without going through the router.
+            await store.clear(for: sessionKey)
+            await appendSystemBubble(text, sessionKey: sessionKey)
+        case .silent:
+            break
+        }
+        isSending = false
+        scrollRequest = NativeChatScrollRequest(
+            token: scrollRequest.token &+ 1, kind: .newMessage
+        )
+    }
+
+    private func appendSystemBubble(_ text: String, sessionKey: String) async {
+        let msg = ChatMessage(
+            id: UUID().uuidString, text: text, timestamp: Date(),
+            role: "system", state: "final", runId: nil, seq: nil,
+            startedAt: nil, endedAt: nil, livenessState: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil,
+            isFresh: true
+        )
+        // Persist via the cache store (single source of truth). The
+        // view observes `store.messages(for: sessionKey)` and will
+        // pick this up via the store's @Observable change notification.
+        if let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: msg) {
+            await store.append([openclaw], for: sessionKey)
+        }
+    }
+
+    private func sendAsMessage(_ text: String) async {
         guard let session = selectedSession else { return }
         isSending = true
-        let text = inputText
         let sessionKey = session.key
         let textPreview = String(text.prefix(100))
-        AppLogger.log("sendMessage role=user text_len=\(text.count) text_preview=\(textPreview)", category: .nativeChat)
+AppLogger.log(
+            "sendMessage role=user text_len=\(text.count) text_preview=\(textPreview)",
+            category: .nativeChat
+        )
         let message = ChatMessage(
             id: UUID().uuidString,
             text: text,
@@ -528,7 +626,7 @@ final class NativeChatViewModel {
         // which can be 10+ seconds for a long response). The view's
         // `.newMessage` handler scrolls to the new last id (this very
         // user message) so the user sees the bubble land at the bottom.
-        //
+//
         // Bump the scroll request AFTER the user bubble lands in the
         // store. If we bump it before `store.append`, the multi-poll
         // scroll handler runs and targets `bottomAnchorId` before the
@@ -556,6 +654,14 @@ final class NativeChatViewModel {
                     forceScroll: true
                 )
             }
+        }
+        // Test seam: when a `sendInterceptor` closure was injected,
+        // invoke it and return — the real SessionManager + transport
+        // dance is bypassed. Production wiring leaves this nil and
+        // falls through to the real transport below.
+        if let interceptor = sendInterceptor {
+            await interceptor(text)
+            return
         }
         Task {
             do {
@@ -626,8 +732,15 @@ final class NativeChatViewModel {
                 self.setError(error.localizedDescription)
                 // `setError` already calls `setSending(false)` which
                 // also cancels any pending watchdog.
+                self.setSending(false)
             }
         }
+    }
+
+    /// Refresh the autocomplete popup candidates for the given
+    /// input. Called by the view on every keystroke.
+    public func updateAutocomplete(_ text: String) {
+        autocompleteCandidates = slashCommandRouter.filter(text)
     }
 
     func loadHistory() {
@@ -726,4 +839,33 @@ final class NativeChatViewModel {
     // MARK: - Helpers
 
     // (no helpers — ChatMessageConverter handles ChatMessage ↔ OpenClawChatMessage)
+}
+
+// MARK: - LocalCommandContext
+//
+// The local registry holds a weak ref to the view-model so the
+// built-in /help, /clear, /connect, /profiles commands can read
+// merged state (merged command list, message store, active
+// profile) without coupling the registry to the view-model type.
+extension NativeChatViewModel: LocalCommandContext {
+    func clearLocalMessages() {
+        // Called by LocalCommandRegistry's /clear executor before
+        // returning `.clearAndBubble("Chat cleared")` to the router.
+        // The actual clear runs in a Task so we don't block the
+        // synchronous MainActor.run site; the subsequent bubble
+        // append (via `handleCommandResult`) is queued after this
+        // on the store actor, so the bubble lands in a cleared
+        // session.
+        guard let sessionKey = selectedSession?.key else { return }
+        Task { @MainActor in
+            await store.clear(for: sessionKey)
+        }
+    }
+    var mergedCommands: [SlashCommand] {
+        slashCommandRouter.merged
+    }
+    var activeProfileName: String {
+        ProfileManager.shared.profiles
+            .first(where: { $0.isActive })?.name ?? "gateway"
+    }
 }
