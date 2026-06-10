@@ -62,6 +62,17 @@ public final class MessageCacheStore {
             }
         }
     }
-    public func clear(for sessionKey: String) async {}
-    public func clearAll() async {}
+    public func clear(for sessionKey: String) async {
+        await storage.clear(for: sessionKey)
+        messagesBySession[sessionKey] = []
+        lastSeenTimestampBySession[sessionKey] = nil
+        hydratedSessions.remove(sessionKey)
+    }
+
+    public func clearAll() async {
+        await storage.clearAll()
+        messagesBySession.removeAll()
+        lastSeenTimestampBySession.removeAll()
+        hydratedSessions.removeAll()
+    }
 }
