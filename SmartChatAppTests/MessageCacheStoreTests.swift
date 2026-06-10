@@ -90,6 +90,29 @@ final class MessageCacheStoreTests: XCTestCase {
         XCTAssertNil(store.lastSeenTimestamp(for: key))
     }
 
+    func test_append_firstCall_defensivelyHydratesFromStorage() async {
+        let key = "session-1"
+        let existing = makeMsg(timestamp: 500)
+        await fakeStorage.append([existing], for: key)  // pre-existing data
+        let newMsg = makeMsg(timestamp: 1000)
+        await store.append([newMsg], for: key)
+        let messages = store.messages(for: key, since: nil)
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertTrue(messages.contains { $0.id == existing.id })
+        XCTAssertTrue(messages.contains { $0.id == newMsg.id })
+        XCTAssertTrue(store.isHydrated(for: key))
+    }
+
+    func test_append_olderBatch_doesNotRollbackLastSeen() async {
+        let key = "session-1"
+        // First batch: advance to 5000
+        await store.append([makeMsg(timestamp: 1000), makeMsg(timestamp: 5000)], for: key)
+        XCTAssertEqual(store.lastSeenTimestamp(for: key), 5000)
+        // Second batch: older messages, must NOT roll back the waterline
+        await store.append([makeMsg(timestamp: 100), makeMsg(timestamp: 2000)], for: key)
+        XCTAssertEqual(store.lastSeenTimestamp(for: key), 5000, "older batch must not roll back the waterline")
+    }
+
     // —— helpers ——
 
     private func makeMsg(id: UUID = UUID(), role: String = "assistant",
