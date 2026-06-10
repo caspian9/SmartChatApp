@@ -25,11 +25,13 @@ permissions:
 
 jobs:
   # Cheap ubuntu gate that decides whether the heavy macos-15
-  # analyze job should run. Push events are always forwarded
-  # (immediate CodeQL feedback on every main push). Schedule
-  # events check whether any CodeQL run succeeded in the past
-  # 24 hours via the GitHub Actions API; if so, skip — the
-  # push path already covered the recent code.
+  # analyze job should run. Looks at the most recent CodeQL
+  # run on main and forwards to `analyze` unless that run is
+  # either (a) still in progress, or (b) a success that
+  # completed within the past 24 hours. Both push and
+  # schedule triggers go through this gate — the intent is
+  # "CodeQL runs at most once per 24h window" regardless of
+  # how many pushes happen.
   should-scan:
     name: Should scan (24h CodeQL dedup gate)
     runs-on: ubuntu-latest
@@ -41,52 +43,76 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Push-triggered runs are always forwarded — immediate
-          # CodeQL feedback on every main push is the canonical
-          # "this PR / direct push may have introduced an alert"
-          # path. The 24h dedup gate is schedule-only.
-          if [ "${{ github.event_name }}" = "push" ]; then
+          # Look at the most recent CodeQL run on main. We only
+          # need the single newest run — the dedup decision is
+          # based on its status / conclusion / age, not on the
+          # full 24h run history. Reading per_page=1 is cheaper
+          # than walking all 50 results and filtering.
+          #
+          # Branch filter: defensively restrict to main even
+          # though the current `on: push: branches: [main]`
+          # trigger can't produce runs on other branches. Cheap
+          # insurance against a future trigger change.
+          #
+          # The decision tree:
+          #   1. No run found at all              → run
+          #   2. Latest run still in progress
+          #      (queued / in_progress / waiting) → skip
+          #   3. Latest run completed + success
+          #      within the past 24h              → skip
+          #   4. Anything else (failure, cancelled,
+          #      timed out, or success > 24h old) → run
+          #
+          # Note: `created_at` strings sort lexicographically
+          # because they're RFC3339 (e.g. 2026-06-10T08:00:00Z),
+          # so shell string comparison gives the right
+          # chronological answer without date math.
+          WORKFLOW_ID=$(gh api \
+            "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/codeql.yml" \
+            --jq '.id')
+
+          LATEST=$(gh api \
+            "${{ github.api_url }}/repos/${{ github.repository }}/actions/runs?workflow_id=${WORKFLOW_ID}&branch=main&per_page=1" \
+            --jq '.workflow_runs[0] // empty')
+
+          if [ -z "$LATEST" ]; then
             echo "should-run=true" >> "$GITHUB_OUTPUT"
-            echo "Push event — running CodeQL."
+            echo "No CodeQL run found — running."
             exit 0
           fi
 
-          # Schedule events: query the Actions API for CodeQL runs
-          # in the past 24h. If any succeeded, skip — the push
-          # path already covered recent code. If none succeeded
-          # (or all failed), run the analyze job so we get fresh
-          # coverage from the schedule path.
-          #
-          # Why 24h? It's a reasonable upper bound on "is this
-          # code stale enough that we want a scheduled rescan".
-          # A day of unbroken push activity means the last push
-          # already triggered a scan; a quiet weekend means the
-          # last scan is at most 24h old at Monday 06:00 UTC.
-          #
-          # Note: `created_at` filter on the API is RFC3339; the
-          # 24h cutoff is computed in shell. The API supports
-          # `created=>YYYY-MM-DDTHH:MM:SSZ` query strings, but
-          # we filter in shell to keep the date math obvious.
+          LATEST_STATUS=$(echo "$LATEST" | jq -r '.status')
+          LATEST_CONCLUSION=$(echo "$LATEST" | jq -r '.conclusion')
+          LATEST_CREATED=$(echo "$LATEST" | jq -r '.created_at')
           SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-          echo "Looking for CodeQL runs since ${SINCE}..."
+          echo "Latest CodeQL run on main: created=${LATEST_CREATED} status=${LATEST_STATUS} conclusion=${LATEST_CONCLUSION}"
+          echo "24h cutoff: ${SINCE}"
 
-          # Page through runs of THIS workflow (`CodeQL`) — `head
-          # #27204229282` style ID — and find any with
-          # conclusion=success and created_at > SINCE. Default
-          # page size is 30; we ask for the smallest page that
-          # covers a day's activity, which is 50.
-          RECENT_SUCCESS=$(gh api \
-            "${{ github.api_url }}/repos/${{ github.repository }}/actions/runs?workflow_id=$(gh api "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/codeql.yml" --jq '.id')&per_page=50&status=completed&conclusion=success" \
-            --jq ".workflow_runs[] | select(.created_at > \"${SINCE}\") | .created_at" \
-            | head -1)
-
-          if [ -n "$RECENT_SUCCESS" ]; then
+          # Case 2: still running. status is one of queued /
+          # in_progress / requested / waiting / pending for
+          # not-yet-finished runs. Any value other than
+          # "completed" means we should defer.
+          if [ "$LATEST_STATUS" != "completed" ]; then
             echo "should-run=false" >> "$GITHUB_OUTPUT"
-            echo "CodeQL succeeded at ${RECENT_SUCCESS} (within 24h) — skipping."
-          else
-            echo "should-run=true" >> "$GITHUB_OUTPUT"
-            echo "No successful CodeQL run in the past 24h — running."
+            echo "Latest CodeQL run is ${LATEST_STATUS} — skipping."
+            exit 0
           fi
+
+          # Case 3: completed + success within 24h. The string
+          # `>` does lexicographic compare, which works because
+          # RFC3339 sorts the same way as time.
+          if [ "$LATEST_CONCLUSION" = "success" ] && [ "$LATEST_CREATED" \> "$SINCE" ]; then
+            echo "should-run=false" >> "$GITHUB_OUTPUT"
+            echo "Latest CodeQL run succeeded within 24h — skipping."
+            exit 0
+          fi
+
+          # Case 4: completed but failed (failure / cancelled /
+          # timed_out / skipped / stale / etc.), OR a success
+          # that's already > 24h old. Either way the dedup
+          # gate is open.
+          echo "should-run=true" >> "$GITHUB_OUTPUT"
+          echo "Latest CodeQL run is ${LATEST_CONCLUSION} (or > 24h old) — running."
 
   analyze:
     name: Analyze (Swift)
