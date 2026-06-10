@@ -14,6 +14,15 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
     /// Originally this test targeted `127.0.0.1:1` and asserted on
     /// `currentConnectAttemptCount`. Migrated to the mock so the suite is
     /// fully deterministic (no real WebSocket teardown race).
+    ///
+    /// Note: `await (r1, r2)` MUST come AFTER `await coord.disconnect()`,
+    /// not before. The mock's `.hang` step sleeps 60s; awaiting r1/r2
+    /// before disconnecting would make this test run for 60s and
+    /// pressure the MainActor queue enough to flake later tests
+    /// (notably `testMatchingGenerationOnDisconnectedWritesReconnecting`)
+    /// on slow CI runners. `disconnect()` cancels the in-flight task;
+    /// once cancelled, the mock's `Task.sleep` throws immediately and
+    /// r1/r2 resolve in < 1ms.
     func testEnsureConnectedCoalescesTwoParallelCalls() async throws {
         let opMock = MockConnectionTransport()
         let ndMock = MockConnectionTransport()
@@ -34,9 +43,21 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
             do { try await coord.ensureConnected(profile: profile) }
             catch { /* expected: same as r1 */ }
         }()
+
+        // Yield so the in-flight connect actually starts inside the
+        // mock. Without this, `coord.disconnect()` could race the
+        // `Task` that drives the connect body — the connect might
+        // never enter the mock's `.hang` step before we cancel.
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 20_000_000) // 20ms
+
+        // Cancel in-flight tasks. After this, the mock's 60s sleep
+        // throws CancellationError, the connect throws
+        // CancellationError, `ensureConnected` rethrows, and r1/r2
+        // resolve in < 1ms.
+        await coord.disconnect()
         _ = await (r1, r2)
 
-        await coord.disconnect()
         let opCount = await opMock.connectCallCount
         XCTAssertEqual(
             opCount, 1,
@@ -425,11 +446,23 @@ final class ConnectionCoordinatorCoalescingTests: XCTestCase {
 
         let profile = makeTestProfile()
         let task = Task { try? await coord.connectWithProfile(profile) }
-        try? await Task.sleep(nanoseconds: 20_000_000)
 
-        // State is .connected (mock fired onConnected).
-        let phaseConnected = await MainActor.run { state.phase }
-        XCTAssertEqual(phaseConnected, .connected)
+        // Poll for the connected state with a 100ms total budget. The
+        // mock's `.connected` step is near-instant; in steady state the
+        // assertion lands on the first poll. On slow CI runners the
+        // MainActor queue may be backed up by MainActor.run hops from
+        // a previous test (notably the 60s
+        // `testEnsureConnectedCoalescesTwoParallelCalls` until that's
+        // fixed) — the polling absorbs that jitter without oversleeping
+        // in the common case.
+        var phaseConnected: ConnectionState.Phase = .disconnected
+        for _ in 0..<10 {
+            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
+            phaseConnected = await MainActor.run { state.phase }
+            if phaseConnected == .connected { break }
+        }
+        XCTAssertEqual(phaseConnected, .connected,
+                       "Expected .connected within 100ms of connectWithProfile, got \(String(describing: phaseConnected))")
 
         // Fire the connect's own onDisconnected (matching generation).
         await opMock.simulateDisconnected(reason: "network dropped")
