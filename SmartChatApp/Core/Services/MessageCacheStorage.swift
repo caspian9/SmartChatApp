@@ -38,7 +38,7 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         let originalCount = allMessages.count
 
         var added = 0
-        var replaced = 0
+        var deduped = 0
         var skippedEmpty = 0
         for msg in messages {
             if isEmptyTextPlaceholder(msg) {
@@ -46,9 +46,16 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
                 continue
             }
             let key = dedupKey(for: msg)
-            if let existingIndex = allMessages.firstIndex(where: { dedupKey(for: $0) == key }) {
-                allMessages[existingIndex] = msg
-                replaced += 1
+            if allMessages.contains(where: { dedupKey(for: $0) == key }) {
+                // Dedup hit: KEEP the existing entry. The existing message's
+                // `id` is preserved — important because consumers (e.g.
+                // `CollapseStateCache.expandedMessageIds` keyed on the
+                // streaming-time synthesized UUID) would otherwise lose
+                // their state on a server re-fetch that returns the same
+                // message with a server-assigned UUID. The content is
+                // identical (by dedup key), so dropping the new copy
+                // has no observable effect except id stability.
+                deduped += 1
             } else {
                 allMessages.append(msg)
                 added += 1
@@ -64,7 +71,7 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         saveToDisk(allMessages, for: sessionKey)
 
         AppLogger.log(
-            "[MessageCacheStorage append] sessionKey=\(String(sessionKey.prefix(8))) original=\(originalCount) added=\(added) replaced=\(replaced) skippedEmpty=\(skippedEmpty) final=\(allMessages.count)",
+            "[MessageCacheStorage append] sessionKey=\(String(sessionKey.prefix(8))) original=\(originalCount) added=\(added) deduped=\(deduped) skippedEmpty=\(skippedEmpty) final=\(allMessages.count)",
             category: .cache)
     }
 
