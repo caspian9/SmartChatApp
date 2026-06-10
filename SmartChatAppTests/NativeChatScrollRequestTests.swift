@@ -1,4 +1,5 @@
 import XCTest
+import OpenClawChatUI
 @testable import SmartChatApp
 
 @MainActor
@@ -8,6 +9,15 @@ final class NativeChatScrollRequestTests: XCTestCase {
     override func setUp() {
         super.setUp()
         sut = NativeChatViewModel()
+        // Post-refactor: MessageReceiver.receiveMessage is a no-op
+        // without a selected session (the receiver needs a sessionKey
+        // to know where to write the incoming message). The production
+        // app always has a session set before the transport stream
+        // starts; the scroll-token tests previously relied on the
+        // pre-refactor behavior of unconditionally bumping the token
+        // even when no session existed. Mirror the production contract
+        // here so these tests exercise the same code path.
+        sut.selectedSession = makeTestSession()
     }
 
     /// Regression guard for the scroll-jitter fix: the initial scroll request
@@ -19,12 +29,12 @@ final class NativeChatScrollRequestTests: XCTestCase {
     }
 
     /// `MessageReceiver.receiveMessage` must increment the scroll token
-    /// exactly once per call, regardless of which merge path (id-match,
-    /// similar-match, fresh insert) was taken. The previous code had three
-    /// separate `vm.scrollTrigger += 1` sites plus a 5-poll
-    /// `cacheLoadCounter` cascade in HistoryLoader — together that produced
-    /// 11+ `scrollTo` calls per history load, which is what caused the
-    /// visible up-down jitter.
+    /// exactly once per call. The previous code had three separate
+    /// `vm.scrollTrigger += 1` sites plus a 5-poll `cacheLoadCounter`
+    /// cascade in HistoryLoader — together that produced 11+ `scrollTo`
+    /// calls per history load, which is what caused the visible
+    /// up-down jitter. The post-refactor receiver writes to the store
+    /// and fires a single `.newMessage` scroll request.
     func testReceiveMessage_freshInsert_incrementsTokenOnce() {
         let initialToken = sut.scrollRequest.token
         let msg = makeMessage(id: "m1", text: "hi", role: "assistant", state: "final")
@@ -33,9 +43,11 @@ final class NativeChatScrollRequestTests: XCTestCase {
         XCTAssertEqual(sut.scrollRequest.kind, .newMessage)
     }
 
-    /// Streaming deltas hit the id-match path: same id, updated text/state.
-    /// The view's single-scroll handler is a no-op when `lastId` is
-    /// unchanged, so this case should not cause visible viewport jumps.
+    /// Streaming deltas share the same id across the run. The view's
+    /// single-scroll handler is a no-op when `lastId` is unchanged, so
+    /// this case should not cause visible viewport jumps — but each
+    /// receive still fires a single token bump (the store handles
+    /// the id-match dedup).
     func testReceiveMessage_idMatch_stillIncrementsTokenOnce() {
         let initialToken = sut.scrollRequest.token
         let first = makeMessage(id: "run-1", text: "", role: "assistant", state: "streaming")
@@ -75,6 +87,33 @@ final class NativeChatScrollRequestTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func makeTestSession() -> OpenClawChatSessionEntry {
+        OpenClawChatSessionEntry(
+            key: "agent:test:label:11111111-1111-1111-1111-111111111111",
+            kind: "test",
+            displayName: "Test Session",
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: nil,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: nil,
+            modelProvider: nil,
+            model: nil,
+            contextTokens: nil,
+            thinkingLevels: nil,
+            thinkingOptions: nil,
+            thinkingDefault: nil
+        )
+    }
 
     private func makeMessage(id: String, text: String, role: String, state: String) -> ChatMessage {
         ChatMessage(
