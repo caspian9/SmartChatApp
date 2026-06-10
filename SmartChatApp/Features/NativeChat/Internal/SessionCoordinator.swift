@@ -144,6 +144,18 @@ final class SessionCoordinator {
             // previous session can never reappear in this one's
             // `expandedMessageIds` set.
             CollapseStateCache.shared.clear()
+            // Clear the in-memory message store for the previous session.
+            // Without this, a returning user could see stale bubbles
+            // from the prior visit flash briefly before `loadHistory`
+            // re-hydrates. The store re-populates from `loadHistory` →
+            // `store.hydrate` for the new key (which is a no-op on a
+            // fresh session). Per the spec §4.4 (切 session).
+            let oldKey = previousKey
+            Task { @MainActor in
+                if let oldKey {
+                    await MessageCacheStore.shared.clear(for: oldKey)
+                }
+            }
         }
 
         // Save selected session key (per profile)
@@ -177,6 +189,12 @@ final class SessionCoordinator {
         // message space, so any persisted expand IDs from the old
         // profile are stale and must not leak across.
         CollapseStateCache.shared.clear()
+        // Hard-clear every session key in the store. Profile switch
+        // is a clean slate — old messages have no business surviving
+        // a gateway change. Per spec §4.4 (切 profile).
+        Task { @MainActor in
+            await MessageCacheStore.shared.clearAll()
+        }
         AppLogger.log("switchProfile from \(previousProfileId?.uuidString.prefix(8) ?? "nil") to \(newProfileId.uuidString.prefix(8))", category: .nativeChat)
 
         // Load cache immediately for fast display, consistent with loadSessions flow
