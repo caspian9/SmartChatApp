@@ -21,12 +21,12 @@ public actor GatewayChatTransport: OpenClawChatTransport {
             )
             let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: responseData)
 
-            // Note: MessageCache.setMessages is called by NativeChatViewModel after transforming messages
-            // to ensure proper deduplication and cache management there
+            // Note: Messages are appended to MessageCacheStore by NativeChatViewModel after
+            // transforming/deduplicating per the network payload.
             return payload
         } catch {
-            print("requestHistory failed: \(error)")
-            let cached = await MessageCache.shared.getMessages(for: sessionKey)
+            AppLogger.log("requestHistory failed: \(error)", category: .network)
+            let cached = await MessageCacheStore.shared.messages(for: sessionKey)
             if !cached.isEmpty {
                 let messagesAny: [AnyCodable] = cached.map { AnyCodable($0) }
                 let jsonStr = "{\"sessionKey\": \"\(sessionKey)\", \"messages\": \(messagesAny)}"
@@ -34,10 +34,6 @@ public actor GatewayChatTransport: OpenClawChatTransport {
                    let result = try? JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data) {
                     return result
                 }
-            }
-            let jsonStr = "{\"sessionKey\": \"\(sessionKey)\"}"
-            if let data = jsonStr.data(using: .utf8) {
-                return (try? JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data)) ?? payloadWithEmptyMessages(sessionKey: sessionKey)
             }
             return payloadWithEmptyMessages(sessionKey: sessionKey)
         }
@@ -104,14 +100,14 @@ public actor GatewayChatTransport: OpenClawChatTransport {
             usage: nil,
             stopReason: nil
         )
-        await MessageCache.shared.appendMessages([userMessage], for: sessionKey)
+        await MessageCacheStore.shared.append([userMessage], for: sessionKey)
 
         let responseJSON = "{\"runId\": \"\(idempotencyKey)\", \"status\": \"started\"}"
         return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: responseJSON.data(using: .utf8)!)
     }
 
     public func appendUserMessage(_ message: OpenClawChatMessage, for sessionKey: String) async {
-        await MessageCache.shared.appendMessages([message], for: sessionKey)
+        await MessageCacheStore.shared.append([message], for: sessionKey)
     }
 
     public func abortRun(sessionKey: String, runId: String) async throws {
