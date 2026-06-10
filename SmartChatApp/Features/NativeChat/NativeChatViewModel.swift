@@ -190,16 +190,26 @@ final class NativeChatViewModel {
         // which can be 10+ seconds for a long response). The view's
         // `.newMessage` handler scrolls to the new last id (this very
         // user message) so the user sees the bubble land at the bottom.
-        scrollRequest = NativeChatScrollRequest(token: scrollRequest.token &+ 1, kind: .newMessage)
+        //
+        // Bump the scroll request AFTER the user bubble lands in the
+        // store. If we bump it before `store.append`, the multi-poll
+        // scroll handler runs and targets `bottomAnchorId` before the
+        // user bubble exists, so the viewport stays at the pre-send
+        // position until the first streaming delta bumps `scrollRequest`
+        // again (UX gap of ~1-10s where the user-sent bubble is missing).
         inputText = ""
         // Persist user message to the cache store (single source of
         // truth for the view's message list). The view reads from
-        // `viewModel.store.messages(for:)` via the new computed property
-        // in `NativeChatView`, so the bubble appears without needing an
-        // in-memory `vm.messages` mirror.
+        // `viewModel.store.messagesBySession` via the new computed
+        // property in `NativeChatView`, so the bubble appears without
+        // needing an in-memory `vm.messages` mirror.
         if let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: message) {
             Task { @MainActor in
                 await store.append([openclaw], for: sessionKey)
+                scrollRequest = NativeChatScrollRequest(
+                    token: scrollRequest.token &+ 1,
+                    kind: .newMessage
+                )
             }
         }
         Task {

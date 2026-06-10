@@ -357,7 +357,10 @@ struct NativeChatView: View {
     /// cost threshold for an `ObservableObject` cache to be worth it.
     private var messages: [ChatMessage] {
         guard let sessionKey = viewModel.selectedSession?.key else { return [] }
-        let openclawMessages = viewModel.store.messages(for: sessionKey, since: nil)
+        // Read messagesBySession directly to register @Observable tracking.
+        // Going through messages(for:since:) hides the property access inside
+        // a method body, which the Observation framework doesn't track.
+        let openclawMessages = viewModel.store.messagesBySession[sessionKey] ?? []
         let chatMessages = openclawMessages.compactMap {
             ChatMessageConverter.toChatMessage(from: $0)
         }
