@@ -7,6 +7,15 @@ import OpenClawProtocol
 @MainActor
 final class HistoryLoader {
     weak var viewModel: NativeChatViewModel?
+    /// Cache store reference for water-line based "has new content?" checks.
+    /// Held `weak` to avoid a retain cycle: `NativeChatViewModel` owns both
+    /// this loader and the store, so a strong reference here would create
+    /// `VM → Loader → Store → ...` cycle (the store itself is held strongly
+    /// by the VM, but the loader's reference would still keep it alive past
+    /// the VM's natural dealloc). `weak` matches the `viewModel` pattern
+    /// used everywhere else in this loader. Set via VM init or directly in
+    /// tests.
+    weak var store: MessageCacheStore?
 
     // Per-session-key reentrancy guard for `loadHistory()`. The class is
     // @MainActor; this static is deliberately outside the actor so
@@ -17,6 +26,17 @@ final class HistoryLoader {
     // `@Observable` and we don't want this static to be observed.
     @ObservationIgnored
     private static let loadHistoryLock = OSAllocatedUnfairLock<String?>(initialState: nil)
+
+    /// Tracks the last session key we ran a `loadHistory` (or
+    /// `loadedCachedHistory`) for, so the next call can tell whether
+    /// the session actually changed. Used to set `forceScroll` on the
+    /// scroll request: when the user switches sessions, the new load
+    /// must scroll to the bottom regardless of `userHasScrolled` (set
+    /// while reading the previous session). When the same session
+    /// re-loads (entering NativeChat, re-fetch), we respect
+    /// `userHasScrolled` so reading history isn't yanked down.
+    @ObservationIgnored
+    private var lastLoadedSessionKey: String?
 
     func loadHistory() {
         guard let vm = viewModel, let session = vm.selectedSession else { return }
@@ -92,10 +112,56 @@ final class HistoryLoader {
         // this a no-op for IDs already cached.
         MarkdownCache.shared.precomputeForMessages(messages)
         CollapseStateCache.shared.precompute(for: messages)
-        vm.messages = messages
-        // Single scroll request — the view's multi-poll handler covers
-        // the `MarkdownViewTextKit` async height measurement.
-        vm.scrollRequest = NativeChatScrollRequest(token: vm.scrollRequest.token &+ 1, kind: .historyLoaded)
+        // Skip the wholesale `vm.messages = messages` assignment if
+        // the new payload is the same set of IDs the view is already
+        // showing. Without this guard, every network refresh that
+        // returns the same 100 messages (the hard cap in
+        // `GatewayChatTransport.requestHistory`) re-evaluates the
+        // entire `LazyVStack` body, which can produce visible
+        // viewport jitter — the user described it as "the page
+        // jumps up even when nothing changed". The `applyMergedHistory`
+        // path already does this; bringing the cache path in line
+        // makes both load sources behave consistently.
+        let currentIds: Set<String> = Set(vm.messages.map(\.id))
+        let newIds: Set<String> = Set(messages.map(\.id))
+        let hasNewContent = !newIds.subtracting(currentIds).isEmpty
+        if hasNewContent {
+            // Merge `isUserExpanded` from the messages the view is
+            // currently showing onto the freshly-cached ones. Without
+            // this, a user's "Show more..." choice would be wiped out
+            // every time the cache re-hydrated from disk after a view
+            // tear-down / session re-entry — the `ChatMessageConverter`
+            // populates `isUserExpanded = nil` for messages coming
+            // from `MessageCache`, even when the user had previously
+            // marked the same id expanded in this session.
+            let oldExpanded: [String: Bool] = Dictionary(
+                uniqueKeysWithValues: vm.messages.compactMap { msg in
+                    guard let v = msg.isUserExpanded else { return nil }
+                    return (msg.id, v)
+                }
+            )
+            let merged: [ChatMessage] = messages.map { msg in
+                guard let v = oldExpanded[msg.id], msg.isUserExpanded == nil else { return msg }
+                var u = msg
+                u.isUserExpanded = v
+                return u
+            }
+            vm.messages = merged
+        } else {
+            AppLogger.log("loadedCachedHistory: no new IDs vs current (\(currentIds.count) -> \(newIds.count)), skipping vm.messages reassignment to avoid viewport jitter", category: .nativeChat)
+        }
+        // `forceScroll` flips to true when the session changed since the
+        // last load. The view's `.historyLoaded` handler honors that to
+        // bypass the `userHasScrolled` gate on cross-session transitions.
+        // (See `NativeChatScrollRequest.forceScroll` for the full rationale.)
+        let currentKey = vm.selectedSession?.key
+        let forceScroll = currentKey.map { $0 != self.lastLoadedSessionKey } ?? false
+        if let currentKey { self.lastLoadedSessionKey = currentKey }
+        vm.scrollRequest = NativeChatScrollRequest(
+            token: vm.scrollRequest.token &+ 1,
+            kind: .historyLoaded,
+            forceScroll: forceScroll
+        )
     }
 
     /// Apply merged history to the VM, with the staleness check
@@ -128,8 +194,44 @@ final class HistoryLoader {
         // newly-arrived IDs before the view re-renders.
         MarkdownCache.shared.precomputeForMessages(messages)
         CollapseStateCache.shared.precompute(for: messages)
-        vm.messages = messages
-        vm.scrollRequest = NativeChatScrollRequest(token: vm.scrollRequest.token &+ 1, kind: scrollKind)
+        // Merge `isUserExpanded` from the messages the view is currently
+        // showing onto the freshly-networked ones. `ChatMessageConverter`
+        // leaves the field nil for messages built from server payloads,
+        // so without this re-merge a refresh would wipe out any bubble
+        // the user had expanded via "Show more..." (or via the
+        // `MessageReceiver` lifecycle-end mark). `loadedCachedHistory`
+        // has the same merge — the network and cache paths now match.
+        let oldExpanded: [String: Bool] = Dictionary(
+            uniqueKeysWithValues: vm.messages.compactMap { msg in
+                guard let v = msg.isUserExpanded else { return nil }
+                return (msg.id, v)
+            }
+        )
+        let merged: [ChatMessage] = messages.map { msg in
+            guard let v = oldExpanded[msg.id], msg.isUserExpanded == nil else { return msg }
+            var u = msg
+            u.isUserExpanded = v
+            return u
+        }
+        // `forceScroll` must propagate here too — not just in
+        // `loadedCachedHistory`. A cross-session switch where the
+        // new session has no cache hits takes the
+        // `fetchAndMergeFromNetwork → applyMergedHistory` path
+        // (because `loadedCachedHistory` is gated by
+        // `if !cachedMessages.isEmpty`). Without `forceScroll=true`
+        // in that path, the view's `.historyLoaded` handler honors
+        // `userHasScrolled` (which is sticky from the previous
+        // session's scroll activity) and the viewport stays anchored
+        // at the previous session's bottom instead of jumping to the
+        // new session's latest message.
+        let forceScroll = currentKey.map { $0 != self.lastLoadedSessionKey } ?? false
+        if let currentKey { self.lastLoadedSessionKey = currentKey }
+        vm.messages = merged
+        vm.scrollRequest = NativeChatScrollRequest(
+            token: vm.scrollRequest.token &+ 1,
+            kind: scrollKind,
+            forceScroll: forceScroll
+        )
     }
 
     /// User-initiated pull-up refresh. Skips the cache-first step (the user
@@ -233,6 +335,17 @@ final class HistoryLoader {
                     AppLogger.log("[\(taskIdStr)] message[\(index)] failed to decode", category: .nativeChat, level: .warning)
                     return nil
                 }
+                // DIAG: surface server's per-message usage so we can tell
+                // whether toolResult / thinking / toolCall messages ship
+                // usage from the gateway. If the gateway attaches usage to
+                // these roles, ChatMessageConverter copies it to ChatMessage
+                // and the bubble renders the token row. If usage is nil, the
+                // absence is server-side and the frontend can't recover it.
+                let usage = msg.usage
+                let usageStr = usage.map {
+                    "in=\($0.input ?? -1) out=\($0.output ?? -1) cr=\($0.cacheRead ?? -1) cw=\($0.cacheWrite ?? -1) total=\($0.total ?? -1)"
+                } ?? "nil"
+                AppLogger.log("[\(taskIdStr)] server msg[\(index)] id=\(msg.id.uuidString.prefix(8)) role=\(msg.role) toolName=\(msg.toolName ?? "-") usage=\(usageStr)", category: .nativeChat)
                 return ChatMessageConverter.toChatMessage(from: msg)
             }
             AppLogger.log("[\(taskIdStr)] chatMessages count=\(chatMessages.count)", category: .nativeChat)
@@ -275,5 +388,20 @@ final class HistoryLoader {
         } catch {
             AppLogger.log("[\(taskIdStr)] fetchAndMergeFromNetwork error: \(error.localizedDescription)", category: .nativeChat, level: .error)
         }
+    }
+}
+
+extension HistoryLoader {
+    /// Water-line based "has new content?" check.
+    /// Returns true if the incoming batch advances past the last seen
+    /// timestamp for this session. Used by `fetchAndMergeFromNetwork`
+    /// to decide whether to fire a scroll request.
+    /// - Returns: true when `newMaxTimestamp` is non-nil AND either
+    ///   (a) the session has never been seen (lastSeen is nil), or
+    ///   (b) `newMaxTimestamp > lastSeen`.
+    func hasNewContent(newMaxTimestamp: Double?, sessionKey: String) -> Bool {
+        guard let newMax = newMaxTimestamp else { return false }
+        guard let lastSeen = store?.lastSeenTimestamp(for: sessionKey) else { return true }
+        return newMax > lastSeen
     }
 }
