@@ -72,11 +72,12 @@ enum ChatMessageConverter {
         )
     }
 
-    /// ChatMessage → OpenClawChatMessage (cache writer). Returns nil for
-    /// non-UUID ids (cache requires a stable UUID primary key).
+    /// ChatMessage → OpenClawChatMessage (cache writer). Synthesizes a
+    /// fresh UUID when the input id is not a valid UUID (e.g., streaming
+    /// messages with synthetic ids like `"ABC123:tool:def-456"`).
     /// Mirrors the `createOpenClawChatMessage(from:)` previously on the VM.
     static func toOpenClawChatMessage(from chatMessage: ChatMessage) -> OpenClawChatMessage? {
-        guard let uuid = UUID(uuidString: chatMessage.id) else { return nil }
+        let uuid = UUID(uuidString: chatMessage.id) ?? UUID()
         var usage: OpenClawChatUsage? = nil
         if chatMessage.inputTokens != nil || chatMessage.outputTokens != nil
             || chatMessage.cacheRead != nil || chatMessage.cacheWrite != nil {

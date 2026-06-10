@@ -74,12 +74,44 @@ final class ChatMessageConverterTests: XCTestCase {
         XCTAssertEqual(msg?.timestamp, 1_700_000)  // ms (1700 sec * 1000)
     }
 
-    func testToOpenClawChatMessage_invalidUuid_returnsNil() {
+    func testToOpenClawChatMessage_invalidUuid_synthesizesUUID() {
         let chat = ChatMessage(
             id: "not-a-uuid", text: "x", timestamp: Date(),
             role: "user", state: "final", runId: nil, seq: nil,
             startedAt: nil, endedAt: nil, livenessState: nil,
             toolCallId: nil, toolName: nil, stopReason: nil, isFresh: true)
-        XCTAssertNil(ChatMessageConverter.toOpenClawChatMessage(from: chat))
+        let msg = ChatMessageConverter.toOpenClawChatMessage(from: chat)
+        XCTAssertNotNil(msg, "invalid UUID 兜底: 应该合成一个新的 UUID,而不是返回 nil")
+        XCTAssertNotEqual(msg?.id.uuidString, "not-a-uuid")
+        XCTAssertNotNil(UUID(uuidString: msg?.id.uuidString ?? ""), "合成的 id 必须是合法 UUID")
+    }
+
+    // MARK: - toOpenClawChatMessage (synthetic id 兜底)
+
+    func testToOpenClawChatMessage_syntheticId_synthesizesUUID() {
+        let syntheticId = "ABC123:tool:def-456"  // 旧 streaming 期间的合成 id
+        let chat = ChatMessage(
+            id: syntheticId, text: "hello", timestamp: Date(),
+            role: "toolCall", state: "streaming", runId: nil, seq: nil,
+            startedAt: nil, endedAt: nil, livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: "def-456", toolName: "search", stopReason: nil,
+            isFresh: true)
+        let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: chat)
+        XCTAssertNotNil(openclaw, "synthetic id 兜底,不应该返回 nil")
+        XCTAssertNotEqual(openclaw?.id.uuidString, syntheticId)
+        XCTAssertNotNil(UUID(uuidString: openclaw?.id.uuidString ?? ""), "生成的 id 必须是合法 UUID")
+    }
+
+    func testToOpenClawChatMessage_validUUIDId_preservesIt() {
+        let validId = UUID().uuidString
+        let chat = ChatMessage(
+            id: validId, text: "hello", timestamp: Date(),
+            role: "user", state: "final", runId: nil, seq: nil,
+            startedAt: nil, endedAt: nil, livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil, isFresh: true)
+        let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: chat)
+        XCTAssertEqual(openclaw?.id.uuidString, validId)
     }
 }
