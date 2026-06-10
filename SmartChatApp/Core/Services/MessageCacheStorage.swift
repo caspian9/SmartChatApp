@@ -60,10 +60,24 @@ public actor MessageCacheStorage {
     }
 
     // 占位 - Task 3 实现
-    public func clear(for sessionKey: String) {}
-    public func clearAll() {}
-    public func maxTimestamp(for sessionKey: String) -> Double? { return nil }
-    public func messageIds(for sessionKey: String) -> Set<String> { return [] }
+    public func clear(for sessionKey: String) {
+        cache[sessionKey] = []
+        defaults.removeObject(forKey: storageKey(for: sessionKey))
+    }
+    public func clearAll() {
+        cache.removeAll()
+        let keys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(keyPrefix) }
+        for key in keys {
+            defaults.removeObject(forKey: key)
+        }
+    }
+    public func maxTimestamp(for sessionKey: String) -> Double? {
+        let messages = load(for: sessionKey)
+        return messages.compactMap(\.timestamp).max()
+    }
+    public func messageIds(for sessionKey: String) -> Set<String> {
+        Set(load(for: sessionKey).map { $0.id.uuidString })
+    }
 
     private func storageKey(for sessionKey: String) -> String {
         "\(keyPrefix)\(sessionKey)"
