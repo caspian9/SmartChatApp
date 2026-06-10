@@ -8,6 +8,15 @@ permissions:
   contents: read
 
 on:
+  # workflow_dispatch lets a maintainer manually fire this
+  # workflow from the Actions tab or via `gh workflow run`,
+  # which is the only way to satisfy the branch-protection
+  # required checks on PRs that don't touch any path in the
+  # pull_request paths: filter (e.g. docs-only PRs touching
+  # CLAUDE.md or docs/**). The dispatch bypasses the
+  # pull_request trigger's paths filter — the workflow body
+  # itself is unchanged.
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
