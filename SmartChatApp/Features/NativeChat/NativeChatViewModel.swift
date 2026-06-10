@@ -167,9 +167,10 @@ final class NativeChatViewModel {
     // pattern, no special `kind` field needed.
     let slashCommandRouter: SlashCommandRouter
     let serverCommandSource: ServerCommandSource
-    /// Injected test seam. `sendAsMessage` invokes this closure
+    #if DEBUG
+    /// Test-only seam. `sendAsMessage` invokes this closure
     /// instead of going through `SessionManager.shared` when set.
-    /// Production wiring leaves it `nil`; tests inject a closure
+/// Production wiring leaves it `nil`; tests inject a closure
     /// that records the call on a FakeTransport.
     var sendInterceptor: (@MainActor (String) async -> Void)?
     #endif
@@ -655,14 +656,19 @@ AppLogger.log(
                 )
             }
         }
-        // Test seam: when a `sendInterceptor` closure was injected,
+// Test seam: when a `sendInterceptor` closure was injected,
         // invoke it and return — the real SessionManager + transport
-        // dance is bypassed. Production wiring leaves this nil and
-        // falls through to the real transport below.
+        // dance is bypassed. The `sendInterceptor` property itself is
+        // DEBUG-only (so production builds can't even reference it),
+        // and production code always falls through to the real
+        // transport below.
+        #if DEBUG
         if let interceptor = sendInterceptor {
             await interceptor(text)
+            isSending = false
             return
         }
+#endif
         Task {
             do {
                 try await SessionManager.shared.ensureConnected()
