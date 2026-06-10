@@ -6,6 +6,7 @@ enum LogCategory: String, CaseIterable, Codable {
     case cache      = "cache"
     case nativeChat = "nativeChat"
     case markdown   = "markdown"
+    case commands   = "commands"
 
     var displayName: String {
         switch self {
@@ -13,6 +14,7 @@ enum LogCategory: String, CaseIterable, Codable {
         case .cache:      return "Cache"
         case .nativeChat: return "NativeChat"
         case .markdown:   return "Markdown"
+        case .commands:   return "Commands"
         }
     }
 }
