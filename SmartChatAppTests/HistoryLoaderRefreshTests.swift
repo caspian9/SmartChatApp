@@ -65,7 +65,8 @@ final class HistoryLoaderRefreshTests: XCTestCase {
     /// already-shown messages are left untouched. The user sees the
     /// indicator appear and then disappear with no error toast.
     func testRefreshFromServer_networkError_leavesMessagesUnchanged() async throws {
-        let originalMessages = sut.messages
+        let sessionKey = makeTestSession().key
+        let originalIds = Set(sut.store.messages(for: sessionKey, since: nil).map(\.id))
         sut.selectedSession = makeTestSession()
 
         sut.refreshFromServer()
@@ -81,9 +82,11 @@ final class HistoryLoaderRefreshTests: XCTestCase {
         }
 
         // Messages should be unchanged: no cache to read, no network to
-        // succeed, so the network-error path runs and `vm.messages` is
-        // never written.
-        XCTAssertEqual(sut.messages, originalMessages)
+        // succeed, so the network-error path runs and the store is
+        // never written. Compare by id set since OpenClawChatMessage
+        // doesn't conform to Equatable.
+        let finalIds = Set(sut.store.messages(for: sessionKey, since: nil).map(\.id))
+        XCTAssertEqual(finalIds, originalIds)
     }
 
     /// Same as above but for `scrollRequest` — a failed refresh must

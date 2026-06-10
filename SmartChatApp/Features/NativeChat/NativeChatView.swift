@@ -4,6 +4,12 @@ struct NativeChatView: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var profileManager = ProfileManager.shared
     @State private var viewModel = NativeChatViewModel()
+    /// Observes user-driven expand state changes. The collapse cache is
+    /// `@Published`-based (`ObservableObject`); the view's `messages`
+    /// computed property reads `expandedMessageIds` to apply it per
+    /// bubble, so SwiftUI needs this dependency to invalidate `body`
+    /// when the user toggles a "Show more..." button.
+    @ObservedObject private var collapseCache = CollapseStateCache.shared
     @FocusState private var isInputFocused: Bool
     /// Sticky flag: once the user has touched the scroll view, auto-scroll
     /// stops. Set by `.onScrollPhaseChange` when the phase becomes
@@ -163,6 +169,20 @@ struct NativeChatView: View {
             .simultaneousGesture(
                 DragGesture(minimumDistance: pullUpActivationThreshold)
                     .onChanged { value in
+                        // Disable the entire pull-up gesture while a
+                        // message is in flight. `refreshFromServer` calls
+                        // `applyMergedHistory` which does a wholesale
+                        // `vm.messages = messages` replacement — that
+                        // drops any in-memory streaming messages the
+                        // EventInterpreter is mid-way through building
+                        // (they don't exist in the server's history
+                        // response yet, and EventInterpreter doesn't
+                        // persist them to MessageCache on each delta).
+                        // Letting a pull-up fire mid-stream would
+                        // visibly lose the response. Same reasoning
+                        // applies to history-only reloads; gating on
+                        // `isSending` keeps the user's read intact.
+                        guard !viewModel.isSending else { return }
                         // Only upward swipes (negative translation).
                         guard value.translation.height < 0 else { return }
                         // Gate the *initial* pull on `isAtBottom` (prevents
@@ -193,7 +213,7 @@ struct NativeChatView: View {
                     }
             )
             .onAppear {
-                AppLogger.log("messageScrollView onAppear, messages: \(viewModel.messages.count)", category: .nativeChat)
+                AppLogger.log("messageScrollView onAppear, messages: \(messages.count)", category: .nativeChat)
             }
             .onScrollPhaseChange { _, newPhase in
                 // `.interacting` fires while the user is actively
@@ -211,9 +231,19 @@ struct NativeChatView: View {
             }
             .onChange(of: viewModel.scrollRequest.token) { _, _ in
                 let kind = viewModel.scrollRequest.kind
-                let lastId = viewModel.messages.last?.id
-                AppLogger.log("scrollRequest kind=\(kind), lastId: \(lastId?.prefix(8) ?? "nil"), userHasScrolled: \(userHasScrolled)", category: .nativeChat)
-                guard let id = lastId else { return }
+                let forceScroll = viewModel.scrollRequest.forceScroll
+                // Always scroll to the bottom anchor, not the last
+                // message id. The anchor is a zero-height `Color.clear`
+                // with a fixed id at the end of `messageList`; it
+                // exists the moment the LazyVStack's contentSize is
+                // computed, regardless of whether the last *message*
+                // bubble has been realized. `scrollTo(lastMessageId)`
+                // would race against LazyVStack's virtualized render
+                // — the message is in the data but not yet on screen,
+                // so the scroll is a no-op. The anchor pattern makes
+                // the cross-session scroll deterministic.
+                let lastId = messages.last?.id
+                AppLogger.log("scrollRequest kind=\(kind), forceScroll=\(forceScroll ? 1 : 0), lastMsgId: \(lastId?.prefix(8) ?? "nil"), userHasScrolled: \(userHasScrolled)", category: .nativeChat)
                 switch kind {
                 case .newMessage:
                     // Single scroll. Streaming deltas hit the id-match
@@ -224,7 +254,7 @@ struct NativeChatView: View {
                     // `!userHasScrolled` so a user reading above is not
                     // yanked to the bottom by an incoming message.
                     if !userHasScrolled {
-                        proxy.scrollTo(id, anchor: .bottom)
+                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                     }
                 case .historyLoaded:
                     // Multi-poll scroll: history-load bubbles render through
@@ -234,15 +264,31 @@ struct NativeChatView: View {
                     // visible viewport is still showing the empty/short
                     // initial frame. The follow-up polls catch the bubble
                     // once MarkdownViewTextKit has actually measured in.
-                    // Poll window is 0..2s to cover long histories on slower
-                    // devices. Each poll checks `userHasScrolled` at
-                    // execution time so the user can scroll up between
-                    // polls to abort the cascade.
-                    AppLogger.log("historyLoaded triggering multi-poll scroll to \(String(id.prefix(8))), userHasScrolled: \(userHasScrolled)", category: .nativeChat)
-                    for delay in [0.0, 0.2, 0.5, 1.0, 2.0] {
+                    //
+                    // `forceScroll` bypasses the `userHasScrolled` gate:
+                    // set by the HistoryLoader when the session key
+                    // changed since the last load. Without it, a user
+                    // who was reading the previous session would be stuck
+                    // on its anchor after switching — the new session's
+                    // bubbles land at the bottom but the viewport never
+                    // follows.
+                    AppLogger.log("historyLoaded triggering multi-poll scroll to anchor, forceScroll=\(forceScroll ? 1 : 0), userHasScrolled: \(userHasScrolled)", category: .nativeChat)
+                    // Poll cadence: short delays catch the initial
+                    // layout, longer delays cover large histories and
+                    // `MarkdownViewTextKit`'s async height measurement.
+                    // forceScroll (cross-session switch) gets a longer
+                    // tail: the previous session's view was anchored
+                    // somewhere in the middle, and the new session's
+                    // first render has to push everything down. We cap
+                    // at 4s; beyond that, the user can scroll manually.
+                    let delays: [Double] = forceScroll
+                        ? [0.0, 0.1, 0.3, 0.6, 1.0, 1.5, 2.0, 3.0, 4.0]
+                        : [0.0, 0.2, 0.5, 1.0, 2.0]
+                    for delay in delays {
                         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                            if !userHasScrolled {
-                                proxy.scrollTo(id, anchor: .bottom)
+                            if forceScroll || !userHasScrolled {
+                                AppLogger.log("historyLoaded scroll poll delay=\(delay) force=\(forceScroll ? 1 : 0) userHasScrolled=\(userHasScrolled) -> scroll to anchor", category: .nativeChat)
+                                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                             }
                         }
                     }
@@ -255,8 +301,8 @@ struct NativeChatView: View {
                     // time the network returns, the layout is stable
                     // (we're not in the middle of a fresh history
                     // load with async height measurement).
-                    AppLogger.log("manualRefresh scrolling to \(String(id.prefix(8)))", category: .nativeChat)
-                    proxy.scrollTo(id, anchor: .bottom)
+                    AppLogger.log("manualRefresh scrolling to anchor", category: .nativeChat)
+                    proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                 }
             }
             .onChange(of: viewModel.isSending) { _, isSending in
@@ -269,33 +315,87 @@ struct NativeChatView: View {
                     // only re-anchors on content-size changes, not on the
                     // ScrollView's own frame changes — so the bottom of the
                     // content falls outside the viewport. Explicitly scroll
-                    // to the last message to recover the bottom. Gated on
+                    // to the bottom anchor to recover. Gated on
                     // `!userHasScrolled` so a user reading above is not
                     // yanked back when the input resizes.
-                    if !userHasScrolled, let id = viewModel.messages.last?.id {
+                    if !userHasScrolled {
                         DispatchQueue.main.async {
-                            proxy.scrollTo(id, anchor: .bottom)
+                            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                         }
                     }
                 }
             }
             .onChange(of: isInputFocused) { _, focused in
                 AppLogger.log("isInputFocused changed to \(focused)", category: .nativeChat)
-                if !userHasScrolled, let id = viewModel.messages.last?.id {
+                if !userHasScrolled {
                     DispatchQueue.main.async {
-                        proxy.scrollTo(id, anchor: .bottom)
+                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                     }
                 }
             }
         }
     }
 
+    /// Stable id for the bottom anchor view that lives at the end of
+    /// `messageList`. `ScrollViewReader.scrollTo(self.anchorId,
+    /// anchor: .bottom)` always lands on the very last line of the
+    /// scroll content, regardless of whether the last *message* is
+    /// inside the LazyVStack's realized render window. The previous
+    /// approach scrolled to `messages.last?.id`, which was a no-op
+    /// when LazyVStack hadn't materialized the last bubble yet (e.g.,
+    /// immediately after a session switch where the network history
+    /// just landed and the long-tail content was still in the
+    /// virtualized offscreen buffer).
+    private let bottomAnchorId = "nativechat.bottomAnchor"
+
+    /// Source of truth for the message list (refactor: message-cache-sot).
+    /// Reads the per-session array from `viewModel.store`, converts to
+    /// `ChatMessage` for the view layer, and merges the user's expand
+    /// state from `CollapseStateCache`. The store is `@Observable`; the
+    /// conversion + merge happen per body re-evaluation. For a 200-message
+    /// session this is ~200 ChatMessage builds, which is well below the
+    /// cost threshold for an `ObservableObject` cache to be worth it.
+    private var messages: [ChatMessage] {
+        guard let sessionKey = viewModel.selectedSession?.key else { return [] }
+        let openclawMessages = viewModel.store.messages(for: sessionKey, since: nil)
+        let chatMessages = openclawMessages.compactMap {
+            ChatMessageConverter.toChatMessage(from: $0)
+        }
+        let expandedIds = CollapseStateCache.shared.expandedMessageIds
+        return chatMessages.map { msg in
+            var copy = msg
+            copy.isUserExpanded = expandedIds.contains(msg.id)
+            return copy
+        }
+    }
+
     private var messageList: some View {
         LazyVStack(spacing: 0) {
-            ForEach(viewModel.messages) { message in
-                MessageBubbleView(message: message)
-                    .id(message.id)
+            ForEach(messages) { message in
+                MessageBubbleView(
+                    message: message,
+                    onExpandChange: { expanded in
+                        // Write through to `CollapseStateCache` so the
+                        // `@ObservedObject` on `collapseCache` fires
+                        // and the view re-evaluates `body`. The
+                        // `messages` computed property merges the
+                        // cache's `expandedMessageIds` into the
+                        // bubble's `isUserExpanded` field, so a toggle
+                        // shows up on the next render.
+                        CollapseStateCache.shared.setExpanded(message.id, expanded)
+                    }
+                )
+                .id(message.id)
             }
+            // Zero-height bottom anchor. `.frame(height: 0)` plus
+            // `.allowsHitTesting(false)` keeps it from contributing
+            // to the visual layout (no extra padding) while still
+            // being a valid `scrollTo` target — the anchor sits at
+            // the very bottom of the LazyVStack's contentSize.
+            Color.clear
+                .frame(height: 0)
+                .allowsHitTesting(false)
+                .id(bottomAnchorId)
         }
         .padding(.vertical, 8)
     }
@@ -309,7 +409,14 @@ struct NativeChatView: View {
         // underlying message list keeps its full height. The overlay
         // has `.allowsHitTesting(false)` so the spinner never blocks
         // touches or drag gestures.
-        if isPullingUp || viewModel.isManualRefreshing {
+        //
+        // The `!isSending` guard is defense in depth: the
+        // DragGesture's onChanged also short-circuits on `isSending`,
+        // so `isPullingUp` never flips true mid-stream. The
+        // `isManualRefreshing` branch could still show the spinner if
+        // a refresh started exactly as the user sent a message; the
+        // guard suppresses that edge case too.
+        if !viewModel.isSending && (isPullingUp || viewModel.isManualRefreshing) {
             HStack(spacing: 8) {
                 Spacer()
                 ProgressView()

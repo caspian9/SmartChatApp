@@ -58,7 +58,6 @@ final class NativeChatViewModel {
     var selectedProfileId: UUID?
     var sessions: [OpenClawChatSessionEntry] = []
     var selectedSession: OpenClawChatSessionEntry?
-    var messages: [ChatMessage] = []
     var inputText: String = ""
     var isLoading: Bool = false
     var isSending: Bool = false
@@ -186,7 +185,6 @@ final class NativeChatViewModel {
             stopReason: nil,
             isFresh: true
         )
-        messages.append(message)
         // Without this scroll request, the viewport stays at the
         // pre-send position until `isSending` flips false (lifecycle end,
         // which can be 10+ seconds for a long response). The view's
@@ -194,10 +192,14 @@ final class NativeChatViewModel {
         // user message) so the user sees the bubble land at the bottom.
         scrollRequest = NativeChatScrollRequest(token: scrollRequest.token &+ 1, kind: .newMessage)
         inputText = ""
-        // Cache user message
-        Task {
-            if let msg = self.createOpenClawChatMessage(from: message) {
-                await MessageCache.shared.appendMessages([msg], for: sessionKey)
+        // Persist user message to the cache store (single source of
+        // truth for the view's message list). The view reads from
+        // `viewModel.store.messages(for:)` via the new computed property
+        // in `NativeChatView`, so the bubble appears without needing an
+        // in-memory `vm.messages` mirror.
+        if let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: message) {
+            Task { @MainActor in
+                await store.append([openclaw], for: sessionKey)
             }
         }
         Task {
@@ -346,30 +348,5 @@ final class NativeChatViewModel {
 
     // MARK: - Helpers
 
-    private func createOpenClawChatMessage(from chatMessage: ChatMessage) -> OpenClawChatMessage? {
-        guard let uuid = UUID(uuidString: chatMessage.id) else { return nil }
-        // Build usage if we have token data - encode as JSON then decode to OpenClawChatUsage
-        var usage: OpenClawChatUsage? = nil
-        if chatMessage.inputTokens != nil || chatMessage.outputTokens != nil || chatMessage.cacheRead != nil || chatMessage.cacheWrite != nil {
-            var usageData: [String: AnyCodable] = [:]
-            if let input = chatMessage.inputTokens { usageData["input"] = AnyCodable(input) }
-            if let output = chatMessage.outputTokens { usageData["output"] = AnyCodable(output) }
-            if let cr = chatMessage.cacheRead { usageData["cacheRead"] = AnyCodable(cr) }
-            if let cw = chatMessage.cacheWrite { usageData["cacheWrite"] = AnyCodable(cw) }
-            if let data = try? JSONEncoder().encode(usageData),
-               let decoded = try? JSONDecoder().decode(OpenClawChatUsage.self, from: data) {
-                usage = decoded
-            }
-        }
-        return OpenClawChatMessage(
-            id: uuid,
-            role: chatMessage.role,
-            content: [OpenClawChatMessageContent(type: "text", text: chatMessage.text, thinking: nil, thinkingSignature: nil, mimeType: nil, fileName: nil, content: nil, id: nil, name: nil, arguments: nil)],
-            timestamp: chatMessage.timestamp.timeIntervalSince1970 * 1000,
-            toolCallId: chatMessage.toolCallId,
-            toolName: chatMessage.toolName,
-            usage: usage,
-            stopReason: chatMessage.stopReason
-        )
-    }
+    // (no helpers — ChatMessageConverter handles ChatMessage ↔ OpenClawChatMessage)
 }
