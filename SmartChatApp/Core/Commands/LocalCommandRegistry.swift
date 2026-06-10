@@ -92,7 +92,14 @@ public class LocalCommandRegistry {
     }
 
     open func lookup(_ token: String) -> SlashCommand? {
-        commands[token.lowercased()]
+        let normalized = token.lowercased()
+        // O(n) scan: n is bounded by registered local count
+        // (v1: 5, future: tens at most). An O(1) alias-keyed
+        // map is a future optimization if this becomes hot.
+        return commands.values.first { cmd in
+            cmd.id.lowercased() == normalized
+                || cmd.aliases.contains(where: { $0.lowercased() == normalized })
+        }
     }
 
     open var all: [SlashCommand] {

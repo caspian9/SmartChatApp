@@ -203,6 +203,53 @@ final class SlashCommandRouterTests: XCTestCase {
             return XCTFail("server alias match → category C")
         }
     }
+
+    // --- Task 4 follow-up: alias dispatch (local) + lone-`/` + executor-nil ---
+
+    func test_dispatch_localAliasMatch_resolvesCategoryA() async {
+        // Local /help has alias /h; typing /h should resolve to /help
+        // and execute locally (category A), not fall through to
+        // server passthrough.
+        let exec: LocalExecutor = { _ in .bubble("HELP HIT") }
+        let cmd = SlashCommand(
+            id: "/help", description: "d", aliases: ["/h"],
+            source: .local, executor: exec
+        )
+        let r = makeSUT(localCommands: [cmd])
+        let dispatch = await r.dispatch("/h")
+        guard case .execute(let result) = dispatch,
+              case .bubble(let text) = result else {
+            return XCTFail("local alias /h → /help must execute locally")
+        }
+        XCTAssertEqual(text, "HELP HIT")
+    }
+
+    func test_dispatch_loneSlash_returnsPassthrough() async {
+        // Typing just `/` (with no command name) has no local
+        // match and no server match — should fall through to D.
+        let r = makeSUT()
+        let dispatch = await r.dispatch("/")
+        guard case .passthrough = dispatch else {
+            return XCTFail("lone / should be category D (no match)")
+        }
+    }
+
+    func test_dispatch_localHitWithNilExecutor_surfacesAsErrorBubble() async {
+        // A local entry exists but has no executor — should NOT
+        // fall through to the server. Should be treated as a
+        // registry configuration bug and surfaced as a bubble.
+        let cmd = SlashCommand(
+            id: "/foo", description: "d", aliases: [],
+            source: .local, executor: nil
+        )
+        let r = makeSUT(localCommands: [cmd])
+        let dispatch = await r.dispatch("/foo")
+        guard case .execute(let result) = dispatch,
+              case .bubble(let text) = result else {
+            return XCTFail("local hit without executor must surface bubble")
+        }
+        XCTAssertTrue(text.contains("no executor"))
+    }
 }
 
 // --- fakes ---
@@ -215,7 +262,11 @@ final class FakeLocalRegistry: LocalCommandRegistry {
         super.init()
     }
     override func lookup(_ token: String) -> SlashCommand? {
-        fakeCommands.first { $0.id.lowercased() == token.lowercased() }
+        let n = token.lowercased()
+        return fakeCommands.first { cmd in
+            cmd.id.lowercased() == n
+                || cmd.aliases.contains(where: { $0.lowercased() == n })
+        }
     }
     override var all: [SlashCommand] { fakeCommands }
 }

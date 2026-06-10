@@ -36,7 +36,16 @@ public final class SlashCommandRouter {
 
     public func dispatch(_ text: String) async -> Dispatch {
         guard let parsed = parse(text) else { return .passthrough }
-        if let cmd = local.lookup(parsed.token), let exec = cmd.executor {
+        if let cmd = local.lookup(parsed.token) {
+            guard let exec = cmd.executor else {
+                // Local hit with no executor is a registry
+                // configuration bug — surface it instead of
+                // silently falling through to the server (which
+                // could be category C for a different command).
+                return .execute(.bubble(
+                    "Local command \(cmd.id) has no executor"
+                ))
+            }
             let result: SlashCommandResult
             do {
                 result = try await exec(parsed.args)
@@ -47,7 +56,6 @@ public final class SlashCommandRouter {
             }
             return .execute(result)
         }
-        if server.contains(parsed.token) { return .passthrough }
         return .passthrough
     }
 }
