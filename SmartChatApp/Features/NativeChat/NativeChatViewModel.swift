@@ -187,7 +187,9 @@ final class NativeChatViewModel {
         sendInterceptor: (@MainActor (String) async -> Void)? = nil
     ) {
         let local = LocalCommandRegistry()
-        let server = serverCommandSource ?? ServerCommandSource()
+        let server = serverCommandSource ?? ServerCommandSource(
+            transport: SessionManagerTransport()
+        )
         let router = slashCommandRouter ?? SlashCommandRouter(
             local: local, server: server
         )
@@ -210,6 +212,39 @@ final class NativeChatViewModel {
         // Wire context for /help (merged list), /clear (clear
         // messages), and /connect (active profile name).
         local.context = self
+        startConnectionObserver()
+    }
+
+    // MARK: - Connection observer
+    //
+    // Polls `ConnectionState.shared.phase` once a second and fires
+    // `serverCommandSource.refresh()` on every transition into
+    // `.connected`. The seam (SessionManagerTransport -> coordinator
+    // .request) goes through the operator connection, so a refresh
+    // before connect would just fail. The observer waits for the
+    // next disconnect before refreshing again, so a long-lived
+    // chat doesn't keep hammering the gateway.
+
+    private var connectionObserverTask: Task<Void, Never>?
+
+    private func startConnectionObserver() {
+        connectionObserverTask?.cancel()
+        connectionObserverTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let phase = await MainActor.run { ConnectionState.shared.phase }
+                if case .connected = phase {
+                    await self?.serverCommandSource.refresh()
+                    // Wait until disconnected before refreshing again
+                    while !Task.isCancelled {
+                        let s = await MainActor.run { ConnectionState.shared.phase }
+                        if case .connected = s { break }
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                } else {
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+        }
     }
 
     // MARK: - Public API (called by NativeChatView)
@@ -882,5 +917,24 @@ extension NativeChatViewModel: LocalCommandContext {
     var activeProfileName: String {
         ProfileManager.shared.profiles
             .first(where: { $0.isActive })?.name ?? "gateway"
+    }
+}
+
+// MARK: - SessionManagerTransport
+//
+// Production adapter from `ServerCommandTransport` to
+// `SessionManager.request`. The seam landed in 982a1de:
+// `SessionManager.request` -> `ConnectionCoordinator.request` ->
+// the private `operatorTransport.request`. This struct is the
+// only place slash-command code knows about SessionManager; the
+// rest of the system talks to the narrow `ServerCommandTransport`
+// protocol so tests can swap in a fake.
+private final class SessionManagerTransport: ServerCommandTransport, @unchecked Sendable {
+    func send(method: String, paramsJSON: String) async throws -> Data {
+        try await SessionManager.shared.request(
+            method: method,
+            paramsJSON: paramsJSON,
+            timeoutSeconds: 15
+        )
     }
 }
