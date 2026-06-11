@@ -1,5 +1,6 @@
 import Foundation
 import os
+import SwiftUI
 import OpenClawChatUI
 import OpenClawKit
 
@@ -543,8 +544,10 @@ final class NativeChatViewModel {
         guard !inputText.isEmpty else { return }
         guard let sessionKey = selectedSession?.key else { return }
         let text = inputText
-        inputText = ""
-        autocompleteCandidates = []
+        withAnimation(.easeInOut(duration: 0.18)) {
+            inputText = ""
+            autocompleteCandidates = []
+        }
 
         let dispatch = await slashCommandRouter.dispatch(text)
         switch dispatch {
@@ -744,9 +747,15 @@ AppLogger.log(
     }
 
     /// Refresh the autocomplete popup candidates for the given
-    /// input. Called by the view on every keystroke.
+    /// input. Called by the view on every keystroke. Wrapped in
+    /// `withAnimation` so the popup's `.transition(.move(...))`
+    /// actually animates (SwiftUI only animates view-tree changes
+    /// when the mutation is inside a `withAnimation` block or
+    /// behind a `.animation(_:value:)` modifier).
     public func updateAutocomplete(_ text: String) {
-        autocompleteCandidates = slashCommandRouter.filter(text)
+        withAnimation(.easeInOut(duration: 0.18)) {
+            autocompleteCandidates = slashCommandRouter.filter(text)
+        }
     }
 
     func loadHistory() {
