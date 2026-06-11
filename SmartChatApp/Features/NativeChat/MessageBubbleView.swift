@@ -167,7 +167,14 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var bubbleContent: some View {
-        if message.text.isEmpty {
+        // System bubbles render their own chrome (muted
+        // card + 3pt left bar) inside the `system` role branch of
+        // `messageText`. Skip the standard bubble padding/background/
+        // cornerRadius here so the system bubble doesn't get
+        // double-wrapped.
+        if message.role == "system" {
+            messageText
+        } else if message.text.isEmpty {
             // Show 3 dots while waiting for the first streaming delta. Once
             // `message.text` becomes non-empty, the outer `if` falls through
             // to the text branch and this indicator is no longer rendered,
