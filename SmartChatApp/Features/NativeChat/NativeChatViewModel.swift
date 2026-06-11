@@ -234,11 +234,15 @@ final class NativeChatViewModel {
                 let phase = await MainActor.run { ConnectionState.shared.phase }
                 if case .connected = phase {
                     await self?.serverCommandSource.refresh()
-                    // Wait until disconnected before refreshing again
+                    // Stay parked here while connected; break out
+                    // when the connection drops so the outer loop
+                    // re-evaluates and refreshes on the next
+                    // reconnect.
                     while !Task.isCancelled {
-                        let s = await MainActor.run { ConnectionState.shared.phase }
-                        if case .connected = s { break }
                         try? await Task.sleep(for: .seconds(1))
+                        let s = await MainActor.run { ConnectionState.shared.phase }
+                        if case .connected = s { continue }
+                        break
                     }
                 } else {
                     try? await Task.sleep(for: .seconds(1))
