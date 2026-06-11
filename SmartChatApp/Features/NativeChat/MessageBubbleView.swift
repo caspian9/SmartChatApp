@@ -301,6 +301,22 @@ struct MessageBubbleView: View {
                         .font(.system(.caption, design: .monospaced))
                         .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
                         .lineLimit(collapseLineLimit)
+                } else if message.role == "system" {
+                    HStack(alignment: .top, spacing: 0) {
+                        Rectangle()
+                            .fill(theme.primary)
+                            .frame(width: 3)
+                            .opacity(0.6)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(message.text)
+                                .font(.system(size: 14))
+                                .foregroundColor(theme.textSecondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    }
+                    .background(theme.cardBackground.opacity(0.6))
+                    .cornerRadius(8)
                 } else {
                     Text(message.text)
                         .font(.body)
