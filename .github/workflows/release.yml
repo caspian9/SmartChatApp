@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Manual trigger — `gh workflow run release.yml`. Useful for
+  # iterating on signing / archive fixes without burning a
+  # v* tag every time. Runs against the current default
+  # branch HEAD.
+  workflow_dispatch:
 
 # Same minimum token scope as ci.yml.
 permissions:
