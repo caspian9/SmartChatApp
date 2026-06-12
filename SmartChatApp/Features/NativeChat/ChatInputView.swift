@@ -4,13 +4,21 @@ struct ChatInputView: View {
     @Environment(\.theme) private var theme
     @Binding var inputText: String
     let isSending: Bool
+    let isInputFocused: Bool
     let onSend: () -> Void
     let autocompleteCandidates: [SlashCommand]
     let onSelectCandidate: (SlashCommand) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            if !autocompleteCandidates.isEmpty {
+            // Popup gates on BOTH: (a) input must contain a slash
+            // command prefix (the candidates list is empty for plain
+            // text — see `SlashCommandRouter.filter`) and (b) the
+            // input must have keyboard focus, so the popup dismisses
+            // when the user taps outside the input. Both conditions
+            // are evaluated together so a candidate list leftover
+            // from before focus loss disappears immediately.
+            if isInputFocused && !autocompleteCandidates.isEmpty {
                 SlashCommandAutocompleteView(
                     candidates: autocompleteCandidates,
                     onSelect: onSelectCandidate

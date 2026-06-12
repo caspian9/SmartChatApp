@@ -69,11 +69,19 @@ public final class SlashCommandRouter {
         return localSorted + serverSorted
     }
 
+    /// Top-5 autocomplete candidates for `query`.
+    ///
+    /// Returns `[]` when the input is empty — the popup must not float
+    /// above the input box before the user has typed anything. Returns
+    /// the top-5 merged list when the user has typed `/` (the moment
+    /// they're committing to a slash command). For deeper prefixes
+    /// (`/h`, `/help`), returns matches whose id or alias starts with
+    /// the prefix, lowercased.
     public func filter(_ query: String) -> [SlashCommand] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return Array(merged.prefix(5))
-        }
+        guard !trimmed.isEmpty else { return [] }
+        guard trimmed.hasPrefix("/") else { return [] }
+        if trimmed == "/" { return Array(merged.prefix(5)) }
         let q = trimmed.lowercased()
         let matches = merged.filter { cmd in
             cmd.id.lowercased().hasPrefix(q)

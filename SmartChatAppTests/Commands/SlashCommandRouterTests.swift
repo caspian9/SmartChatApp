@@ -289,7 +289,10 @@ final class SlashCommandRouterTests: XCTestCase {
 
     // --- filter ---
 
-    func test_filter_empty_returnsTop5() {
+    func test_filter_empty_returnsEmpty() {
+        // The popup must not float above the input box before the
+        // user has typed anything. Empty input -> no candidates,
+        // regardless of how many commands exist in the registry.
         let entries = (0..<10).map { i in
             CommandEntry(
                 name: "/c\(i)", nativename: nil, textaliases: nil,
@@ -299,7 +302,19 @@ final class SlashCommandRouterTests: XCTestCase {
             )
         }
         let r = makeSUT(serverEntries: entries)
-        XCTAssertEqual(r.filter("").count, 5)
+        XCTAssertTrue(r.filter("").isEmpty)
+        XCTAssertTrue(r.filter("   ").isEmpty,
+                      "whitespace-only input is treated as empty")
+    }
+
+    func test_filter_nonSlashText_returnsEmpty() {
+        // Lock in the contract: candidates only show for slash input.
+        // Plain text must not surface partial matches.
+        let a = SlashCommand(id: "/help", description: "d",
+                             source: .local, executor: { _ in .silent })
+        let r = makeSUT(localCommands: [a])
+        XCTAssertTrue(r.filter("hello").isEmpty)
+        XCTAssertTrue(r.filter("h").isEmpty)
     }
 
     func test_filter_slashAlone_returnsTop5() {

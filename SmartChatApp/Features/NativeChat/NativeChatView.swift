@@ -697,6 +697,7 @@ struct NativeChatView: View {
                 }
             ),
             isSending: viewModel.isSending,
+            isInputFocused: isInputFocused,
             onSend: {
                 isInputFocused = false
                 Task { await viewModel.sendMessage() }
