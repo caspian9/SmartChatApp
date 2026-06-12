@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Manual trigger — `gh workflow run release.yml`. Useful for
+  # iterating on signing / archive fixes without burning a
+  # v* tag every time. Runs against the current default
+  # branch HEAD.
+  workflow_dispatch:
 
 # Same minimum token scope as ci.yml.
 permissions:
@@ -37,6 +42,14 @@ jobs:
       # which works on self-hosted runners with a configured
       # Apple ID but not on GitHub-hosted macos-15 runners.
       IOS_DEVELOPMENT_TEAM: ${{ secrets.IOS_DEVELOPMENT_TEAM }}
+      # Apple ID + an app-specific password (NOT the Apple ID
+      # password — generate at https://appleid.apple.com under
+      # "App-Specific Passwords"). Required so `xcodebuild
+      # -allowProvisioningUpdates` can talk to Apple's developer
+      # server on a fresh GitHub-hosted runner, which has no
+      # Apple account pre-signed-in to Xcode.
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -81,6 +94,58 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
         run: bash scripts/inject-build-timestamp.sh
 
+      # GitHub-hosted macos-15 runners have no Apple account
+      # signed in to Xcode. `xcodebuild -allowProvisioningUpdates`
+      # needs an authenticated account to fetch / create
+      # provisioning profiles from Apple's developer server.
+      #
+      # The fix is a 4-step dance:
+      #   1. Create a temporary keychain (the runner's default
+      #      `login.keychain` is locked and not always writable).
+      #   2. Put it first in the search list so `altool` stores
+      #      the Apple ID password into it.
+      #   3. Store the Apple ID + app-specific password there.
+      #   4. Unlock it (with a 6h auto-relock timeout) so
+      #      xcodebuild can read the creds non-interactively.
+      # The keychain lives in $RUNNER_TEMP and is wiped when the
+      # job ends — the Apple ID password never persists.
+      - name: Set up code-signing keychain
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+
+          # 1. Create + unlock a fresh keychain for this job.
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # 2. Put the new keychain first in the search list so
+          #    `altool` writes the password item there.
+          EXISTING="$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING
+
+          # 3. Store the Apple ID credentials. `AC_PASSWORD` is
+          #    Apple's conventional keychain item name for this
+          #    purpose. `xcrun altool` prints a deprecation
+          #    warning for upload/notarization use, but the
+          #    --store-password-in-keychain-item path is still
+          #    the supported way to seed creds for Xcode's
+          #    automatic signing in Xcode 26.
+          xcrun altool --store-password-in-keychain-item AC_PASSWORD \
+            -u "$APPLE_ID" -p "$APPLE_PASSWORD"
+
+          # 4. Sanity check — fail fast with a clear error if the
+          #    creds didn't land.
+          if ! security find-generic-password -s AC_PASSWORD >/dev/null 2>&1; then
+            echo "::error::Apple ID password not found in keychain after altool call." >&2
+            exit 1
+          fi
+          echo "Apple ID stored in keychain: $(security find-generic-password -s AC_PASSWORD 2>&1 | head -1)"
+
       - name: Archive (Release config, generic iOS device)
         run: |
           set -o pipefail
@@ -120,3 +185,14 @@ jobs:
           path: build/ipa/SmartChatApp.ipa
           if-no-files-found: error
           retention-days: 90
+
+      # Clean up the Apple ID password item so it doesn't sit
+      # around in the runner's keychain for the rest of the job
+      # (the file in $RUNNER_TEMP is wiped automatically when
+      # the job ends, but the keychain is shared with subsequent
+      # steps in the same process tree).
+      - name: Clean up code-signing keychain
+        if: always()
+        run: |
+          security delete-generic-password -s AC_PASSWORD 2>/dev/null || true
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
