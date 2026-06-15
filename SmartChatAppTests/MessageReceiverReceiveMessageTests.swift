@@ -12,14 +12,14 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
     override func setUp() async throws {
         fakeStorage = FakeMessageCacheStorage()
         store = MessageCacheStore(storage: fakeStorage)
-        vm = NativeChatViewModel(store: store)  // 注入 test store
-        // vm 初始化已经把 messageReceiver.viewModel = self 注好了,
-        // store 也在 init 里注入了,这里不需要再设置
+        vm = NativeChatViewModel(store: store)  // inject the test store
+        // vm.init already wires messageReceiver.viewModel = self
+        // and injects the store — no further setup needed here.
         receiver = vm.messageReceiver
-        // 测试需要 selectedSession 给一个 sessionKey,
-        // 否则 receiveMessage 会 guard let 早退。
+        // Tests need selectedSession to provide a sessionKey,
+        // otherwise receiveMessage's guard let will early-return.
         vm.selectedSession = makeTestSession()
-        // 隔离 CollapseStateCache.shared 的副作用
+        // Isolate CollapseStateCache.shared side effects across tests.
         CollapseStateCache.shared.clear()
     }
 
@@ -47,6 +47,49 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         let messages = store.messages(for: key, since: nil)
         XCTAssertEqual(messages.count, 1)
         XCTAssertEqual(messages[0].content.first?.text, "delta")
+    }
+
+    func test_streamingDeltas_sameSyntheticId_collapseToOneEntry() async throws {
+        // End-to-end regression for the "duplicate messages /
+        // typing indicator won't disappear" bug. EventInterpreter's
+        // `lifecycle=start` placeholder, every
+        // assistant delta, and `lifecycle=end` all share `id: runId` —
+        // a synthetic string, NOT a UUID. `toOpenClawChatMessage` must
+        // derive a DETERMINISTIC UUID from it (not a fresh UUID per
+        // call), otherwise `MessageCacheStorage.upsert` can't find the
+        // existing entry and every delta appends a new bubble. After
+        // the fix the three receiveMessage calls collapse to a single
+        // store entry carrying the last delta's text.
+        let key = "session-1"
+        let runId = "f1e2d3c4-b5a6-7890-1234-56789abcdef0"  // synthetic
+        receiver.receiveMessage(makeChat(id: runId, text: "", state: "streaming"))
+        receiver.receiveMessage(makeChat(id: runId, text: "ha", state: "streaming"))
+        receiver.receiveMessage(makeChat(id: runId, text: "hello there", state: "final"))
+
+        // Poll for at least 1 entry to land, then give a small grace
+        // window for the third write to complete. We can't poll for
+        // "exactly 1" because the broken behavior would also produce
+        // ≥1 entries — the assertion is on the count after a stable
+        // settle, not on arrival order.
+        let deadline = Date().addingTimeInterval(2.0)
+        while store.messages(for: key, since: nil).isEmpty {
+            if Date() > deadline {
+                XCTFail("store.upsert did not complete within 2s")
+                return
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        // Wait a short grace period so the third async write has time
+        // to land before we assert the count.
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let messages = store.messages(for: key, since: nil)
+        XCTAssertEqual(
+            messages.count, 1,
+            "Same synthetic id streaming deltas must collapse to one entry (id-based upsert); got \(messages.count) entries")
+        XCTAssertEqual(
+            messages.first?.content.first?.text, "hello there",
+            "Last delta must win (in-place replace, not append)")
     }
 
     func test_lifecycleEnd_setsIsUserExpandedInCollapseCache() {

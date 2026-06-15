@@ -12,7 +12,7 @@ final class MessageCacheStoreTests: XCTestCase {
         store = MessageCacheStore(storage: fakeStorage)
     }
 
-    // —— 基础 query ——
+    // -- Basic query --
 
     func test_messages_emptySessionReturnsEmpty() {
         XCTAssertEqual(store.messages(for: "any").count, 0)
@@ -26,7 +26,7 @@ final class MessageCacheStoreTests: XCTestCase {
         XCTAssertFalse(store.isHydrated(for: "any"))
     }
 
-    // —— since 过滤 ——
+    // -- since filter --
 
     func test_messages_since_filtersByTimestamp() async {
         let key = "session-1"
@@ -123,7 +123,7 @@ final class MessageCacheStoreTests: XCTestCase {
         await store.clear(for: key)
         XCTAssertEqual(store.messages(for: key).count, 0)
         XCTAssertNil(store.lastSeenTimestamp(for: key))
-        XCTAssertFalse(store.isHydrated(for: key), "clear 也清掉 hydrated 标记")
+        XCTAssertFalse(store.isHydrated(for: key), "clear also wipes the hydrated flag")
     }
 
     func test_clearAll_removesEverything() async {
@@ -132,6 +132,66 @@ final class MessageCacheStoreTests: XCTestCase {
         await store.clearAll()
         XCTAssertEqual(store.messages(for: "session-1").count, 0)
         XCTAssertEqual(store.messages(for: "session-2").count, 0)
+    }
+
+    // MARK: - replaceForSession (loadHistory authoritative-replace)
+
+    func test_replaceForSession_wipesStreamingResidueFromPreviousRun() async {
+        // Reproduces the user-visible bug: after a streaming run
+        // writes a partial entry to the store, a subsequent
+        // `replaceForSession` (loadHistory from server) must wipe
+        // the residue so the server's authoritative response is
+        // the only thing the view sees. Without this, the view
+        // shows the partial "ha" bubble from the previous run
+        // alongside the complete server response.
+        let key = "session-1"
+        // Simulate previous run's streaming residue (id=R1, partial text)
+        let residueId = UUID()
+        await store.upsert([makeMsg(id: residueId, text: "ha", timestamp: 1000)], for: key)
+        XCTAssertEqual(store.messages(for: key).count, 1)
+
+        // Simulate next run's loadHistory: server returns the
+        // complete message with a different (server-assigned) id.
+        let serverId = UUID()
+        await store.replaceForSession(
+            [makeMsg(id: serverId, text: "hello there 👋 good morning", timestamp: 2000)],
+            for: key)
+
+        let after = store.messages(for: key)
+        XCTAssertEqual(after.count, 1, "Previous-run streaming residue must be wiped")
+        XCTAssertEqual(after.first?.id, serverId, "Server entry wins")
+    }
+
+    func test_replaceForSession_updatesLastSeenTimestamp() async {
+        // loadHistory advances lastSeenTimestamp based on the
+        // server's response; replaceForSession must do the same
+        // so subsequent hasNewContent checks work.
+        let key = "session-1"
+        await store.replaceForSession(
+            [makeMsg(text: "a", timestamp: 1000),
+             makeMsg(text: "b", timestamp: 5000)],
+            for: key)
+        XCTAssertEqual(store.lastSeenTimestamp(for: key), 5000)
+    }
+
+    func test_replaceForSession_emptyPayloadKeepsExisting() async {
+        // Weak-network guard (mirrors the storage-layer test):
+        // an empty server response must not wipe the in-memory
+        // store. The user keeps seeing their messages, and the
+        // `lastSeenTimestamp` is not reset to nil. Hydration flag
+        // is preserved.
+        let key = "session-1"
+        await store.append([makeMsg(text: "old")], for: key)
+        XCTAssertTrue(store.isHydrated(for: key))
+        let beforeCount = store.messages(for: key).count
+        let beforeMax = store.lastSeenTimestamp(for: key)
+        XCTAssertEqual(beforeCount, 1)
+        XCTAssertNotNil(beforeMax)
+
+        await store.replaceForSession([], for: key)
+        XCTAssertEqual(store.messages(for: key).count, 1, "Empty replaceForSession must preserve in-memory data")
+        XCTAssertEqual(store.lastSeenTimestamp(for: key), beforeMax, "Empty replace must not reset lastSeenTimestamp")
+        XCTAssertTrue(store.isHydrated(for: key), "Empty replace keeps hydration flag")
     }
 
     // —— helpers ——
