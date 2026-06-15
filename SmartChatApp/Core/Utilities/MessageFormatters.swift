@@ -117,12 +117,23 @@ extension MessageFormatters {
                 }
             }
             if let dict = arguments.value as? [String: AnyCodable] {
-                for (key, anyCodable) in dict {
-                    appendArgLine(key, anyCodable.value)
+                // Iterate keys in sorted order so the rendered arg lines
+                // (e.g. `command: ...\ntimeout: ...`) have a stable order
+                // across renders. Swift's Dictionary iteration order is
+                // hash-driven, so without sorting the same message can
+                // render its arg lines in a different relative order on
+                // every refresh — looks like the bubble "shuffled itself"
+                // after the user scrolled away and back.
+                for key in dict.keys.sorted() {
+                    if let anyCodable = dict[key] {
+                        appendArgLine(key, anyCodable.value)
+                    }
                 }
             } else if let dict = arguments.value as? [String: Any] {
-                for (key, value) in dict {
-                    appendArgLine(key, value)
+                for key in dict.keys.sorted() {
+                    if let value = dict[key] {
+                        appendArgLine(key, value)
+                    }
                 }
             }
             if !argsLines.isEmpty {

@@ -74,7 +74,16 @@ public enum CardType: String {
 }
 
 public extension CardRegistry {
-    static func containsMarkdown(content: String) -> Bool {
+    /// `nonisolated` so the markdown-detection regex pass can run
+    /// on a background `Task.detached` from `HistoryLoader`'s
+    /// precompute path. The class itself is `@MainActor` (it owns
+    /// UI state — `toolResultHandlers`, card views), but this
+    /// pure-function predicate doesn't touch that state and was
+    /// the per-message hot loop on session switch for large
+    /// histories (10 regex matches × N messages). Marking it
+    /// `nonisolated` lets the caller do the work off main
+    /// without a MainActor hop per message.
+    nonisolated static func containsMarkdown(content: String) -> Bool {
         let markdownPatterns = [
             "^#{1,6}\\s",           // Headers (# to ######)
             "\\*\\*[^*]+\\*\\*",    // Bold (**text**)

@@ -6,6 +6,30 @@ import MarkdownDisplayView
 
 struct MarkdownCardView: View {
     let content: String
+    /// Backing height state. See `MarkdownViewRepresentable.makeUIView`
+    /// for the "only grow" stabilization rationale.
+    @State private var height: CGFloat = 0
+    /// Cached `onLinkTap` closure. The previous implementation created
+    /// a new closure on every parent body re-evaluation
+    /// (`{ url in UIApplication.shared.open(url) }`), which caused
+    /// `updateUIView` to reassign `view.onLinkTap = onLinkTap` on
+    /// every re-eval. `MarkdownViewTextKit` treats the `onLinkTap`
+    /// setter as a signal that some piece of its input changed and
+    /// invalidates its internal TextKit layout, triggering a fresh
+    /// `onHeightChange` re-measurement — which propagated as a
+    /// cascade of small per-bubble height fluctuations across the
+    /// entire visible LazyVStack after `lifecycle=end` (or any other
+    /// state change that re-evaluates the parent). The user-visible
+    /// symptom was "the entire history drifts up and down together": each bubble's
+    /// height drifted by a few pixels, the LazyVStack's total
+    /// content size wobbled in lockstep, and `.defaultScrollAnchor(.bottom)`
+    /// pulled the viewport to follow the wobble. Hoisting the
+    /// closure into a `@State` cell means the same instance is
+    /// passed to the representable on every re-eval, and `updateUIView`
+    /// can no-op the assignment.
+    @State private var openURL: (URL) -> Void = { url in
+        UIApplication.shared.open(url)
+    }
 
     /// Match the width that `StreamingMarkdownCardView` uses, so the view-tree
     /// swap at the end of streaming doesn't shift the bubble horizontally.
@@ -22,15 +46,14 @@ struct MarkdownCardView: View {
         if #available(iOS 15.0, *) {
             MarkdownViewRepresentable(
                 markdown: content,
-                onLinkTap: { url in
-                    UIApplication.shared.open(url)
-                }
+                height: $height,
+                onLinkTap: openURL
             )
-            .frame(width: contentWidth, alignment: .topLeading)
+            .frame(width: contentWidth, height: max(height, 1), alignment: .topLeading)
         } else {
             Text(content)
                 .font(.body)
-                .frame(width: contentWidth, alignment: .topLeading)
+                .frame(width: contentWidth, height: max(height, 1), alignment: .topLeading)
         }
     }
 }
@@ -38,12 +61,38 @@ struct MarkdownCardView: View {
 @available(iOS 15.0, *)
 struct MarkdownViewRepresentable: UIViewRepresentable {
     let markdown: String
+    @Binding var height: CGFloat
     var onLinkTap: ((URL) -> Void)?
 
     func makeUIView(context: Context) -> MarkdownViewTextKit {
         let view = MarkdownViewTextKit()
         view.enableTypewriterEffect = false
         view.onLinkTap = onLinkTap
+        // "Only grow" height stabilization. The 0.5pt-tolerance
+        // variant (used by the streaming view) lets the binding both
+        // grow and shrink, which is fine during streaming where the
+        // height is monotonically increasing as text accumulates.
+        // For the post-`lifecycle=end` static view, the text is
+        // final and shouldn't need to shrink; allowing shrinkage
+        // re-anchors the viewport to a moving bottom edge every
+        // time `MarkdownViewTextKit` re-measures by a sub-point
+        // (which it does as TextKit's font/line metrics settle
+        // post-render). Restricting the binding to grow-only
+        // (i.e. `newHeight > current`) decouples the viewport
+        // position from any post-render shrinkage: the content
+        // size never decreases, so the anchor stops chasing it.
+        // The first measurement (likely the smallest, before
+        // TextKit finishes settling) might briefly under-show the
+        // bubble; subsequent larger measurements grow the frame
+        // to fit, and from then on the size is stable.
+        view.onHeightChange = { [weak view] newHeight in
+            guard view != nil, newHeight > 0 else { return }
+            DispatchQueue.main.async {
+                if newHeight > self.height {
+                    self.height = newHeight
+                }
+            }
+        }
         view.markdown = markdown
         return view
     }
@@ -52,7 +101,16 @@ struct MarkdownViewRepresentable: UIViewRepresentable {
         if uiView.markdown != markdown {
             uiView.markdown = markdown
         }
-        uiView.onLinkTap = onLinkTap
+        // `onLinkTap` is intentionally NOT reassigned here. The
+        // parent (`MarkdownCardView`) hoists its `openURL` into
+        // `@State` so the same closure instance is passed on every
+        // body re-eval. Reassigning it on every re-eval used to
+        // trigger `MarkdownViewTextKit`'s invalidate path, which
+        // re-laid out the TextKit text and fired a fresh
+        // `onHeightChange` per visible bubble — the root cause of
+        // the "entire history drifts up and down together" jitter. The closure
+        // was set once in `makeUIView` and persists for the
+        // view's lifetime, which is what we want.
     }
 }
 

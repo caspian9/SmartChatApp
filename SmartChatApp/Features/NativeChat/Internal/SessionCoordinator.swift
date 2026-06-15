@@ -62,7 +62,19 @@ final class SessionCoordinator {
                     self.loadedSessions(response.sessions)
                 } catch {
                     AppLogger.log("Load sessions retry failed: \(error.localizedDescription)", category: .nativeChat, level: .error)
-                    self.loadedSessions([])
+                    // Weak-network guard (mirrors the MessageCacheStorage
+                    // / MessageCacheStore / HistoryLoader empty-payload
+                    // fix): the cache-first step at the top of
+                    // `loadSessions` already populated `vm.sessions`
+                    // from `SessionCache.load`, which the picker is
+                    // already rendering. Wiping with `loadedSessions([])`
+                    // here would blank the picker even though the user
+                    // has data and the connection is *transiently* down.
+                    // Leave the cached sessions in place; just clear the
+                    // loading flag and surface the error. Matches
+                    // `switchProfile`'s behavior on the same failure.
+                    self.viewModel?.isLoading = false
+                    self.viewModel?.error = error.localizedDescription
                 }
             }
         }
@@ -87,14 +99,23 @@ final class SessionCoordinator {
         if let profileId = vm.selectedProfileId,
            let key = UserDefaults.standard.string(forKey: lastSelectedSessionKey(for: profileId)),
            let updatedSession = sessions.first(where: { $0.key == key }) {
-            vm.selectedSession = updatedSession
             let sameKey = updatedSession.key == prevSelectedKey
             let sameModel = updatedSession.model == prevSelectedModel
             let sameTokens = updatedSession.totalTokens == prevSelectedTokens
             let sameUpdatedAt = updatedSession.updatedAt == prevSelectedUpdatedAt
             AppLogger.log("[loadedSessions DIAG] branch=lastKeyMatch key=\(String(updatedSession.key.prefix(12))) newModel=\(updatedSession.model ?? "nil") newTokens=\(updatedSession.totalTokens ?? -1) newUpdatedAt=\(updatedSession.updatedAt ?? -1) sameKey=\(sameKey ? 1 : 0) sameModel=\(sameModel ? 1 : 0) sameTokens=\(sameTokens ? 1 : 0) sameUpdatedAt=\(sameUpdatedAt ? 1 : 0)", category: .nativeChat)
-            // Reload history with updated session info to refresh provider/model/tokens display
-            vm.loadHistory()
+            vm.selectedSession = updatedSession
+            // Only re-load history if the selection actually changed
+            // (e.g., user opened NativeChat, then `loadedSessions`
+            // restored a *different* session than the cache had). If
+            // the same key was already selected from cache, the
+            // first `loadHistory()` in `loadSessions` already loaded
+            // the history; a second call here would fire another
+            // `.historyLoaded` scrollRequest, causing the viewport
+            // to jump a second time during entry.
+            if !sameKey {
+                vm.loadHistory()
+            }
             return
         }
 
@@ -121,57 +142,130 @@ final class SessionCoordinator {
     func selectSession(_ session: OpenClawChatSessionEntry) {
         guard let vm = viewModel else { return }
         let previousKey = vm.selectedSession?.key
-        // Pick the freshest instance from sessions (rather than
-        // the one passed in, which may be from a stale dropdown).
-        // This keeps the second-line provider/model/totalTokens/updatedAt
-        // in sync with whatever the most recent session-list fetch
-        // produced.
-        if let fresh = vm.sessions.first(where: { $0.key == session.key }) {
-            vm.selectedSession = fresh
-        } else {
-            vm.selectedSession = session
+        // No-op when the user re-selects the current session. Without
+        // this guard, the `loadHistory()` below fires another
+        // `.historyLoaded` scrollRequest and yanks the viewport to
+        // the bottom even though the user is just re-tapping the
+        // current session. Session metadata (model, tokens, updatedAt)
+        // is already in sync — `loadedSessions` updates it in place
+        // from the network response.
+        if previousKey == session.key {
+            AppLogger.log("selectSession: same key as current, no-op (\(String(session.key.prefix(12))))", category: .nativeChat)
+            return
         }
-
-        // Only clear messages if switching to a different session
+        // Reset manual-expanded bubbles. Per the user requirement:
+        // expanded bubbles only collapse on session switch / view
+        // exit. Switching sessions matches that reset condition —
+        // the new session's bubbles start in the collapsed form
+        // (driven by `shouldCollapse`), and any stale IDs from the
+        // previous session can never reappear in this one's
+        // `expandedMessageIds` set. Done BEFORE switching
+        // selectedSession so the cache state matches the view
+        // expectation (no risk of the previous session's expanded
+        // state leaking into the new session's first render).
         let didSwitch = previousKey != session.key
         if didSwitch {
             vm.isRestoringFromCache = true
-            // Reset manual-expanded bubbles. Per the user requirement:
-            // expanded bubbles only collapse on session switch / view
-            // exit. Switching sessions matches that reset condition —
-            // the new session's bubbles start in the collapsed form
-            // (driven by `shouldCollapse`), and any stale IDs from the
-            // previous session can never reappear in this one's
-            // `expandedMessageIds` set.
             CollapseStateCache.shared.clear()
-            // Clear the in-memory message store for the previous session.
-            // Without this, a returning user could see stale bubbles
-            // from the prior visit flash briefly before `loadHistory`
-            // re-hydrates. The store re-populates from `loadHistory` →
-            // `store.hydrate` for the new key (which is a no-op on a
-            // fresh session). Per the spec §4.4 (切 session).
-            let oldKey = previousKey
-            Task { @MainActor in
-                if let oldKey {
-                    await MessageCacheStore.shared.clear(for: oldKey)
-                }
-            }
         }
 
-        // Save selected session key (per profile)
+        // Save selected session key (per profile) BEFORE the
+        // `loadSessions()` call below — `loadSessions()`'s cache
+        // branch reads `lastSelectedSessionKey` to restore the
+        // selection, and we want it to see the *new* key, not the
+        // previous one.
         if let profileId = vm.selectedProfileId {
             UserDefaults.standard.set(session.key, forKey: lastSelectedSessionKey(for: profileId))
         }
         AppLogger.log("saved selected session: \(String(session.key.prefix(12)))", category: .nativeChat)
+
         if didSwitch {
+            // CRITICAL ORDERING. The previous implementation
+            // switched `vm.selectedSession` first, then called
+            // `clearMemory(A)`, then `loadHistory()` (which
+            // `hydrateSync`-populates `store[B]`). The view's
+            // `messages` computed property read
+            // `store[vm.selectedSession.key]`, so for the ~50-300ms
+            // window between the `selectedSession` flip and
+            // `hydrateSync(B)`, the view evaluated `store[B] ?? []`
+            // = `[]` — empty viewport, "messages disappear" symptom
+            // the user reported as "session-switch flicker, then
+            // blank, then messages won't show".
+            //
+            // Fix: do the structural writes that the view depends
+            // on in a strict order so the view never sees
+            // `selectedSession = B` while `store[B]` is still empty:
+            //   1. Release the streaming markdown holders from the
+            //      previous session (so a stale in-progress stream
+            //      doesn't keep a Cell in the LazyVStack alive).
+            //   2. Call `loadSessions()` (sync, on @MainActor) —
+            //      this sets `vm.selectedSession` to the new key
+            //      (via the cache branch's `restored last selected
+            //      session` path) AND runs `loadHistory()`'s
+            //      `hydrateSync(B)` synchronously. After this call,
+            //      `store[B]` is populated, so the view's next
+            //      body eval reads the new content.
+            //   3. `loadHistory()` again — `loadSessions()` already
+            //      calls it once, but on a cross-session switch the
+            //      HistoryLoader's per-session lock is held by the
+            //      background task from the previous session's
+            //      initial load, so the first `loadHistory()` call
+            //      short-circuits to "cache hydrate still ran above"
+            //      (the cache branch ran; only the network task was
+            //      skipped). The explicit second `loadHistory()`
+            //      here is needed only to fire the new
+            //      `.historyLoaded` scrollRequest with the new
+            //      `lastLoadedSessionKey != sessionKey` force-scroll
+            //      signal (since `HistoryLoader.lastLoadedSessionKey`
+            //      is an instance var on the loader, not on the VM,
+            //      and the previous session's loadHistory call left
+            //      it pointing at the old key).
+            //   4. NOW clear the outgoing session's memory — at
+            //      this point `store[B]` is populated, so the view
+            //      won't render an empty list when the `store[A] =
+            //      []` write lands. The view's `messages` computed
+            //      property reads `store[vm.selectedSession.key]`,
+            //      not `store[A]`, so wiping A is a no-op for
+            //      rendering. (`clearMemory` is still useful for
+            //      reclaiming memory; we just delay it so the
+            //      view's transition isn't interrupted by an
+            //      empty-`store[B]` window.)
             Task { @MainActor in
                 MarkdownStreamManager.shared.releaseAll()
             }
+            // `loadSessions` reads the new `lastSelectedSessionKey`
+            // we just wrote to UserDefaults and assigns
+            // `vm.selectedSession` accordingly. Then it calls
+            // `vm.loadHistory()` synchronously, which does
+            // `store.hydrateSync(for: newKey)` — this populates
+            // `store[newKey]` BEFORE returning, so by the time we
+            // reach `loadHistory()` on the next line, the store
+            // is already ready and the view's body re-eval will
+            // see the new content.
             vm.loadSessions()
+            // Second `loadHistory` for the new force-scroll signal
+            // (see the long block above for why one call isn't
+            // enough on a cross-session switch).
             vm.loadHistory()
-        } else {
-            vm.loadHistory()
+            // Drop the outgoing session's in-memory bubbles so they
+            // don't accumulate across many session switches, but
+            // KEEP the disk copy (so a subsequent switch-back under
+            // weak network has a cache to fall back on, and the
+            // Settings page "Message Cache" stat still reflects the
+            // user's true session count — the previous wipe-and-
+            // reload implementation dropped the stat to 1 when the
+            // user reported "I switched between 2 sessions but
+            // cache info only shows 1 session"). Done LAST, after
+            // `store[B]` is populated, so the view never reads
+            // an empty `store[B]` while we're transitioning.
+            if let oldKey = previousKey {
+                MessageCacheStore.shared.clearMemory(for: oldKey)
+            }
         }
+        // No `else` branch: if the session key did not change,
+        // the short-circuit above already returned, so we never
+        // reach this point with `!didSwitch` (previousKey==session.key
+        // case).
     }
 
     func switchProfile(_ newProfileId: UUID) {
@@ -191,7 +285,7 @@ final class SessionCoordinator {
         CollapseStateCache.shared.clear()
         // Hard-clear every session key in the store. Profile switch
         // is a clean slate — old messages have no business surviving
-        // a gateway change. Per spec §4.4 (切 profile).
+        // a gateway change. Per spec §4.4 (profile switch).
         Task { @MainActor in
             await MessageCacheStore.shared.clearAll()
         }

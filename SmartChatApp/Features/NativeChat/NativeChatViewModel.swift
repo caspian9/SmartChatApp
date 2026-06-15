@@ -98,6 +98,30 @@ final class NativeChatViewModel {
     /// `setSendTimeout(_:)` for tests.
     @ObservationIgnored
     private var sendTimeout: Duration = .seconds(90)
+    /// Cached `OpenClawChatMessage` → `ChatMessage` conversion keyed by
+    /// session. The view's `messages` computed property used to do
+    /// this conversion inline on every body evaluation: for a 200-
+    /// message history, every `expandedMessageIds` mutation, every
+    /// `scrollRequest` token change, every store write re-ran the
+    /// full `ChatMessageConverter.toChatMessage` pass plus a
+    /// 200-element `map` to merge `isUserExpanded` — easily a few
+    /// hundred ms of main-thread work per scroll-frame in some
+    /// configurations.
+    ///
+    /// The cache invalidates when `MessageCacheStore.version` changes
+    /// (i.e., on any `messagesBySession[sessionKey] = ...` write via
+    /// `setMessages`). The previous id-list fingerprint
+    /// (`chatMessagesSourceIdsBySession`) was too narrow: streaming
+    /// deltas share an id with the previous frame but carry a
+    /// longer text, so a delta-only update left the id-list
+    /// unchanged and the cache returned a stale `text=""` entry —
+    /// the bubble kept showing the typing indicator. Version is a
+    /// per-write monotonic counter bumped in `MessageCacheStore`'s
+    /// `setMessages` helper, so any source change invalidates.
+    @ObservationIgnored
+    private var chatMessagesBySession: [String: [ChatMessage]] = [:]
+    @ObservationIgnored
+    private var chatMessagesCachedVersionBySession: [String: Int] = [:]
 
     // MARK: - Collaborators
 
@@ -130,6 +154,36 @@ final class NativeChatViewModel {
     }
 
     // MARK: - Public API (called by NativeChatView)
+
+    /// Returns the cached `ChatMessage` array for `sessionKey`,
+    /// converting from the underlying `OpenClawChatMessage` list
+    /// on first read (or when `MessageCacheStore.version` advances).
+    /// See `chatMessagesBySession` for the rationale. The view's
+    /// `messages` computed property is the only intended caller.
+    func chatMessages(for sessionKey: String) -> [ChatMessage] {
+        let version = store.version
+        if let cached = chatMessagesBySession[sessionKey],
+           chatMessagesCachedVersionBySession[sessionKey] == version {
+            return cached
+        }
+        let openclaw = store.messagesBySession[sessionKey] ?? []
+        let converted = openclaw.compactMap { msg in
+            ChatMessageConverter.toChatMessage(from: msg)
+        }
+        chatMessagesBySession[sessionKey] = converted
+        chatMessagesCachedVersionBySession[sessionKey] = version
+        return converted
+    }
+
+    /// Drops the cached `ChatMessage` array for `sessionKey` so
+    /// the next `chatMessages(for:)` call does a fresh conversion.
+    /// Kept as a no-op for backwards compatibility with any
+    /// external callers — the version-based cache invalidates
+    /// automatically on any `setMessages` write in the store.
+    func invalidateChatMessagesCache(for sessionKey: String) {
+        chatMessagesBySession[sessionKey] = nil
+        chatMessagesCachedVersionBySession[sessionKey] = nil
+    }
 
     func setSelectedProfile(_ profileId: UUID?) {
         if selectedProfileId != profileId {
@@ -206,9 +260,16 @@ final class NativeChatViewModel {
         if let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: message) {
             Task { @MainActor in
                 await store.append([openclaw], for: sessionKey)
+                // forceScroll: true — the user just sent a message
+                // and explicitly wants the viewport to land on it.
+                // Without this, the view's `.newMessage` handler
+                // gates on `!userHasScrolled`, so a user who scrolled
+                // up to read history before sending would not see
+                // their outgoing message land at the bottom.
                 scrollRequest = NativeChatScrollRequest(
                     token: scrollRequest.token &+ 1,
-                    kind: .newMessage
+                    kind: .newMessage,
+                    forceScroll: true
                 )
             }
         }
@@ -341,7 +402,7 @@ final class NativeChatViewModel {
                 guard let self else { return }
                 guard self.isSending else { return }
                 AppLogger.log("sendMessage watchdog fired after \(timeout) — no lifecycle end; resetting isSending and surfacing timeout", category: .nativeChat, level: .warning)
-                self.setError("请求超时(\(timeout.components.seconds)s)未收到回复,请重试")
+                self.setError("Request timed out after \(timeout.components.seconds)s with no reply; please retry.")
             }
         }
     }

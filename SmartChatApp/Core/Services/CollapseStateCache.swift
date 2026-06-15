@@ -91,20 +91,86 @@ final class CollapseStateCache: ObservableObject {
         }
 
         safeHeightCache[message.id] = safeHeight
-        AppLogger.log("[CollapseCache safeHeight] id=\(String(message.id.prefix(8))) totalHeight=\(String(format: "%.1f", totalHeight)) safeHeight=\(String(format: "%.1f", safeHeight)) lines=\(String(format: "%.1f", safeLines))", category: .cache)
-
         return safeHeight
     }
 
     func precompute(for messages: [ChatMessage], batchSize: Int = 50) {
-        var computedCount = 0
+        // The expensive work is `computeShouldCollapse`, which
+        // measures text height with `boundingRect` per message.
+        // For a 200-message history this is ~200 UIKit text
+        // measurements on the main thread. Delegate the
+        // per-message compute to the nonisolated helper
+        // (`precomputeValues`) so callers can drive it from a
+        // `Task.detached` and keep the main thread free during
+        // session switch. This precompute method itself is still
+        // `@MainActor` (the class is) and runs the dict writes
+        // synchronously, but the boundingRect + `lineCount`
+        // compute is moved off main.
+        let alreadyCached = shouldCollapseCache
+        let values = Self.precomputeValues(
+            for: messages, alreadyCachedIds: Set(alreadyCached.keys))
+        for (id, value) in values {
+            shouldCollapseCache[id] = value
+        }
+        AppLogger.log("[CollapseCache] precompute processed=\(messages.count) computed=\(values.count) cacheSize=\(shouldCollapseCache.count)", category: .cache)
+    }
+
+    /// Returns the set of message ids that already have a
+    /// cached `shouldCollapse` value. Used by `HistoryLoader`'s
+    /// detached precompute path: the caller reads the current
+    /// set on the main actor, hands it to the background
+    /// helper (`precomputeValues`) so the background task
+    /// doesn't recompute values that are already cached, then
+    /// applies the new entries via `applyPrecomputedValues`.
+    func shouldCollapseCachedIds() -> Set<String> {
+        Set(shouldCollapseCache.keys)
+    }
+
+    /// Apply the result of a background `precomputeValues` call.
+    /// Cheap main-thread work — N dict writes for the messages
+    /// that weren't already cached.
+    func applyPrecomputedValues(_ values: [String: Bool]) {
+        for (id, value) in values {
+            shouldCollapseCache[id] = value
+        }
+    }
+
+    /// Non-isolated, thread-safe static helper for the
+    nonisolated static func precomputeValues(
+        for messages: [ChatMessage],
+        alreadyCachedIds: Set<String>
+    ) -> [String: Bool] {
+        var values: [String: Bool] = [:]
+        let maxCollapsedHeight: CGFloat = 150
         for msg in messages {
-            if shouldCollapseCache[msg.id] == nil {
-                shouldCollapseCache[msg.id] = computeShouldCollapse(for: msg)
-                computedCount += 1
+            if alreadyCachedIds.contains(msg.id) { continue }
+            if msg.seq != nil { values[msg.id] = false; continue }
+            if msg.text.isEmpty { values[msg.id] = false; continue }
+            let text = msg.text
+            let estimatedLineCount = max(1, text.count / 40)
+            if estimatedLineCount >= 4 {
+                let estimatedHeight = CGFloat(estimatedLineCount) * 20
+                if estimatedHeight >= maxCollapsedHeight + 40 {
+                    values[msg.id] = true
+                    continue
+                }
+            }
+            let textHeight = text.boundingRect(
+                with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                context: nil
+            ).height
+            let lineHeight: CGFloat = 20
+            let lineCount = Int(ceil(textHeight / lineHeight))
+            if lineCount < 4 {
+                values[msg.id] = false
+            } else if textHeight <= maxCollapsedHeight + 20 && lineCount <= 8 {
+                values[msg.id] = false
+            } else {
+                values[msg.id] = textHeight >= maxCollapsedHeight + 10
             }
         }
-        AppLogger.log("[CollapseCache] precompute processed=\(messages.count) computed=\(computedCount) cacheSize=\(shouldCollapseCache.count)", category: .cache)
+        return values
     }
 
     func remove(for messageId: String) {
@@ -128,10 +194,12 @@ final class CollapseStateCache: ObservableObject {
     /// Returns true if the user has manually expanded this message via
     /// the "Show more..." button. False for messages the user has not
     /// touched (initial state — collapse controlled by `shouldCollapse`).
+    /// `MessageBubbleView` reads `message.isUserExpanded` directly
+    /// (set by the parent's `messages` computed property from
+    /// `expandedMessageIds`); this method is kept for external
+    /// callers and tests.
     func isExpanded(_ messageId: String) -> Bool {
-        let result = expandedMessageIds.contains(messageId)
-        AppLogger.log("[CollapseCache.isExpanded] id=\(String(messageId.prefix(8))) -> \(result ? 1 : 0) setSize=\(expandedMessageIds.count) set=\(Array(expandedMessageIds.prefix(3)).map { String($0.prefix(8)) })", category: .cache)
-        return result
+        expandedMessageIds.contains(messageId)
     }
 
     /// Mark a message as user-expanded (or clear the mark if `false`).
@@ -153,7 +221,6 @@ final class CollapseStateCache: ObservableObject {
         } else {
             expandedMessageIds = expandedMessageIds.subtracting([messageId])
         }
-        AppLogger.log("[CollapseCache.setExpanded] id=\(String(messageId.prefix(8))) -> \(expanded ? 1 : 0) setSize=\(expandedMessageIds.count) set=\(Array(expandedMessageIds.prefix(3)).map { String($0.prefix(8)) })", category: .cache)
     }
 
     private func computeShouldCollapse(for message: ChatMessage) -> Bool {
@@ -184,8 +251,6 @@ final class CollapseStateCache: ObservableObject {
         ).height
         let lineHeight: CGFloat = 20
         let lineCount = Int(ceil(textHeight / lineHeight))
-
-        AppLogger.log("[CollapseCache] id=\(String(message.id.prefix(8))) text_len=\(text.count) lines=\(lineCount) height=\(String(format: "%.1f", textHeight))", category: .cache)
 
         if lineCount < 4 {
             return false
