@@ -12,6 +12,25 @@ public final class MessageCacheStore {
     private(set) var messagesBySession: [String: [OpenClawChatMessage]] = [:]
     private(set) var lastSeenTimestampBySession: [String: Double] = [:]
     private var hydratedSessions: Set<String> = []
+    /// Bumped on every write to `messagesBySession` (any session).
+    /// Consumers (e.g. `NativeChatViewModel.chatMessages(for:)`)
+    /// use this as a cache-invalidation signal: any write to the
+    /// store means "the source of truth changed, re-read me." The
+    /// earlier id-list fingerprint (`chatMessagesSourceIdsBySession`)
+    /// missed streaming text updates, which share an id with the
+    /// previous frame but carry longer text — the view kept showing
+    /// the typing indicator because the cache returned a stale
+    /// `text=""` `ChatMessage` for an `id=runId` whose source entry
+    /// now had `text="ha"`. Global version is overkill (a write to
+    /// session A invalidates session B's cache too) but the
+    /// conversion is <1ms for any realistic session, and
+    /// `messagesBySession` is the bigger signal that drives view
+    /// re-evaluation — version just keeps the VM's auxiliary cache
+    /// in lockstep. `@ObservationIgnored` because the view re-renders
+    /// on `messagesBySession`, not on the version itself.
+    @ObservationIgnored
+    private var writeVersion: Int = 0
+    var version: Int { writeVersion }
 
     public init(storage: MessageCacheStorageProtocol) {
         self.storage = storage
@@ -29,32 +48,79 @@ public final class MessageCacheStore {
         lastSeenTimestampBySession[sessionKey]
     }
 
+    /// Returns the id of the last (most recent by sort order) message
+    /// in `sessionKey`, or nil if the session has no messages. The
+    /// id is the same `String` form the view layer uses for
+    /// `ChatMessage.id` (i.e., `OpenClawChatMessage.id.uuidString`),
+    /// so the caller can plug it straight into
+    /// `.scrollPosition(id:)` on the chat ScrollView.
+    ///
+    /// Used by `NativeChatView` to scroll to the latest message on
+    /// session entry and on cross-session switch. The store keeps
+    /// messages sorted by timestamp, so `array.last` is the
+    /// most-recent one — O(1) per call, no extra bookkeeping.
+    public func latestMessageId(for sessionKey: String) -> String? {
+        messagesBySession[sessionKey]?.last?.id.uuidString
+    }
+
     public func isHydrated(for sessionKey: String) -> Bool {
         hydratedSessions.contains(sessionKey)
     }
 
-    // —— 写入(async,委托 storage)—— Task 6/7 实现
+    /// Single write path for `messagesBySession`. Bumps the version
+    /// alongside the assignment so external caches (the VM's
+    /// converted-message cache) can detect "the source changed" via
+    /// `version` instead of trying to fingerprint the array contents.
+    /// `clearAll` is the one exception — it does `removeAll()` rather
+    /// than per-key assignment, so it bumps the version inline.
+    private func setMessages(_ messages: [OpenClawChatMessage], for sessionKey: String) {
+        writeVersion &+= 1
+        messagesBySession[sessionKey] = messages
+    }
+
+    // -- Write path (async, delegates to storage) — Task 6/7 implementation
 
     public func hydrate(for sessionKey: String) async {
         let loaded = await storage.load(for: sessionKey)
-        messagesBySession[sessionKey] = loaded
+        setMessages(loaded, for: sessionKey)
+        hydratedSessions.insert(sessionKey)
+    }
+
+    /// Synchronous hydrate. Reads UserDefaults directly via
+    /// `storage.loadSync(for:)` and updates the in-memory dict
+    /// without an actor hop. Use this from `loadHistory` /
+    /// `selectSession` / view-body paths where the goal is to
+    /// surface cached messages to the user as fast as possible —
+    /// awaiting the storage actor for the initial hydrate was the
+    /// main reason `.historyLoaded` scrollRequest fired hundreds
+    /// of ms after the view appeared, and the multi-poll cascade
+    /// often landed the viewport at a stale anchor. The async
+    /// `hydrate(for:)` is kept for callers that already have an
+    /// `await` in flight (e.g. `MessageCacheStore.append`'s
+    /// defensive-hydrate branch).
+    public func hydrateSync(for sessionKey: String) {
+        let loaded = storage.loadSync(for: sessionKey)
+        setMessages(loaded, for: sessionKey)
         hydratedSessions.insert(sessionKey)
     }
 
     public func append(_ messages: [OpenClawChatMessage], for sessionKey: String) async {
         guard !messages.isEmpty else { return }
-        // 防御:如果内存没 hydrate,先 hydrate
+        // Defensive: if memory isn't hydrated, hydrate first via the
+        // sync path to avoid an actor hop.
         if !isHydrated(for: sessionKey) {
-            let loaded = await storage.load(for: sessionKey)
-            messagesBySession[sessionKey] = loaded
+            let loaded = storage.loadSync(for: sessionKey)
+            setMessages(loaded, for: sessionKey)
             hydratedSessions.insert(sessionKey)
         }
-        // 委托 storage dedup + 写盘
-        await storage.append(messages, for: sessionKey)
-        // 重新从 storage 拿全量(dedup 后),更新内存
-        let updated = await storage.load(for: sessionKey)
-        messagesBySession[sessionKey] = updated
-        // 推进 lastSeenTimestamp
+        // Delegate storage dedup + persist; storage now returns the
+        // post-write array so we can update memory directly without a
+        // second `await load(for:)` re-read.
+        // This change drops streaming-delta actor hops from 2 to 1,
+        // and full-array JSON decodes from 1 to 0.
+        let updated = await storage.append(messages, for: sessionKey)
+        setMessages(updated, for: sessionKey)
+        // Advance lastSeenTimestamp
         if let newMax = updated.compactMap(\.timestamp).max() {
             let current = lastSeenTimestampBySession[sessionKey] ?? 0
             if newMax > current {
@@ -62,17 +128,106 @@ public final class MessageCacheStore {
             }
         }
     }
+
+    /// Id-based upsert used by the streaming receive path. Replaces
+    /// any existing entry with the same id (so N streaming deltas
+    /// sharing one runId collapse to a single entry) and appends
+    /// entries with new ids. Storage returns the post-write array so
+    /// the store's in-memory dict stays in lockstep without a
+    /// second disk read. See `append` for the no-re-read rationale
+    /// (this is the hot path during streaming — called per delta).
+    public func upsert(_ messages: [OpenClawChatMessage], for sessionKey: String) async {
+        guard !messages.isEmpty else { return }
+        if !isHydrated(for: sessionKey) {
+            let loaded = storage.loadSync(for: sessionKey)
+            setMessages(loaded, for: sessionKey)
+            hydratedSessions.insert(sessionKey)
+        }
+        let updated = await storage.upsert(messages, for: sessionKey)
+        setMessages(updated, for: sessionKey)
+        if let newMax = updated.compactMap(\.timestamp).max() {
+            let current = lastSeenTimestampBySession[sessionKey] ?? 0
+            if newMax > current {
+                lastSeenTimestampBySession[sessionKey] = newMax
+            }
+        }
+    }
+
+    /// Authoritative-replace used by `loadHistory`. Wipes every
+    /// existing entry in the session and replaces with `messages`.
+    /// The server's response is treated as ground truth: streaming
+    /// residue from a prior run, stale entries from prior app
+    /// launches, and any other client-only entries are dropped.
+    /// After the storage write, refreshes `messagesBySession` and
+    /// resets `lastSeenTimestamp` to the new max (or nil if the
+    /// server returned empty). Hydration flag stays set so future
+    /// appends don't re-fetch from disk.
+    ///
+    /// Empty payloads are short-circuited (no write, no `messagesBySession`
+    /// change) — see `MessageCacheStorage.replaceForSession` for the
+    /// weak-network rationale. Returning early here too means the
+    /// `@Observable` setter never fires on an empty update, so the
+    /// view doesn't churn on a no-op.
+    public func replaceForSession(_ messages: [OpenClawChatMessage], for sessionKey: String) async {
+        guard !messages.isEmpty else {
+            AppLogger.log(
+                "[MessageCacheStore replaceForSession] sessionKey=\(String(sessionKey.prefix(8))) SKIPPED: empty payload, keeping in-memory \(self.messagesBySession[sessionKey]?.count ?? -1) entries",
+                category: .cache, level: .warning)
+            return
+        }
+        let updated = await storage.replaceForSession(messages, for: sessionKey)
+        setMessages(updated, for: sessionKey)
+        if let newMax = updated.compactMap(\.timestamp).max() {
+            lastSeenTimestampBySession[sessionKey] = newMax
+        } else {
+            lastSeenTimestampBySession[sessionKey] = nil
+        }
+        hydratedSessions.insert(sessionKey)
+    }
     public func clear(for sessionKey: String) async {
         await storage.clear(for: sessionKey)
-        messagesBySession[sessionKey] = []
+        setMessages([], for: sessionKey)
+        lastSeenTimestampBySession[sessionKey] = nil
+        hydratedSessions.remove(sessionKey)
+    }
+
+    /// In-memory-only clear. Wipes the store's working-set dicts
+    /// for `sessionKey` but does **not** touch the on-disk storage.
+    /// Used by `SessionCoordinator.selectSession` to drop the
+    /// outgoing session's cached bubbles so the user doesn't see
+    /// them flash during the cross-session transition, while
+    /// keeping the disk copy intact for the eventual
+    /// "switch back to that session" — if the user comes back to
+    /// this session under a weak/intermittent network, the cache
+    /// is still there to backstop the `fetchAndMergeFromNetwork`
+    /// attempt. The previous implementation called
+    /// `clear(for: sessionKey)` here, which (despite the comment)
+    /// wiped both memory and disk — leaving the user with no
+    /// fallback on a subsequent switch-back if the network failed.
+    public func clearMemory(for sessionKey: String) {
+        setMessages([], for: sessionKey)
         lastSeenTimestampBySession[sessionKey] = nil
         hydratedSessions.remove(sessionKey)
     }
 
     public func clearAll() async {
         await storage.clearAll()
+        // `removeAll()` doesn't go through `setMessages` (no per-key
+        // assignment), so bump the version explicitly to keep the
+        // VM's cache invalidation in lockstep with the wipe.
+        writeVersion &+= 1
         messagesBySession.removeAll()
         lastSeenTimestampBySession.removeAll()
         hydratedSessions.removeAll()
+    }
+
+    /// Disk-truth aggregate stats across all session keys, not just
+    /// the ones hydrated into memory. Used by the Settings page to
+    /// render "X messages (Y sessions)" next to the Clear Message
+    /// Cache button. The Settings display was previously hard-wired
+    /// to `(0, 0)` because the view never assigned `messageCacheStats`
+    /// after the initial state — this method is the only caller.
+    public func stats() async -> (sessionCount: Int, messageCount: Int) {
+        await storage.stats()
     }
 }

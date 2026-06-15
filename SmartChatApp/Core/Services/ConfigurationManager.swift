@@ -34,6 +34,8 @@ final class ConfigurationManager: ObservableObject {
         static let logsCache = "openclaw_logs_cache"
         static let logsNativeChat = "openclaw_logs_native_chat"
         static let logsMarkdown = "openclaw_logs_markdown"
+        static let collapseLongMessages = "openclaw_collapse_long_messages"
+        static let renderMarkdown = "openclaw_render_markdown"
     }
 
     @Published var gatewayRole: GatewayConnectionRole {
@@ -124,6 +126,28 @@ final class ConfigurationManager: ObservableObject {
         }
     }
 
+    /// Whether long assistant / tool messages are collapsed with a
+    /// "Show more..." button. Default ON (preserves the existing
+    /// behavior for users who never touched the toggle). When OFF,
+    /// `MessageBubbleView.shouldCollapse` short-circuits to false so
+    /// every long bubble renders in full.
+    @Published var collapseLongMessages: Bool {
+        didSet {
+            defaults.set(collapseLongMessages, forKey: Keys.collapseLongMessages)
+        }
+    }
+
+    /// Whether to render assistant messages as markdown. Default ON.
+    /// When OFF, `MessageBubbleView` skips `MarkdownCardView` and the
+    /// streaming `StreamingMarkdownCardView` and falls back to plain
+    /// `Text`, so the raw markdown source (e.g., `**bold**`) is shown
+    /// verbatim — useful for inspecting the model's literal output.
+    @Published var renderMarkdown: Bool {
+        didSet {
+            defaults.set(renderMarkdown, forKey: Keys.renderMarkdown)
+        }
+    }
+
     private init() {
         if let roleRaw = defaults.string(forKey: Keys.gatewayRole),
            let role = GatewayConnectionRole(rawValue: roleRaw) {
@@ -157,6 +181,12 @@ final class ConfigurationManager: ObservableObject {
         } else {
             self.locationMode = .whileUsing
         }
+
+        // Default ON: existing behavior is "fold long messages" with
+        // Show more; users who never opened the toggle keep the same
+        // experience after the upgrade.
+        self.collapseLongMessages = defaults.object(forKey: Keys.collapseLongMessages) as? Bool ?? true
+        self.renderMarkdown = defaults.object(forKey: Keys.renderMarkdown) as? Bool ?? true
 
         let initialNetwork = self.logsNetwork
         let initialCache = self.logsCache

@@ -45,64 +45,125 @@ final class HistoryLoader {
         let isRestoring = vm.isRestoringFromCache
         vm.isRestoringFromCache = false
 
-        // Acquire lock BEFORE creating task closure to prevent concurrent Tasks
-        let alreadyInProgress = Self.loadHistoryLock.withLock { state -> Bool in
-            let isInProgress = state == sessionKey
-            if !isInProgress { state = sessionKey }
-            return isInProgress
-        }
-        if alreadyInProgress {
-            AppLogger.log("[loadHistory] already in progress for \(sessionKeyPreview)",
-                         category: .nativeChat)
-        }
+        // Acquire lock for the background-task path only (not for
+        // the sync cache-hydrate below). The previous design held
+        // the per-session `loadHistoryLock` across both the sync
+        // AND the background task, so a quick A→B→A switch sequence
+        // would hit `loadHistory(A)` while the original A's
+        // background task still held the lock and return early —
+        // `hydrateSync(A)` was skipped, the in-memory store for A
+        // stayed empty (cleared by `selectSession`'s `clearMemory(A)`),
+        // and the user saw A as a blank slate on switch-back. The
+        // user-reported symptom: "cache sometimes doesn't show up
+        // when switching sessions". The fix: only the background
+        // task needs serialization (to prevent two concurrent
+        // network fetches racing on the same `replaceForSession`).
+        // The sync part is idempotent (`hydrateSync` re-reads the
+        // same disk content, scrollRequest is a value type) and
+        // cheap, so
+        // re-running it on a quick re-entry is correct and free.
+        // The lock is acquired at the dispatch site (see below) so
+        // the sync cache-hydrate is no longer gated on a possibly-
+        // still-in-flight background task from a prior call.
 
         let taskIdStr = String(UUID().uuidString.prefix(8))
 
-        Task { [sessionKey, sessionKeyPreview, isRestoring, taskIdStr] in
-            AppLogger.log("[\(taskIdStr)] loadHistory Task started, sessionKey: \(sessionKeyPreview)",
+        // === Phase A (synchronous, on @MainActor): cache-first display ===
+        // User's explicit feedback: "network can run in background".
+        // The old flow was:
+        //   await store.hydrate  ← actor hop, blocks scrollRequest
+        //   scrollRequest(.historyLoaded)
+        //   await fetchAndMergeFromNetwork  ← ensureConnected + RTT
+        // The new flow:
+        //   hydrateSync (UserDefaults read on MainActor, no actor hop)
+        //   scrollRequest(.historyLoaded)  ← fires NOW, before network
+        //   Task { fetchAndMergeFromNetwork }  ← background, doesn't block
+        // This addresses:
+        //   - "large cache entry is slow" — hydrateSync is ~1 JSON decode, no hop
+        //   - "session switch is not smooth" — scroll fires before any network
+        //   - "blank/slow on re-entry" — view sees messages immediately
+        //   - "not at the bottom" — scrollRequest lands on a populated tree
+        store?.hydrateSync(for: sessionKey)
+        // Precompute the CollapseStateCache for the cache-loaded set.
+        // Background (Task.detached) so the boundingRect work doesn't
+        // block the main thread on entry. The MarkdownCache is no
+        // longer precomputed here — its `needsMarkdown(for:)` is now
+        // lazy and content-keyed, so the 2000-regex up-front cost is
+        // eliminated (LazyVStack only renders 5-10 visible bubbles
+        // per body evaluation).
+        if let openclawMessages = store?.messages(for: sessionKey, since: nil) {
+            let chatMessages = openclawMessages.compactMap { msg in
+                ChatMessageConverter.toChatMessage(from: msg)
+            }
+            Task.detached(priority: .userInitiated) {
+                let alreadyCached = await MainActor.run {
+                    CollapseStateCache.shared.shouldCollapseCachedIds()
+                }
+                let values = CollapseStateCache.precomputeValues(
+                    for: chatMessages, alreadyCachedIds: alreadyCached)
+                await MainActor.run {
+                    CollapseStateCache.shared.applyPrecomputedValues(values)
+                }
+            }
+        }
+        // Fire scrollRequest immediately so the view scrolls to the
+        // bottom of the cache-first tree. The multi-poll cascade in
+        // the view catches any subsequent re-measurement. The 2nd
+        // `lastLoadedSessionKey` capture also happens here (on
+        // @MainActor, before launching the background task) so
+        // the network's `hasNewContent` branch sees the right
+        // forceScroll signal.
+        let forceScroll = (self.lastLoadedSessionKey != sessionKey)
+        let currentToken = viewModel?.scrollRequest.token ?? 0
+        viewModel?.scrollRequest = NativeChatScrollRequest(
+            token: currentToken &+ 1,
+            kind: .historyLoaded,
+            forceScroll: forceScroll
+        )
+
+        // === Phase B (background, off the main path): network sync ===
+        // Run as a separate Task so the user's UI thread is not
+        // blocked on `ensureConnected` / `requestHistory`. The
+        // network task may fail silently (weak network), but the
+        // user is already looking at their cached history. This is
+        // the user's explicit requirement: "for weak-network
+        // environments, don't let the network affect rendering; the
+        // network can run in the background".
+        //
+        // Lock is acquired HERE (not at the top of `loadHistory`) so
+        // that a quick A→B→A switch can re-run the sync cache-hydrate
+        // for A even while A's prior background task is still in
+        // flight. Two concurrent network fetches for the same
+        // session would race on `replaceForSession` — the lock
+        // serializes the network step, while leaving the cache
+        // step free.
+        let alreadyInFlight = Self.loadHistoryLock.withLock { state -> Bool in
+            let isInFlight = state == sessionKey
+            if !isInFlight { state = sessionKey }
+            return isInFlight
+        }
+        if alreadyInFlight {
+            AppLogger.log("[loadHistory] background fetch already in flight for \(sessionKeyPreview), skipping network step (cache hydrate still ran above)",
+                         category: .nativeChat)
+            return
+        }
+        Task { [sessionKey, sessionKeyPreview, isRestoring, taskIdStr, forceScroll] in
+            AppLogger.log("[\(taskIdStr)] loadHistory network Task started, sessionKey: \(sessionKeyPreview)",
                          category: .nativeChat)
             defer {
                 Self.loadHistoryLock.withLock { state in
                     if state == sessionKey { state = nil }
                 }
             }
-
-            // 1. 从磁盘 hydrate 进 store 内存
-            await store?.hydrate(for: sessionKey)
-            // 2. precompute caches(view 端依赖) — 需要把 OpenClawChatMessage
-            //    转成 ChatMessage,因为 caches 是按 ChatMessage id 索引的
-            if let openclawMessages = store?.messages(for: sessionKey, since: nil) {
-                let chatMessages = openclawMessages.compactMap { msg in
-                    ChatMessageConverter.toChatMessage(from: msg)
-                }
-                await MainActor.run {
-                    MarkdownCache.shared.precomputeForMessages(chatMessages)
-                    CollapseStateCache.shared.precompute(for: chatMessages)
-                }
-            }
-            // 3. 触发 historyLoaded multi-poll scroll(forceScroll = true 首次)
-            // Do NOT update lastLoadedSessionKey yet — we want
-            // fetchAndMergeFromNetwork's hasNewContent branch to also
-            // see forceScroll=true on the cross-session transition, so
-            // the post-network-arrival scrollRequest (fired after the
-            // server response lands the messages in the store) is
-            // forced and lands the viewport at the new bottom.
-            let forceScroll = (self.lastLoadedSessionKey != sessionKey)
-            let currentToken = viewModel?.scrollRequest.token ?? 0
-            viewModel?.scrollRequest = NativeChatScrollRequest(
-                token: currentToken &+ 1,
-                kind: .historyLoaded,
-                forceScroll: forceScroll
-            )
-            // 4. 拉网络(走 store.append + hasNewContent 判定)
             await fetchAndMergeFromNetwork(
                 sessionKey: sessionKey,
                 sessionKeyPreview: sessionKeyPreview,
                 taskIdStr: taskIdStr,
                 scrollKind: .historyLoaded
             )
-            // 5. 现在才更新 lastLoadedSessionKey:之后的同 session 重新
-            // 进入 (loadHistory 再次被同一 session 触发) 不会 forceScroll。
+            // Update lastLoadedSessionKey AFTER the network step
+            // so the next same-session loadHistory doesn't
+            // forceScroll (i.e. respects userHasScrolled).
             self.lastLoadedSessionKey = sessionKey
         }
     }
@@ -184,7 +245,8 @@ final class HistoryLoader {
             let transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
             let history = try await transport.requestHistory(sessionKey: sessionKey)
 
-            // Staleness check:user 可能已经切到其他 session
+            // Staleness check: the user may have switched to a
+            // different session while the request was in flight.
             let currentKey = viewModel?.selectedSession?.key
             if currentKey != sessionKey {
                 AppLogger.log(
@@ -198,7 +260,7 @@ final class HistoryLoader {
                 "[\(taskIdStr)] fetchAndMergeFromNetwork: \(messageCount) raw messages for session: \(sessionKeyPreview)",
                 category: .nativeChat)
 
-            // 把 server payload 转成 OpenClawChatMessage
+            // Convert the server payload to OpenClawChatMessage.
             let openclawMessages: [OpenClawChatMessage] = (history.messages ?? []).enumerated().compactMap {
                 index, anyCodable -> OpenClawChatMessage? in
                 guard let msg = try? JSONDecoder().decode(OpenClawChatMessage.self,
@@ -210,10 +272,42 @@ final class HistoryLoader {
                 return msg
             }
 
-            // 写 store(内存 + 磁盘 dedup-by-content)
-            await store?.append(openclawMessages, for: sessionKey)
+            // Weak-network guard: if the response decoded but yielded
+            // 0 messages, do NOT call replaceForSession. The storage
+            // layer has its own short-circuit (defense in depth) but
+            // logging at the source helps tell "server said empty"
+            // from "decode failed" in user logs. Without this, the
+            // store would be wiped and the view would show nothing
+            // even though the connection is healthy.
+            guard !openclawMessages.isEmpty else {
+                AppLogger.log(
+                    "[\(taskIdStr)] fetchAndMergeFromNetwork: server returned 0 decodable messages, keeping existing in-memory data (likely weak/intermittent network)",
+                    category: .nativeChat, level: .warning)
+                return
+            }
 
-            // 计算 hasNewContent
+            // Compute hasNewContent BEFORE replaceForSession. The store's
+            // `lastSeenTimestamp` is updated by replaceForSession itself,
+            // so a check after the replace would always be false
+            // (newMax == lastSeen post-write) and we'd never fire a
+            // scrollRequest for genuine new content. Computing it
+            // against the pre-replace lastSeen is the only way
+            // `hasNewContent` can be a real signal.
+            //
+            // More importantly, we now SKIP replaceForSession when
+            // hasNewContent is false. The previous flow always called
+            // replaceForSession, which swaps the in-memory message
+            // array even when the server's payload is identical (same
+            // timestamps, same content). The new array has
+            // server-assigned UUIDs that differ from the client-streaming
+            // synthesized UUIDs, so the ForEach's `.id(message.id)`
+            // sees every bubble as new and re-creates the entire
+            // LazyVStack — MarkdownViewTextKit re-measures async,
+            // the defaultScrollAnchor re-positions, and the user sees
+            // a chaotic "messages jumping, scroll bar not at bottom"
+            // state. Skipping the swap when the server is just
+            // confirming what we already have keeps the bubble
+            // identities stable, no re-render, no jump.
             let newMaxTimestamp = openclawMessages.compactMap(\.timestamp).max()
             let hasNewContent = self.hasNewContent(
                 newMaxTimestamp: newMaxTimestamp, sessionKey: sessionKey)
@@ -222,8 +316,27 @@ final class HistoryLoader {
                 AppLogger.log(
                     "[\(taskIdStr)] fetchAndMergeFromNetwork: new content (newMax=\(newMaxTimestamp ?? -1)), scrollKind=\(scrollKind)",
                     category: .nativeChat)
-                // 触发 scrollRequest(forceScroll 由调用方传)
-                let forceScroll = currentKey.map { $0 != self.lastLoadedSessionKey } ?? false
+                // Write to the store: use replaceForSession instead
+                // of append. The server's response is the
+                // authoritative source — any streaming residue from a
+                // previous run (id=client-runId, partial text) has a
+                // different id from the server-assigned one, so
+                // append's content-dedup would miss and both would
+                // co-exist, causing the view to display the partial
+                // "ha" bubble alongside the full final message.
+                // replaceForSession wipes and replaces the whole
+                // array, clearing all residue.
+                await store?.replaceForSession(openclawMessages, for: sessionKey)
+                // The previous implementation only honored signal 1, so a
+                // same-session pull-to-refresh left userHasScrolled=true
+                // (set by the pull gesture's scroll phase) gating the
+                // scrollTo — the viewport stayed at the pull-gesture end
+                // position with the new content layered above the old
+                // scroll offset. The `NativeChatScrollKind.manualRefresh`
+                // docstring already says "no userHasScrolled gate"; this
+                // is the implementation matching the contract.
+                let isCrossSession = currentKey.map { $0 != self.lastLoadedSessionKey } ?? false
+                let forceScroll = isCrossSession || scrollKind == .manualRefresh
                 if let currentKey { self.lastLoadedSessionKey = currentKey }
                 let currentToken = viewModel?.scrollRequest.token ?? 0
                 viewModel?.scrollRequest = NativeChatScrollRequest(
@@ -233,7 +346,7 @@ final class HistoryLoader {
                 )
             } else {
                 AppLogger.log(
-                    "[\(taskIdStr)] fetchAndMergeFromNetwork: no new content (newMax=\(newMaxTimestamp ?? -1) <= lastSeen), skipping scroll",
+                    "[\(taskIdStr)] fetchAndMergeFromNetwork: no new content (newMax=\(newMaxTimestamp ?? -1) <= lastSeen), skipping replaceForSession + scroll to avoid bubble re-creation",
                     category: .nativeChat)
             }
         } catch {

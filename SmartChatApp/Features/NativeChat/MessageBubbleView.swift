@@ -23,15 +23,7 @@ struct MessageBubbleView: View {
     /// tracking dependency.
     var onExpandChange: (Bool) -> Void
 
-    @State private var animationOffset: CGFloat = 0
     @ObservedObject private var collapseCache = CollapseStateCache.shared
-    @State private var measuredHeight: CGFloat = 0
-    @State private var isMarkdownCollapsed: Bool = false
-    @State private var cachedShouldCollapse: Bool = false
-    @State private var cachedLineCount: Int = 0
-    @State private var lastTextForCollapse: String = ""
-    @State private var lastTextForMarkdown: String = ""
-    @State private var lastMarkdownState: Bool = false
 
     private let maxCollapsedLines: Int = 8
     private let maxCollapsedHeight: CGFloat = 150
@@ -44,56 +36,15 @@ struct MessageBubbleView: View {
         return lines.prefix(maxLines).joined(separator: "\n")
     }
 
-    private func updateCollapseCache() {
-        if lastTextForCollapse != message.text {
-            lastTextForCollapse = message.text
-            cachedLineCount = computeLineCount()
-            cachedShouldCollapse = computeShouldCollapse()
-            let _bubbleHeight = message.text.boundingRect(with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height
-            AppLogger.log("[collapse] id=\(String(message.id.prefix(8))) text_len=\(message.text.count) lines=\(cachedLineCount) height=\(String(format: "%.1f", _bubbleHeight)) collapse=\(cachedShouldCollapse ? 1 : 0)", category: .nativeChat)
-        }
-    }
-
     private var shouldRenderMarkdown: Bool {
-        guard !message.isOutgoing && !message.text.isEmpty else { return false }
-        guard message.role != "toolResult" && message.role != "thinking" else { return false }
-        return MarkdownCache.shared.needsMarkdown(for: message.id)
-    }
-
-    private func computeLineCount() -> Int {
-        let textHeight = message.text.boundingRect(
-            with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            context: nil
-        ).height
-        let lineHeight: CGFloat = 20
-        let count = Int(ceil(textHeight / lineHeight))
-        AppLogger.log("[computeLineCount] id=\(String(message.id.prefix(8))) text_len=\(message.text.count) height=\(String(format: "%.1f", textHeight)) count=\(count)", category: .nativeChat)
-        return count
-    }
-
-    private func computeShouldCollapse() -> Bool {
-        if message.seq != nil {
-            AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) result=000 reason=seq", category: .nativeChat)
-            return false
-        }
-        let textHeight = message.text.boundingRect(
-            with: CGSize(width: UIScreen.main.bounds.width * 0.65, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            context: nil
-        ).height
-        AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) seq=nil lines=\(cachedLineCount) height=\(String(format: "%.1f", textHeight)) threshold=\(String(format: "%.1f", maxCollapsedHeight + 10))", category: .nativeChat)
-        if cachedLineCount < 4 {
-            AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) result=000 reason=lines<4 (count=\(cachedLineCount))", category: .nativeChat)
-            return false
-        }
-        if textHeight <= maxCollapsedHeight + 20 && cachedLineCount <= 8 {
-            AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) result=000 reason=within_tolerance", category: .nativeChat)
-            return false
-        }
-        let result = textHeight >= maxCollapsedHeight + 10
-        AppLogger.log("[computeShouldCollapse] id=\(String(message.id.prefix(8))) result=\(result ? 1 : 0)", category: .nativeChat)
-        return result
+        // User-toggled global: when off, never render markdown — the
+        // bubble shows the raw source so the user can see exactly
+        // what the model emitted (e.g., `**bold**` stays literal).
+        // The role / outgoing / empty-text pre-filters live inside
+        // `MarkdownCache.needsMarkdown(for:)` so the cache lookup
+        // and the result can't diverge between writers.
+        guard ConfigurationManager.shared.renderMarkdown else { return false }
+        return MarkdownCache.shared.needsMarkdown(for: message)
     }
 
     var body: some View {
@@ -268,10 +219,55 @@ struct MessageBubbleView: View {
                 }
             } else {
                 let shouldMd = shouldRenderMarkdown
-                if shouldMd {
+                // Build 7526: collapsed markdown renders as plain
+                // text + `lineLimit` instead of `MarkdownCardView`
+                // with `.frame(height:).clipped()`. The original
+                // `MarkdownCardView.frame(height: 150).clipped()`
+                // shape was the user-reported "1. extra blank lines
+                // between messages / 2. overlapping messages / 5. last
+                // message bottom not at the bottom" root cause on
+                // device build 7544. The `MessageTableView`
+                // (UITableView-based) architecture that used to
+                // host these bubbles amplified the problem: a
+                // `UIHostingController` wrapping this
+                // `MessageBubbleView` reported the SwiftUI view's
+                // `intrinsicContentSize` (= the full natural
+                // markdown height, e.g. 1000+ pt for a 1000-char
+                // markdown) up to the cell's Auto Layout, and
+                // `.clipped()` is a visual-only modifier that
+                // does NOT shrink the reported intrinsic content
+                // size. So the cell's actual layout height was
+                // 1000+ pt (the cell frame matched `heightForRowAt`'s
+                // 220 pt, but the hosting view overflowed past it),
+                // `scrollToRow(.bottom)` skipped past the real last
+                // cell by hundreds of points, and the user saw
+                // visual "overlap" + "empty gap" + "bottom is wrong".
+                // `Text + lineLimit` is a real layout cap: SwiftUI's
+                // Text layout is `lineLimit`-aware and reports the
+                // truncated height (8 × lineHeight) as the view's
+                // intrinsic content size. The user-visible change:
+                // collapsed bubbles show raw text (no markdown
+                // rendering — `**bold**` stays literal, lists stay
+                // flat). The expanded state keeps the full markdown
+                // rendering, so tapping "Show more..." still gives
+                // the user the rendered view.
+                //
+                // Build 7526's switch to pure SwiftUI
+                // `ScrollView { LazyVStack }` (deleting
+                // `MessageTableView` and `MessageHeightCache`)
+                // means there's no UITableView cell + hosting-
+                // controller overflow path left to fight. The
+                // collapsed cap (Build 7525) is now both
+                // necessary (real layout cap) and sufficient
+                // (no second-layer hosting-controller drift on
+                // top of it).
+                if shouldCollapse && !isExpanded && message.state != "streaming" {
+                    Text(plainTextForCollapse)
+                        .font(roleTextFont)
+                        .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
+                        .lineLimit(collapseLineLimit)
+                } else if shouldMd {
                     MarkdownCardView(content: message.text)
-                        .frame(height: shouldCollapse && !isExpanded ? maxCollapsedHeight : nil, alignment: .top)
-                        .clipped()
                 } else if message.role == "thinking" {
                     ThinkingCardView(content: message.text)
                         .lineLimit(collapseLineLimit)
@@ -313,8 +309,11 @@ struct MessageBubbleView: View {
 
     /// Streaming assistant message: route to real streaming markdown view.
     /// Markdown plain text is also fine here (MarkdownViewTextKit renders plain text).
+    /// When the user toggled off "Render markdown", we fall through to the
+    /// plain `Text` branch in `messageText` even during streaming.
     private var isAssistantStreaming: Bool {
-        message.state == "streaming" && !message.isOutgoing && message.role == "assistant"
+        guard ConfigurationManager.shared.renderMarkdown else { return false }
+        return message.state == "streaming" && !message.isOutgoing && message.role == "assistant"
     }
 
     /// User-driven expand state. Reads directly off `message.isUserExpanded`
@@ -333,16 +332,18 @@ struct MessageBubbleView: View {
     }
 
     private var collapseLineLimit: Int? {
+        // User-toggled global: when off, never cap the line count —
+        // the bubble always renders the full text. Default ON.
+        if !ConfigurationManager.shared.collapseLongMessages {
+            return nil
+        }
         // During streaming and for fresh (this-session) messages, show the
         // full text. Collapse only applies to history messages that were
         // already huge when the user opened the chat.
         if message.state == "streaming" || message.isFresh {
-            AppLogger.log("[collapseLineLimit] id=\(String(message.id.prefix(8))) state=\(message.state) isFresh=\(message.isFresh ? 1 : 0) -> nil (full text)", category: .nativeChat)
             return nil
         }
-        let limit = isExpanded ? nil : maxCollapsedLines
-        AppLogger.log("[collapseLineLimit] id=\(String(message.id.prefix(8))) state=\(message.state) isFresh=\(message.isFresh ? 1 : 0) -> \(limit.map(String.init) ?? "nil") (history)", category: .nativeChat)
-        return limit
+        return isExpanded ? nil : maxCollapsedLines
     }
 
     private var shouldShowExpandButton: Bool {
@@ -351,6 +352,11 @@ struct MessageBubbleView: View {
     }
 
     private var shouldCollapse: Bool {
+        // User-toggled global: when off, never collapse any message —
+        // the bubble always renders the full text. Default ON.
+        if !ConfigurationManager.shared.collapseLongMessages {
+            return false
+        }
         // Fresh messages (arrived in this chat session) stay fully expanded.
         // Collapse only applies to history messages loaded when the user
         // re-enters the native chat page.
@@ -368,18 +374,36 @@ struct MessageBubbleView: View {
         return CollapseStateCache.shared.shouldCollapse(for: message)
     }
 
-    private var safeHeight: CGFloat {
-        CollapseStateCache.shared.safeCollapseHeight(for: message) ?? maxCollapsedHeight
-    }
-
-    private var lineCount: Int {
-        cachedLineCount
-    }
-
     private func formatTime(_ timestamp: Date) -> String {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: timestamp)
+    }
+
+    /// Text payload rendered in the collapsed state. Matches the
+    /// non-markdown role branches' payloads so collapsed toolResult
+    /// bubbles still show pretty-printed JSON (not raw JSON string)
+    /// and collapsed thinking / toolCall / plain bubbles show raw
+    /// text. The collapsed path bypasses `MarkdownCardView` entirely
+    /// — see the Build 7525 comment in `messageText` for why.
+    private var plainTextForCollapse: String {
+        if message.role == "toolResult" {
+            return formatJsonText(message.text)
+        }
+        return message.text
+    }
+
+    /// Font used for the collapsed-state `Text`. Mirrors the
+    /// non-markdown role branches so collapsed `toolCall` /
+    /// `toolResult` bubbles use the monospaced caption font and
+    /// everything else uses `.body`.
+    private var roleTextFont: Font {
+        switch message.role {
+        case "toolCall", "toolResult":
+            return .system(.caption, design: .monospaced)
+        default:
+            return .body
+        }
     }
 
     private func formatJsonText(_ text: String) -> String {

@@ -137,6 +137,8 @@ struct SettingsView: View {
                         Text(theme.rawValue).tag(theme)
                     }
                 }
+                Toggle("Collapse long messages", isOn: $config.collapseLongMessages)
+                Toggle("Render markdown", isOn: $config.renderMarkdown)
             }
 
             Section("Cache") {
@@ -163,16 +165,38 @@ struct SettingsView: View {
                 Button("Clear Message Cache") {
                     Task {
                         await MessageCacheStore.shared.clearAll()
+                        // BUG FIX: the previous version fired `clearAll`
+                        // in a Task and returned immediately, so the
+                        // on-screen "X messages (Y sessions)" row kept
+                        // showing the pre-clear count. The user
+                        // reported "the Clear Message Cache button
+                        // doesn't work" because the count never went
+                        // to 0. Re-read stats after the clear
+                        // completes so the UI reflects the new
+                        // (empty) state.
+                        let stats = await MessageCacheStore.shared.stats()
+                        await MainActor.run {
+                            messageCacheStats = stats
+                        }
                     }
                 }
                 .foregroundColor(.red)
 
                 Button("Clear All Caches") {
                     SessionCache.clearAll()
+                    sessionCacheCount = 0
                     Task {
                         await MessageCacheStore.shared.clearAll()
+                        // See the comment on the "Clear Message Cache"
+                        // button above: clearAll() is async (it
+                        // hits the disk through the storage actor), so
+                        // we have to await and re-read stats to
+                        // refresh the message count row.
+                        let stats = await MessageCacheStore.shared.stats()
+                        await MainActor.run {
+                            messageCacheStats = stats
+                        }
                     }
-                    sessionCacheCount = 0
                 }
                 .foregroundColor(.red)
             }
@@ -247,12 +271,34 @@ struct SettingsView: View {
             await SessionManager.shared.setDiscoveryDebugLoggingEnabled(config.discoveryDebugLogs)
             await loadCacheStats()
         }
+        // Re-read stats on every appear. `.task` only fires on the
+        // view's first appear (and on identity change); when the
+        // user pops back from NativeChat — having switched sessions
+        // and written new messages to disk — the existing `.task`
+        // block does not re-run, and the "X messages (Y sessions)"
+        // row shows the stale pre-visit count. `.onAppear` re-fires
+        // every time the view enters the foreground (including
+        // coming back from a push pop), so the count always
+        // reflects the current on-disk state.
+        .onAppear {
+            Task { await loadCacheStats() }
+        }
     }
 
     private func loadCacheStats() async {
         let count = SessionCache.totalSessionCount()
+        // BUG FIX: the previous version only set `sessionCacheCount`
+        // and left `messageCacheStats` at its default `(0, 0)`, so
+        // the "Message Cache" row in the Cache section always read
+        // "0 messages (0 sessions)" no matter how many messages the
+        // user had cached. `MessageCacheStore.shared.stats()` reads
+        // from disk across every persisted session (not just the
+        // ones hydrated into memory), so the count reflects the
+        // actual on-disk state.
+        let messageStats = await MessageCacheStore.shared.stats()
         await MainActor.run {
             sessionCacheCount = count
+            messageCacheStats = messageStats
         }
     }
 }
