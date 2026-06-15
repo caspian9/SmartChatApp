@@ -139,6 +139,8 @@ struct SettingsView: View {
                 }
                 Toggle("Collapse long messages", isOn: $config.collapseLongMessages)
                 Toggle("Render markdown", isOn: $config.renderMarkdown)
+                Toggle("Show thinking", isOn: $config.showThinking)
+                Toggle("Show tool calls", isOn: $config.showToolCalls)
             }
 
             Section("Cache") {
