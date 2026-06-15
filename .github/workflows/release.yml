@@ -42,14 +42,16 @@ jobs:
       # which works on self-hosted runners with a configured
       # Apple ID but not on GitHub-hosted macos-15 runners.
       IOS_DEVELOPMENT_TEAM: ${{ secrets.IOS_DEVELOPMENT_TEAM }}
-      # Apple ID + an app-specific password (NOT the Apple ID
-      # password — generate at https://appleid.apple.com under
-      # "App-Specific Passwords"). Required so `xcodebuild
-      # -allowProvisioningUpdates` can talk to Apple's developer
-      # server on a fresh GitHub-hosted runner, which has no
-      # Apple account pre-signed-in to Xcode.
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      # 40-char uppercase SHA-1 of the cert inside
+      # IOS_DEV_CERT_P12_B64. Must match the cert actually
+      # in the .p12 — codesign in manual mode pins by SHA-1,
+      # and codesign / xcodebuild pick the cert whose SHA-1
+      # we tell them to use, so a mismatch here silently
+      # leaves the build unsigned. Rotate all four cert-
+      # related secrets together (P12_B64, P12_PASSWORD,
+      # SHA1, PROFILE_B64) — yml itself does not need to
+      # change on cert rotation.
+      IOS_DEV_CERT_SHA1: ${{ secrets.IOS_DEV_CERT_SHA1 }}
 
     steps:
       - name: Checkout
@@ -94,25 +96,43 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
         run: bash scripts/inject-build-timestamp.sh
 
-      # GitHub-hosted macos-15 runners have no Apple account
-      # signed in to Xcode. `xcodebuild -allowProvisioningUpdates`
-      # needs an authenticated account to fetch / create
-      # provisioning profiles from Apple's developer server.
+      # `xcodebuild -allowProvisioningUpdates` is a dead end on
+      # GitHub-hosted macos-15 runners: it requires either an
+      # interactive Apple ID login (the IDMS session token that
+      # xcodebuild reads from the "Xcode Accounts" keychain service
+      # can't be produced by any shell command — only Xcode's UI
+      # builds it) or an App Store Connect API key (which a free
+      # personal team can't generate). So we sidestep Apple ID
+      # auth entirely and sign with a pre-exported cert + profile
+      # from the user's local Mac.
       #
-      # The fix is a 4-step dance:
-      #   1. Create a temporary keychain (the runner's default
-      #      `login.keychain` is locked and not always writable).
-      #   2. Put it first in the search list so `altool` stores
-      #      the Apple ID password into it.
-      #   3. Store the Apple ID + app-specific password there.
-      #   4. Unlock it (with a 6h auto-relock timeout) so
-      #      xcodebuild can read the creds non-interactively.
-      # The keychain lives in $RUNNER_TEMP and is wiped when the
-      # job ends — the Apple ID password never persists.
-      - name: Set up code-signing keychain
+      # Locally the dev cert lives in login.keychain and the
+      # provisioning profile in
+      # ~/Library/Developer/Xcode/UserData/Provisioning Profiles/.
+      # Both are exported by the user (Keychain Access → Export
+      # .p12; copy the .mobileprovision), base64'd, and uploaded
+      # as three GitHub secrets. This job writes them to a fresh
+      # per-job keychain and the standard profile location, then
+      # xcodebuild signs manually using them. The cert + profile
+      # are real Apple-issued artifacts; only the *auth method*
+      # differs from `make build` on the local Mac (no IDMS
+      # handshake, just a cert import).
+      #
+      # Rotation: the profile expires every 7 days for a free
+      # personal team (LocalProvision TimeToLive=7). The cert
+      # inside the .p12 also has a finite lifetime (annual,
+      # plus Apple may revoke it on rotation). Re-export both
+      # files locally and update the four cert-related secrets
+      # (P12_B64, P12_PASSWORD, SHA1, PROFILE_B64) to re-secure
+      # CI. The yml itself does not need to change on cert
+      # rotation — IOS_DEV_CERT_SHA1 picks up the new SHA-1
+      # from the secret, and the import step's deletion loop
+      # keeps the keychain to only the current valid cert.
+      - name: Import Apple Development cert + provisioning profile
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          IOS_DEV_CERT_P12_B64: ${{ secrets.IOS_DEV_CERT_P12_B64 }}
+          IOS_DEV_CERT_P12_PASSWORD: ${{ secrets.IOS_DEV_CERT_P12_PASSWORD }}
+          IOS_DEV_PROFILE_B64: ${{ secrets.IOS_DEV_PROFILE_B64 }}
         run: |
           set -euo pipefail
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
@@ -124,51 +144,287 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           # 2. Put the new keychain first in the search list so
-          #    `altool` writes the password item there.
+          #    security import writes to it instead of the locked
+          #    default `login.keychain`.
           EXISTING="$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')"
           security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING
 
-          # 3. Store the Apple ID credentials. `AC_PASSWORD` is
-          #    Apple's conventional keychain item name for this
-          #    purpose. `xcrun altool` prints a deprecation
-          #    warning for upload/notarization use, but the
-          #    --store-password-in-keychain-item path is still
-          #    the supported way to seed creds for Xcode's
-          #    automatic signing in Xcode 26.
-          xcrun altool --store-password-in-keychain-item AC_PASSWORD \
-            -u "$APPLE_ID" -p "$APPLE_PASSWORD"
+          # 3. Import the .p12 cert. -T whitelists codesign and
+          #    xcodebuild so they can use the cert non-interactively
+          #    (otherwise macOS prompts "always allow / deny / allow
+          #    once" the first time the binary is invoked).
+          echo "$IOS_DEV_CERT_P12_B64" | base64 -d > /tmp/apple-dev.p12
+          security import /tmp/apple-dev.p12 \
+            -k "$KEYCHAIN_PATH" \
+            -P "$IOS_DEV_CERT_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/xcodebuild
+          rm -f /tmp/apple-dev.p12
 
-          # 4. Sanity check — fail fast with a clear error if the
-          #    creds didn't land.
-          if ! security find-generic-password -s AC_PASSWORD >/dev/null 2>&1; then
-            echo "::error::Apple ID password not found in keychain after altool call." >&2
+          # 3b. The .p12 may contain multiple certs with the
+          #     same friendly name (the valid one + revoked
+          #     rotations). CODE_SIGN_IDENTITY in the archive
+          #     step pins by SHA-1, but any other codesign
+          #     invocation in the same job (Package step's
+          #     `codesign --verify`, future signing steps,
+          #     etc.) lets codesign pick from the keychain
+          #     and can land on a revoked cert. Delete every
+          #     Apple Development cert in the keychain whose
+          #     SHA-1 is NOT $IOS_DEV_CERT_SHA1, so the only
+          #     Apple Development cert the job can use is the
+          #     valid one — no manual revoked-SHA-1 list to
+          #     maintain across cert rotations.
+          #
+          #     Uses `while read` rather than `mapfile`
+          #     because macOS's /bin/bash is 3.2.57 (Apple
+          #     pins to GPLv2 bash), and `mapfile` is a
+          #     bash 4.0+ builtin. CI run 27493478178
+          #     failed with "mapfile: command not found"
+          #     when the yml was first shipped.
+          ALL_SHA1S=()
+          while read -r SHA1; do
+            [[ -n "$SHA1" ]] && ALL_SHA1S+=("$SHA1")
+          done < <(security find-cert \
+            -c "Apple Development" \
+            -Z -a "$KEYCHAIN_PATH" 2>/dev/null \
+            | awk '/^SHA-1 hash: /{ print $3 }')
+
+          for SHA1 in "${ALL_SHA1S[@]}"; do
+            if [[ "$SHA1" != "${IOS_DEV_CERT_SHA1:-}" ]]; then
+              security delete-certificate -Z "$SHA1" \
+                "$KEYCHAIN_PATH" 2>/dev/null || true
+            fi
+          done
+
+          # 4. Install the provisioning profile. xcodebuild in
+          #    manual mode looks up profiles by UUID in
+          #    ~/Library/MobileDevice/Provisioning Profiles/,
+          #    and the file there must be named
+          #    "<UUID>.mobileprovision" — the friendly name
+          #    PROVISIONING_PROFILE_SPECIFIER matches against the
+          #    profile's internal `Name` field, but the lookup
+          #    index is the filename's UUID. So we extract the
+          #    UUID from the profile and rename the file to
+          #    match. (PROVISIONING_PROFILE_SPECIFIER then maps
+          #    that file's internal name to the target.)
+          PROFILE_RAW_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/ios-teampp.mobileprovision"
+          mkdir -p "$(dirname "$PROFILE_RAW_PATH")"
+          echo "$IOS_DEV_PROFILE_B64" | base64 -d > "$PROFILE_RAW_PATH"
+
+          PROFILE_UUID=$(security cms -D -i "$PROFILE_RAW_PATH" 2>/dev/null \
+            | plutil -extract UUID raw - 2>/dev/null)
+          if [[ -z "$PROFILE_UUID" ]]; then
+            echo "::error::Could not extract UUID from provisioning profile." >&2
             exit 1
           fi
-          echo "Apple ID stored in keychain: $(security find-generic-password -s AC_PASSWORD 2>&1 | head -1)"
+          PROFILE_FINAL_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/${PROFILE_UUID}.mobileprovision"
+          mv "$PROFILE_RAW_PATH" "$PROFILE_FINAL_PATH"
+          echo "Installed profile UUID=$PROFILE_UUID"
 
-      - name: Archive (Release config, generic iOS device)
+          # Export the UUID + final path for downstream steps.
+          # The xcodebuild lookup is keyed by filename UUID, so
+          # both archive and export need to know it.
+          echo "IOS_DEV_PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "IOS_DEV_PROFILE_PATH=$PROFILE_FINAL_PATH" >> "$GITHUB_ENV"
+
+          # 5. Sanity check the profile at its final UUID-based
+          #    path. (The cert is verified downstream at codesign
+          #    time, where errors are much clearer than anything
+          #    we could grep for here.) The cert import above
+          #    prints "X identities imported" — if that line is
+          #    missing or says 0, the upstream `set -euo pipefail`
+          #    would have already failed the step. `security
+          #    find-cert` and `security find-identity` are both
+          #    broken on Xcode 26.3 (they return their own USAGE
+          #    text and exit 2 instead of searching keychains), so
+          #    we don't try to use them for the cert check.
+          if ! security cms -D -i "$PROFILE_FINAL_PATH" >/dev/null 2>&1; then
+            echo "::error::Provisioning profile failed to parse after install at $PROFILE_FINAL_PATH." >&2
+            exit 1
+          fi
+          echo "Provisioning profile installed + parseable at $PROFILE_FINAL_PATH."
+
+      - name: Archive (Release config, generic iOS device, signing off)
         run: |
           set -o pipefail
           mkdir -p build
+          # Manual signing via xcodebuild is not viable for free
+          # personal teams in CI. xcodebuild's manual-signing path
+          # requires either a non-Xcode-managed provisioning profile
+          # (free-team profiles are always Xcode-managed) or Apple
+          # ID auth (xcodebuild reads it from the "Xcode Accounts"
+          # keychain, which Xcode UI populates but no shell command
+          # can). The earlier attempt to pass `CODE_SIGN_STYLE=Manual`
+          # + `PROVISIONING_PROFILE=...` on the xcodebuild command
+          # line failed two ways (CI run 27493478178 attempt #3):
+          #
+          #   1. All SPM library targets (swiftui-math, textual,
+          #      Kingfisher, MarkdownDisplayView, OpenClawKit) error
+          #      with "does not support provisioning profiles" —
+          #      command-line build settings propagate to ALL
+          #      targets in the workspace, not just the main app.
+          #      SPM libraries can't accept a provisioning profile.
+          #
+          #   2. The main app errors with "Provisioning profile is
+          #      Xcode managed, but signing settings require a
+          #      manually managed profile" — free-team profiles
+          #      have IsXcodeManaged=true and can't be used in
+          #      Manual mode.
+          #
+          # Fix: build with CODE_SIGNING_ALLOWED=NO so xcodebuild
+          # skips signing for ALL targets (including SPM, which
+          # can't take a provisioning profile). The next step
+          # signs the .app manually with `codesign`, which doesn't
+          # check IsXcodeManaged — the free-team profile is only
+          # consulted at install time on the device.
           xcodebuild archive \
             -scheme SmartChatApp \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/SmartChatApp.xcarchive \
-            -allowProvisioningUpdates \
             -skipMacroValidation \
-            CODE_SIGN_STYLE=Automatic \
-            DEVELOPMENT_TEAM="${IOS_DEVELOPMENT_TEAM:-$(bash scripts/ios-team-id.sh)}" \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             build
 
-      - name: Export .ipa from archive
+      - name: Manually sign .app with codesign
+        # Sign the .app using `codesign` directly, with:
+        #   - the cert SHA-1 from $IOS_DEV_CERT_SHA1
+        #   - the entitlements extracted from $IOS_DEV_PROFILE_PATH
+        #   - the .mobileprovision copied to
+        #     <App>.app/embedded.mobileprovision (iOS device
+        #     install validates the embedded profile as part of
+        #     the .app bundle)
+        #
+        # Why not just let xcodebuild do it: see the Archive
+        # step's comment. CODE_SIGNING_ALLOWED=NO is required to
+        # build past SPM, so the .app comes out of xcodebuild
+        # unsigned. We then sign it here. The end result is the
+        # same .app shape that xcodebuild's manual-signing path
+        # would have produced (codesign + entitlements +
+        # embedded.mobileprovision), just assembled by us
+        # instead of by xcodebuild.
+        env:
+          IOS_DEV_CERT_SHA1: ${{ secrets.IOS_DEV_CERT_SHA1 }}
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/SmartChatApp.xcarchive -maxdepth 4 -type d -name 'SmartChatApp.app' -print -quit)"
+          if [[ -z "$APP_PATH" ]]; then
+            echo "::error::Could not locate SmartChatApp.app inside build/SmartChatApp.xcarchive" >&2
+            exit 1
+          fi
+          echo "Manually signing: $APP_PATH"
+          echo "  cert SHA-1: $IOS_DEV_CERT_SHA1"
+          echo "  profile:    $IOS_DEV_PROFILE_PATH"
+
+          # 1. Copy the .mobileprovision into the .app as
+          #    embedded.mobileprovision. iOS device install
+          #    validates the embedded profile against the
+          #    installed cert + device UDID; without it, the
+          #    device refuses to install even if the codesign
+          #    signature alone is valid.
+          cp "$IOS_DEV_PROFILE_PATH" "$APP_PATH/embedded.mobileprovision"
+
+          # 2. Extract the Entitlements dict from the
+          #    .mobileprovision and write it as a standalone
+          #    XML plist for codesign. security cms -D decodes
+          #    the CMS-wrapped plist, plutil -extract pulls the
+          #    Entitlements sub-dict as XML1 form.
+          ENTITLEMENTS_PLIST="$(mktemp -t entitlements).plist"
+          if ! security cms -D -i "$IOS_DEV_PROFILE_PATH" 2>/dev/null \
+              | plutil -extract Entitlements xml1 -o "$ENTITLEMENTS_PLIST" - ; then
+            echo "::error::Could not extract Entitlements from $IOS_DEV_PROFILE_PATH" >&2
+            exit 1
+          fi
+          echo "Entitlements to embed:"
+          cat "$ENTITLEMENTS_PLIST"
+          echo
+
+          # 3. Sign with the cert SHA-1 from $IOS_DEV_CERT_SHA1.
+          #    --force overwrites any existing _CodeSignature.
+          #    --generate-entitlement-der is required on
+          #    Xcode 14+ to also embed the DER form of the
+          #    entitlements — device runtime checks DER, not
+          #    XML. --verbose=2 prints what codesign did for
+          #    the CI log.
+          codesign --force \
+            --sign "$IOS_DEV_CERT_SHA1" \
+            --entitlements "$ENTITLEMENTS_PLIST" \
+            --generate-entitlement-der \
+            --verbose=2 \
+            "$APP_PATH"
+
+          # 4. Verify the signature is valid. --deep recursively
+          #    signs nested code (extensions, frameworks);
+          #    --strict enforces the strict subset of --deep.
+          #    We also print -dvv so the log shows the actual
+          #    signer identity + entitlements hash — confirms
+          #    the SHA-1 in $IOS_DEV_CERT_SHA1 is what we
+          #    expected.
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          echo
+          echo "Signed identity:"
+          codesign -dvv "$APP_PATH" 2>&1 | head -25
+
+          rm -f "$ENTITLEMENTS_PLIST"
+          echo "Manual code-sign complete."
+
+      - name: Package .ipa from signed .app
+        # The .app is signed by the previous "Manually sign .app
+        # with codesign" step (xcodebuild's manual-signing path
+        # doesn't work on free personal teams — see the Archive
+        # step's comment for why). Earlier CI runs (27469180015
+        # and before) tried to use `xcodebuild -exportArchive`
+        # to produce the .ipa; that re-signs the .app for the
+        # chosen export method, and Xcode 26's auto-signing
+        # resolver in that path has different behavior than
+        # the manual sign. We skip -exportArchive entirely and
+        # produce an identical .ipa by zipping the already-
+        # signed .app into the iOS .ipa container layout
+        # (Payload/<Name>.app), which preserves the existing
+        # signature and installs identically via Xcode
+        # → Devices → drag .ipa, or `xcrun devicectl device
+        # install app --device ...` / `ios-deploy`.
         run: |
           set -o pipefail
-          xcodebuild -exportArchive \
-            -archivePath build/SmartChatApp.xcarchive \
-            -exportPath build/ipa \
-            -allowProvisioningUpdates \
-            -exportOptionsPlist config/ExportOptions.plist
+          # Locate the signed .app — xcodebuild archive on
+          # Xcode 26 leaves the .app at the standard
+          # Products/Applications/<Name>.app path inside the
+          # .xcarchive, but the layout can shift between
+          # Xcode versions. Walk the archive to find it.
+          APP_PATH="$(find build/SmartChatApp.xcarchive -maxdepth 4 -type d -name 'SmartChatApp.app' -print -quit)"
+          if [[ -z "$APP_PATH" ]]; then
+            echo "::error::Could not locate SmartChatApp.app inside build/SmartChatApp.xcarchive" >&2
+            echo "Archive contents:" >&2
+            find build/SmartChatApp.xcarchive -maxdepth 4 -print >&2
+            exit 1
+          fi
+          echo "Located signed .app at: $APP_PATH"
+          codesign -dvv "$APP_PATH" 2>&1 | head -10
+
+          mkdir -p build/ipa-payload
+          # Copy the signed .app under a Payload/ dir for
+          # the .ipa layout.
+          rm -rf build/ipa-payload/Payload
+          mkdir -p build/ipa-payload/Payload
+          cp -R "$APP_PATH" build/ipa-payload/Payload/SmartChatApp.app
+
+          # Verify the signature is intact after the copy.
+          codesign --verify --deep --strict --verbose=1 \
+            build/ipa-payload/Payload/SmartChatApp.app 2>&1 | head -5
+
+          # Zip into the final .ipa. The standard layout is
+          # Payload/<Name>.app at the zip root; ditto
+          # preserves symlinks + resource forks (relevant
+          # for .lproj directories that may carry
+          # localized resources).
+          mkdir -p build/ipa
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/ipa-payload/Payload \
+            build/ipa/SmartChatApp.ipa
+          ls -la build/ipa/
 
       - name: Upload .xcarchive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -186,13 +442,13 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      # Clean up the Apple ID password item so it doesn't sit
-      # around in the runner's keychain for the rest of the job
-      # (the file in $RUNNER_TEMP is wiped automatically when
-      # the job ends, but the keychain is shared with subsequent
-      # steps in the same process tree).
+      # Clean up the cert + profile so they don't sit around in
+      # the runner's keychain / MobileDevice for the rest of the
+      # job. The keychain file in $RUNNER_TEMP is wiped
+      # automatically when the job ends, but the keychain is
+      # shared with subsequent steps in the same process tree.
       - name: Clean up code-signing keychain
         if: always()
         run: |
-          security delete-generic-password -s AC_PASSWORD 2>/dev/null || true
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/"*.mobileprovision
           security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
