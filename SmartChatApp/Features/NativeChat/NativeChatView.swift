@@ -3,6 +3,14 @@ import SwiftUI
 struct NativeChatView: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var profileManager = ProfileManager.shared
+    /// Re-renders the view when `ConfigurationManager` changes,
+    /// so the display-layer filter on `messages` (which gates the
+    /// "Show thinking" / "Show tool calls" toggles) re-runs without
+    /// needing an explicit `objectWillChange` subscription at the
+    /// call site. ConfigurationManager is an `ObservableObject`
+    /// (not the newer `@Observable` macro), so `@ObservedObject`
+    /// is the subscription primitive.
+    @ObservedObject private var config = ConfigurationManager.shared
     @State private var viewModel = NativeChatViewModel()
     /// Observes user-driven expand state changes. The collapse cache is
     /// `@Published`-based (`ObservableObject`); the view's `messages`
@@ -322,6 +330,24 @@ struct NativeChatView: View {
         // `ChatMessageConverter.toChatMessage` pass for a 200+
         // message session.
         let chatMessages = viewModel.chatMessages(for: sessionKey)
+
+        // Display-layer filter: hide tool / thinking bubbles per
+        // user settings. Applied BEFORE the expand-state merge so
+        // `pinnedBottomId` (which tracks `messages.last?.id`)
+        // lands on the last VISIBLE message — flipping a toggle
+        // mid-stream re-anchors the viewport correctly (e.g. hide
+        // streaming toolResult → pinned to the assistant bubble
+        // above it). The store and EventInterpreter keep writing
+        // hidden bubbles regardless of the toggle; toggling back ON
+        // reveals them with their latest stored text.
+        let showThinking = config.showThinking
+        let showToolCalls = config.showToolCalls
+        let visible = chatMessages.filter { msg in
+            if !showThinking, msg.role == "thinking" { return false }
+            if !showToolCalls, msg.role == "toolCall" || msg.role == "toolResult" { return false }
+            return true
+        }
+
         let expandedIds = CollapseStateCache.shared.expandedMessageIds
         // Skip the per-message merge when no bubbles are manually
         // expanded. For a 200-message session this avoids 200
@@ -330,9 +356,9 @@ struct NativeChatView: View {
         // mutation and on every `scrollRequest` token change
         // (per streaming delta), so the savings compound.
         if expandedIds.isEmpty {
-            return chatMessages
+            return visible
         }
-        return chatMessages.map { msg in
+        return visible.map { msg in
             var copy = msg
             copy.isUserExpanded = expandedIds.contains(msg.id) ? true : nil
             return copy

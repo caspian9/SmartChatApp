@@ -36,6 +36,8 @@ final class ConfigurationManager: ObservableObject {
         static let logsMarkdown = "openclaw_logs_markdown"
         static let collapseLongMessages = "openclaw_collapse_long_messages"
         static let renderMarkdown = "openclaw_render_markdown"
+        static let showThinking = "openclaw_show_thinking"
+        static let showToolCalls = "openclaw_show_tool_calls"
     }
 
     @Published var gatewayRole: GatewayConnectionRole {
@@ -148,6 +150,25 @@ final class ConfigurationManager: ObservableObject {
         }
     }
 
+    /// When OFF, hide `role == "thinking"` bubbles from the chat
+    /// view. The filter is applied at the view's `messages`
+    /// computed property (see `NativeChatView.swift`); the underlying
+    /// store and EventInterpreter still write the bubbles. Default ON.
+    @Published var showThinking: Bool {
+        didSet {
+            defaults.set(showThinking, forKey: Keys.showThinking)
+        }
+    }
+
+    /// When OFF, hide `role == "toolCall"` and `role == "toolResult"`
+    /// bubbles from the chat view. Same display-layer-only contract
+    /// as `showThinking`. Default ON.
+    @Published var showToolCalls: Bool {
+        didSet {
+            defaults.set(showToolCalls, forKey: Keys.showToolCalls)
+        }
+    }
+
     private init() {
         if let roleRaw = defaults.string(forKey: Keys.gatewayRole),
            let role = GatewayConnectionRole(rawValue: roleRaw) {
@@ -187,6 +208,8 @@ final class ConfigurationManager: ObservableObject {
         // experience after the upgrade.
         self.collapseLongMessages = defaults.object(forKey: Keys.collapseLongMessages) as? Bool ?? true
         self.renderMarkdown = defaults.object(forKey: Keys.renderMarkdown) as? Bool ?? true
+        self.showThinking = defaults.object(forKey: Keys.showThinking) as? Bool ?? true
+        self.showToolCalls = defaults.object(forKey: Keys.showToolCalls) as? Bool ?? true
 
         let initialNetwork = self.logsNetwork
         let initialCache = self.logsCache
