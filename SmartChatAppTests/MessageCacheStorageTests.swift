@@ -179,4 +179,119 @@ final class MessageCacheStorageTests: XCTestCase {
         let ids = await storage.messageIds(for: key)
         XCTAssertEqual(ids, Set([id1.uuidString, id2.uuidString]))
     }
+
+    // MARK: - upsert tests (streaming-delta id stability)
+
+    func test_upsert_sameId_replacesInPlace() async {
+        // Streaming deltas share one runId; each carries a longer
+        // cumulative text. upsert must replace the existing entry
+        // (not append a new one) so the view never sees duplicate
+        // ids in its ForEach.
+        let key = "session-1"
+        let runId = UUID()
+        let m1 = makeMsg(id: runId, text: "ABC", timestamp: 1000)
+        let m2 = makeMsg(id: runId, text: "ABCDE", timestamp: 1100)
+        let m3 = makeMsg(id: runId, text: "ABCDEF", timestamp: 1200)
+        await storage.upsert([m1, m2, m3], for: key)
+
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 1, "Same id across multiple upserts must collapse to one entry")
+        XCTAssertEqual(loaded[0].id, runId)
+        XCTAssertEqual(loaded[0].content.first?.text, "ABCDEF", "Last upsert wins (streaming final state)")
+    }
+
+    func test_upsert_differentIds_appendsAll() async {
+        // History-style messages all have unique ids; upsert should
+        // behave like append for these (no accidental merge).
+        let key = "session-1"
+        let id1 = UUID()
+        let id2 = UUID()
+        let id3 = UUID()
+        await storage.upsert(
+            [makeMsg(id: id1, text: "a", timestamp: 1000),
+             makeMsg(id: id2, text: "b", timestamp: 2000),
+             makeMsg(id: id3, text: "c", timestamp: 3000)],
+            for: key)
+
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.map(\.id), [id1, id2, id3])
+        XCTAssertEqual(loaded.map { $0.content.first?.text }, ["a", "b", "c"])
+    }
+
+    func test_upsert_doesNotDedupByContent_differentIdsSameText_bothKept() async {
+        // The previous `append` test (test_append_dedupsByContent_*)
+        // asserts that two messages with the same content but
+        // different ids are deduped to one entry. upsert must NOT
+        // apply that dedup — it keys on id, not content. This is
+        // critical for history re-fetches where the server might
+        // re-assign a different id to the same logical message.
+        let key = "session-1"
+        let id1 = UUID()
+        let id2 = UUID()
+        let msg1 = makeMsg(id: id1, text: "same", timestamp: 1000)
+        let msg2 = makeMsg(id: id2, text: "same", timestamp: 1000)
+        await storage.upsert([msg1, msg2], for: key)
+
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 2, "upsert must not apply content-dedup; different ids both stay")
+    }
+
+    // MARK: - replaceForSession tests (loadHistory authoritative-replace)
+
+    func test_replaceForSession_clearsExistingAndWritesNew() async {
+        // loadHistory uses replaceForSession to make the server's
+        // response the sole source of truth. Existing entries (from
+        // previous runs, streaming residue, etc.) are wiped.
+        let key = "session-1"
+        await storage.append([makeMsg(text: "stale1"), makeMsg(text: "stale2")], for: key)
+        let before = await storage.load(for: key)
+        XCTAssertEqual(before.count, 2)
+
+        await storage.replaceForSession([makeMsg(text: "new1"), makeMsg(text: "new2")], for: key)
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 2)
+        XCTAssertEqual(loaded.compactMap { $0.content.first?.text }, ["new1", "new2"])
+    }
+
+    func test_replaceForSession_doesNotApplyContentDedup() async {
+        // Server is authoritative; do not merge with existing entries.
+        // If the server's response has the same content as an existing
+        // entry (a streaming residue, for example), the existing
+        // entry is wiped regardless of content.
+        let key = "session-1"
+        await storage.append([makeMsg(text: "shared")], for: key)
+        await storage.replaceForSession(
+            [makeMsg(text: "shared", timestamp: 2000)],
+            for: key)
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded.first?.timestamp, 2000, "Server version (newer timestamp) wins, residue is wiped")
+    }
+
+    func test_replaceForSession_emptyPayloadKeepsExisting() async {
+        // Weak-network guard: if the server returns an empty list
+        // (intermittent gateway, truncated response), the storage
+        // layer must NOT wipe the existing entries. The user would
+        // otherwise see their messages disappear mid-session even
+        // though the connection shows "connected".
+        let key = "session-1"
+        await storage.append([makeMsg(text: "old")], for: key)
+        let before = await storage.load(for: key)
+        XCTAssertEqual(before.count, 1)
+
+        await storage.replaceForSession([], for: key)
+        let after = await storage.load(for: key)
+        XCTAssertEqual(after.count, 1, "Empty replaceForSession must preserve existing data (weak-network guard)")
+        XCTAssertEqual(after.first?.content.first?.text, "old")
+    }
+
+    func test_replaceForSession_emptyWhenNoPriorData_remainsEmpty() async {
+        // No prior data: empty replace is a no-op (cache stays
+        // empty, disk stays empty). Just confirms the guard doesn't
+        // accidentally crash on the empty-cache path.
+        let key = "session-fresh"
+        await storage.replaceForSession([], for: key)
+        let after = await storage.load(for: key)
+        XCTAssertEqual(after.count, 0)
+    }
 }

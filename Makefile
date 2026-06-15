@@ -9,7 +9,7 @@ DEVICE_NAME := $(shell xcrun xcdevice list 2>/dev/null | python3 -c "import json
 include config/RemoteBuild.mk
 -include config/LocalRemoteBuild.mk
 
-.PHONY: build install install-remote list-devices compile-only install-only configure-signing detect-team clean-signing inject-build-timestamp bump-patch bump-minor bump-major
+.PHONY: build install install-remote list-devices compile-only install-only configure-signing detect-team clean-signing inject-build-timestamp bump-patch bump-minor bump-major test
 
 # Auto-detect the Apple Team ID and write it (plus canonical Bundle IDs) into
 # config/.local-signing.xcconfig, which config/Signing.xcconfig #include?s.
