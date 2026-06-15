@@ -134,8 +134,24 @@ public actor GatewayChatTransport: OpenClawChatTransport {
     }
 
     public func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
-        let params = "{\"key\": \"\(sessionKey)\", \"thinkingLevel\": \"\(thinkingLevel)\"}"
-        _ = try await nodeSession.request(method: "sessions.patch", paramsJSON: params)
+        // Map "off" → "off" gate, anything else → "stream" gate so the
+        // server actually emits stream=thinking events. Without
+        // reasoningLevel set to "stream",
+        // subscribeEmbeddedAgentSession:172 short-circuits and the client
+        // never receives thinking content even when the provider emits
+        // reasoning blocks.
+        let serverGate = (thinkingLevel == "off") ? "off" : "stream"
+        let params = """
+        {"key": "\(sessionKey)", "thinkingLevel": "\(thinkingLevel)", "reasoningLevel": "\(serverGate)"}
+        """
+        // DIAG: temporary dump of the wire payload + the server's reply,
+        // scoped to the .network category (toggle in Settings → Debug &
+        // Logs). Will be removed once we confirm the chain end-to-end.
+        let responseData = try await nodeSession.request(method: "sessions.patch", paramsJSON: params)
+        AppLogger.log(
+            "setSessionThinking ok - sessionKey=\(sessionKey) thinkingLevel=\(thinkingLevel) reasoningLevel=\(serverGate) response=\(String(data: responseData, encoding: .utf8) ?? "<binary>")",
+            category: .network
+        )
     }
 
     public func requestHealth(timeoutMs: Int) async throws -> Bool {

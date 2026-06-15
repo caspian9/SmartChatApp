@@ -277,6 +277,28 @@ final class NativeChatViewModel {
             do {
                 try await SessionManager.shared.ensureConnected()
                 let transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
+                // Re-assert the session's server-level reasoning gate
+                // before every send. Without reasoningLevel = "stream",
+                // the openclaw server's subscribeEmbeddedAgentSession:172
+                // short-circuits and never emits stream=thinking events —
+                // even when the provider emits reasoning blocks. Until
+                // a per-session UI exists, hardcode "medium" (the
+                // server's default for the current model). This is
+                // best-effort: a failure here must NOT fail the user's
+                // send, since the agent run can still proceed without
+                // the thinking stream.
+                do {
+                    try await transport.setSessionThinking(
+                        sessionKey: sessionKey,
+                        thinkingLevel: "medium"
+                    )
+                } catch {
+                    AppLogger.log(
+                        "setSessionThinking pre-send failed: \(error.localizedDescription)",
+                        category: .nativeChat,
+                        level: .warning
+                    )
+                }
                 // Start event listening task - pass sessionKey to check later
                 Task {
                     for await evt in transport.events() {

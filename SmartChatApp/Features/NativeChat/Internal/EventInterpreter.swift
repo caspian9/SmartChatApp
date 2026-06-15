@@ -68,7 +68,7 @@ final class EventInterpreter {
     func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String) async {
         switch event {
         case .agent(let payload):
-            AppLogger.log("agent event - stream=\(payload.stream) runId=\(payload.runId) seq=\(payload.seq ?? -1) ts=\(payload.ts ?? 0) data=\(EventInterpreter.summarizeData(payload.data))", category: .nativeChat)
+            AppLogger.log("agent event - stream=\(payload.stream) runId=\(payload.runId) seq=\(payload.seq ?? -1) ts=\(payload.ts ?? 0) data=\(EventInterpreter.serializeDataForLog(payload.data))", category: .nativeChat)
             let runId = payload.runId
             let ts = payload.ts ?? 0
             let timestamp = Date(timeIntervalSince1970: Double(ts) / 1000)
@@ -233,6 +233,15 @@ final class EventInterpreter {
                     // `sendMessage`, so a normal response short-circuits
                     // the watchdog before it can fire spuriously.
                     viewModel?.resetSendState()
+                } else {
+                    // Any phase other than "start" / "end" is a server
+                    // shape we don't recognize — log a warning so the
+                    // gap is visible (unknown phase → server contract
+                    // drift; would otherwise be silently swallowed by
+                    // the if/else-if chain). .warning so the line is
+                    // greppable for triage alongside the start/end
+                    // lines.
+                    AppLogger.log("agent lifecycle UNHANDLED phase=\(phase ?? "nil") runId=\(runId) seq=\(seq ?? -1) data=\(EventInterpreter.serializeDataForLog(data))", category: .nativeChat, level: .warning)
                 }
             case "assistant":
                 // The server's actual streaming shape is **not**
@@ -516,6 +525,17 @@ final class EventInterpreter {
                     // calls in one run.
                     toolStartedAtByCall.removeValue(forKey: toolKey)
                     toolReceivedAtByCall.removeValue(forKey: toolKey)
+                } else {
+                    // Any phase other than "start" / "update" / "result"
+                    // is a server shape we don't recognize. Log a
+                    // warning so the gap is visible (unknown phase →
+                    // server contract drift; would otherwise be
+                    // silently swallowed by the if/else-if chain). The
+                    // `guard let toolCallId` above has already
+                    // established the callId, so we can include it in
+                    // the log for cross-referencing with `tool start`
+                    // / `tool result` lines.
+                    AppLogger.log("agent tool UNHANDLED phase=\(phase ?? "nil") tool=\(toolName) callId=\(toolCallId) runId=\(runId) seq=\(seq ?? -1) data=\(EventInterpreter.serializeDataForLog(data))", category: .nativeChat, level: .warning)
                 }
             case "item":
                 // Modern tool/command/patch lifecycle events. Each toolCallId
@@ -714,7 +734,7 @@ final class EventInterpreter {
                 viewModel?.receiveMessage(message)
             default:
                 // plan, approval, patch, compaction, error — not yet surfaced.
-                AppLogger.log("agent UNHANDLED stream=\(payload.stream) runId=\(payload.runId) seq=\(payload.seq ?? -1) data=\(EventInterpreter.summarizeData(data))", category: .nativeChat)
+                AppLogger.log("agent UNHANDLED stream=\(payload.stream) runId=\(payload.runId) seq=\(payload.seq ?? -1) data=\(EventInterpreter.serializeDataForLog(data))", category: .nativeChat)
             }
 
         case .chat(let chat):
@@ -787,17 +807,9 @@ final class EventInterpreter {
             // (just at a less verbose level) for the existing
             // 80-char block preview above.
             if ConfigurationManager.shared.logsNativeChat {
-                if let msgAny = chat.message?.value {
-                    let unwrapped = EventInterpreter.unwrapAnyCodable(msgAny)
-                    if let dict = unwrapped as? [String: Any],
-                       let jsonData = try? JSONSerialization.data(
-                            withJSONObject: dict, options: [.prettyPrinted, .fragmentsAllowed]),
-                       let jsonString = String(data: jsonData, encoding: .utf8) {
-                        AppLogger.log(
-                            "chat event FULL message dump (runId=\(chat.runId ?? "nil")): \(jsonString)",
-                            category: .nativeChat)
-                    }
-                }
+                AppLogger.log(
+                    "chat event FULL message dump (runId=\(chat.runId ?? "nil")): \(EventInterpreter.serializeDataForLog(chat.message?.value))",
+                    category: .nativeChat)
             }
             // The previous implementation only logged the chat event's
             // content blocks. That was a regression for any server that
@@ -886,13 +898,9 @@ final class EventInterpreter {
             // grep-based log inspection for thinking text
             // unreliable).
             if ConfigurationManager.shared.logsNativeChat {
-                if let message = sm.message,
-                   let jsonData = try? JSONEncoder().encode(message),
-                   let jsonString = String(data: jsonData, encoding: .utf8) {
-                    AppLogger.log(
-                        "sessionMessage FULL message dump (messageId=\(sm.messageId ?? "nil")): \(jsonString)",
-                        category: .nativeChat)
-                }
+                AppLogger.log(
+                    "sessionMessage FULL message dump (messageId=\(sm.messageId ?? "nil")): \(EventInterpreter.serializeDataForLog(sm.message))",
+                    category: .nativeChat)
             }
             // Route each thinking block through the same
             // `viewModel?.receiveMessage` path the chat-event
@@ -933,17 +941,66 @@ final class EventInterpreter {
             AppLogger.log("transport seqGap (out-of-order event detected)", category: .nativeChat)
         case .health(let ok):
             AppLogger.log("transport health ok=\(ok)", category: .nativeChat)
+        @unknown default:
+            // Forward-compat safety net: if the SDK adds a new
+            // `OpenClawChatTransportEvent` case in a future version,
+            // we want to see it in the log instead of silently
+            // dropping the frame. `String(describing:)` renders the
+            // case name + associated value (e.g. `sessionMetrics(42)`)
+            // so we can grep for the new case and decide whether to
+            // handle it.
+            AppLogger.log("transport event UNHANDLED: \(event)", category: .nativeChat, level: .warning)
         }
     }
 
     // MARK: - Static helpers (kept here because they're only used in `.log(...)` paths)
 
-    private static func summarizeData(_ data: [String: AnyCodable]) -> String {
-        let parts = data.keys.sorted().map { key -> String in
-            guard let v = data[key]?.value else { return "\(key)=null" }
-            return "\(key)=\(EventInterpreter.formatValue(v))"
+    /// Full JSON dump of a payload value for log diagnostics.
+    /// Preserves the complete nested structure so a user can grep
+    /// for any key or value substring. Used wherever the typical
+    /// debug question is "what did the server actually send?" — the
+    /// full payload is more useful than a compact summary even at
+    /// the cost of a longer log line. Compact (not pretty-printed)
+    /// output keeps the line to one Console.app row and stays
+    /// grep-friendly; `[.sortedKeys]` makes the output deterministic
+    /// so two events with the same content produce the same string
+    /// (helps with diff-style log inspection). Three entry points
+    /// cover the three shapes seen in `OpenClawChatTransportEvent`:
+    ///
+    /// - `[String: AnyCodable]` — agent event's `data` field
+    ///   (untyped dict from the gateway).
+    /// - `Any?` — chat event's `message: AnyCodable?` (the same
+    ///   untyped dict shape, but exposed as `Any` because the
+    ///   field itself is an `AnyCodable`).
+    /// - `Encodable` — sessionMessage's `OpenClawChatMessage`
+    ///   (strongly-typed `Codable` value; uses `JSONEncoder`
+    ///   instead of `JSONSerialization` because there's no
+    ///   `AnyCodable` to unwrap first).
+    private static func serializeDataForLog(_ data: [String: AnyCodable]) -> String {
+        serializeDataForLog(data as Any)
+    }
+
+    private static func serializeDataForLog(_ value: Any?) -> String {
+        guard let value else { return "null" }
+        let unwrapped = EventInterpreter.unwrapAnyCodable(value)
+        guard JSONSerialization.isValidJSONObject(unwrapped),
+              let jsonData = try? JSONSerialization.data(
+                withJSONObject: unwrapped, options: [.fragmentsAllowed, .sortedKeys]),
+              let s = String(data: jsonData, encoding: .utf8) else {
+            return String(describing: value)
         }
-        return "{" + parts.joined(separator: ", ") + "}"
+        return s
+    }
+
+    private static func serializeDataForLog<T: Encodable>(_ value: T?) -> String {
+        guard let value else { return "null" }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let jsonData = try? encoder.encode(value),
+              let s = String(data: jsonData, encoding: .utf8) else {
+            return String(describing: value)
+        }
+        return s
     }
 
     private static func formatValue(_ v: Any) -> String {
