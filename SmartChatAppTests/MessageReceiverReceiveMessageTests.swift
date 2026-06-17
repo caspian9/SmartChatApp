@@ -41,7 +41,6 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         // Give 200ms for the persist gate to complete (the streaming
         // branch itself is synchronous, but the await is still
         // crossed).
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let messages = store.messages(for: key, since: nil)
         XCTAssertEqual(messages.count, 0, "PERSIST GATE: streaming delta must NOT enter the persistent cache")
@@ -59,7 +58,6 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         let chat = makeChat(text: "done", state: "final")
         await receiver.receiveMessage(chat)
 
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let messages = store.messages(for: key, since: nil)
         XCTAssertEqual(messages.count, 1, "final message must enter the persistent cache")
@@ -80,7 +78,6 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         // makes after lifecycle=end.
         vm.clearPending(for: key)
 
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let messages = store.messages(for: key, since: nil)
         XCTAssertEqual(messages.count, 1, "store has only the final entry")

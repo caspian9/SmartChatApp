@@ -317,27 +317,25 @@ final class HistoryLoader {
                 return
             }
 
-            // Compute hasNewContent BEFORE replaceForSession. The store's
-            // `lastSeenTimestamp` is updated by replaceForSession itself,
-            // so a check after the replace would always be false
+            // Compute hasNewContent BEFORE any store write. The store's
+            // `lastSeenTimestamp` is updated by the write itself, so
+            // a check after the write would always be false
             // (newMax == lastSeen post-write) and we'd never fire a
             // scrollRequest for genuine new content. Computing it
-            // against the pre-replace lastSeen is the only way
+            // against the pre-write lastSeen is the only way
             // `hasNewContent` can be a real signal.
             //
-            // More importantly, we now SKIP replaceForSession when
-            // hasNewContent is false. The previous flow always called
-            // replaceForSession, which swaps the in-memory message
-            // array even when the server's payload is identical (same
-            // timestamps, same content). The new array has
-            // server-assigned UUIDs that differ from the client-streaming
-            // synthesized UUIDs, so the ForEach's `.id(message.id)`
-            // sees every bubble as new and re-creates the entire
-            // LazyVStack — MarkdownViewTextKit re-measures async,
-            // the defaultScrollAnchor re-positions, and the user sees
-            // a chaotic "messages jumping, scroll bar not at bottom"
+            // We SKIP the write when hasNewContent is false so the
+            // bubble identities stay stable. A same-content re-fetch
+            // from the server carries server-assigned UUIDs that
+            // differ from the client-streaming synthesized UUIDs, so
+            // a no-op write would swap the in-memory array and force
+            // ForEach to re-render identical-looking bubbles with new
+            // ids — MarkdownViewTextKit re-measures async, the
+            // defaultScrollAnchor re-positions, and the user sees a
+            // chaotic "messages jumping, scroll bar not at bottom"
             // state. Skipping the swap when the server is just
-            // confirming what we already have keeps the bubble
+            // confirming what we already have keeps bubble
             // identities stable, no re-render, no jump.
             let newMaxTimestamp = openclawMessages.compactMap(\.timestamp).max()
             let hasNewContent = self.hasNewContent(
@@ -347,16 +345,23 @@ final class HistoryLoader {
                 AppLogger.log(
                     "[\(taskIdStr)] fetchAndMergeFromNetwork: new content (newMax=\(newMaxTimestamp ?? -1)), scrollKind=\(scrollKind)",
                     category: .nativeChat)
-                // Write to the store: use replaceForSession instead
-                // of append. The server's response is the
-                // authoritative source — any streaming residue from a
-                // previous run (id=client-runId, partial text) has a
-                // different id from the server-assigned one, so
-                // append's content-dedup would miss and both would
-                // co-exist, causing the view to display the partial
-                // "ha" bubble alongside the full final message.
-                // replaceForSession wipes and replaces the whole
-                // array, clearing all residue.
+                // Write the server's authoritative response to the
+                // store via `append` (the only public write API on
+                // `MessageCacheStore`). `append` dedups by content
+                // (10s timestamp bucket) so same-content re-fetches
+                // are no-ops.
+                //
+                // KNOWN LIMITATION: a streaming residue from a
+                // previous run (id derived from a client-generated
+                // `runId`, partial text) has a DIFFERENT id from
+                // the server-assigned id for the same content, so
+                // the content-dedup misses and both can co-exist in
+                // the view for the duration of the session. A
+                // `replaceForSession` method exists on the storage
+                // protocol/actor (and would wipe + replace the
+                // whole array, clearing the residue) but
+                // `MessageCacheStore` does not expose it yet —
+                // wiring that through is a follow-up.
                 await store?.append(openclawMessages, for: sessionKey)
                 // The previous implementation only honored signal 1, so a
                 // same-session pull-to-refresh left userHasScrolled=true

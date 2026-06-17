@@ -510,15 +510,31 @@ struct ChatMessage: Identifiable, Equatable {
     }
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
+        // All view-rendering fields are included. The previous
+        // implementation omitted `inputTokens` / `outputTokens` /
+        // `cacheRead` / `cacheWrite` / `toolCallId` / `toolName` /
+        // `stopReason`, which caused a streaming delta that only
+        // updated usage numbers to look "equal" to the previous
+        // value — `ForEach` would skip the re-render and the
+        // metadata HStack would stay stale until the next text
+        // change. Including them here closes that gap.
         lhs.id == rhs.id &&
         lhs.text == rhs.text &&
         lhs.timestamp == rhs.timestamp &&
         lhs.role == rhs.role &&
         lhs.state == rhs.state &&
+        lhs.runId == rhs.runId &&
         lhs.seq == rhs.seq &&
         lhs.startedAt == rhs.startedAt &&
         lhs.endedAt == rhs.endedAt &&
         lhs.livenessState == rhs.livenessState &&
+        lhs.inputTokens == rhs.inputTokens &&
+        lhs.outputTokens == rhs.outputTokens &&
+        lhs.cacheRead == rhs.cacheRead &&
+        lhs.cacheWrite == rhs.cacheWrite &&
+        lhs.toolCallId == rhs.toolCallId &&
+        lhs.toolName == rhs.toolName &&
+        lhs.stopReason == rhs.stopReason &&
         lhs.isFresh == rhs.isFresh &&
         lhs.isUserExpanded == rhs.isUserExpanded
     }

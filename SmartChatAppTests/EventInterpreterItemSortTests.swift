@@ -65,7 +65,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
             .agent(makeItemEvent(runId: runId, ts: t4, canonical: canonical, phase: "end", summary: nil)),
             sessionKey: "session-1")
         // Drain the upsert Tasks before reading the store
-        try await Task.sleep(nanoseconds: 300_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 2, "toolCall and toolResult each collapse to one entry via upsert; got \(stored.count)")
@@ -115,7 +114,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
         await interpreter.handleTransportEvent(
             .agent(makeItemEvent(runId: runId, ts: t4, canonical: canonical, phase: "end", summary: "captured output")),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 300_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 2)
@@ -152,7 +150,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_000, data: ["thinking": thinkingText])),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1, "thinking event must produce exactly one bubble")
@@ -169,7 +166,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_100, data: ["text": text])),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1)
@@ -192,7 +188,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_400, data: ["thinking": "Part 3."])),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 300_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1, "All deltas collapse to one entry via upsert")
@@ -217,7 +212,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_700, data: ["thinking": "Part 1 Part 2 Part 3"])),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 300_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1)
@@ -236,7 +230,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_900, data: ["thinking": "Part 1"])),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 300_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1)
@@ -269,7 +262,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
             ["type": "toolCall", "id": "tc-1", "name": "exec"],
         ])
         await interpreter.handleTransportEvent(.chat(chatEvent), sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         // Only the thinking block is extracted. text and toolCall
@@ -304,7 +296,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
                 ["type": "thinking", "thinking": chatText],
             ])),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 300_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         let thinking = stored.filter { $0.role == "thinking" }
@@ -327,7 +318,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
             ["type": "thinking", "thinking": "Anonymous thinking"],
         ])
         await interpreter.handleTransportEvent(.chat(chatEvent), sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertTrue(stored.isEmpty, "chat event with nil runId must not produce a thinking bubble (no stable id namespace)")
@@ -364,7 +354,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
                     content: nil),
             ])
         await interpreter.handleTransportEvent(.sessionMessage(smEvent), sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let stored = store.messages(for: "session-1", since: nil)
         let thinking = stored.filter { $0.role == "thinking" }
@@ -404,7 +393,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
         await interpreter.handleTransportEvent(
             .agent(makeAssistantDeltaEvent(runId: runId, ts: 500, text: "yo, iOS device online 👋")),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 100_000_000)
         // Response arrives FIRST (lifecycle=end before the chat
         // event with thinking), then the thinking chat event
         // arrives. Both end up in the cache, but with response's
@@ -412,13 +400,11 @@ final class EventInterpreterItemSortTests: XCTestCase {
         await interpreter.handleTransportEvent(
             .agent(makeLifecycleEndEvent(runId: runId, ts: 5_000)),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 100_000_000)
         await interpreter.handleTransportEvent(
             .chat(makeChatEvent(runId: runId, state: "final", contentBlocks: [
                 ["type": "thinking", "thinking": "reasoning about hi"],
             ])),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         // Cache has both: response (earlier ts) and thinking (later ts)
         let cached = store.messages(for: "session-1", since: nil)
@@ -465,15 +451,12 @@ final class EventInterpreterItemSortTests: XCTestCase {
         await interpreter.handleTransportEvent(
             .agent(makeAssistantDeltaEvent(runId: runId, ts: 500, text: "yo, iOS device online 👋")),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 100_000_000)
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 1_000, data: ["thinking": "reasoning"])),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 100_000_000)
         await interpreter.handleTransportEvent(
             .agent(makeLifecycleEndEvent(runId: runId, ts: 5_000)),
             sessionKey: "session-1")
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let merged = vm.chatMessages(for: "session-1")
         let thinkingIdx = merged.firstIndex { $0.role == "thinking" }
@@ -566,8 +549,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
                 content: nil)],
             timestamp: userSendTime.timeIntervalSince1970 * 1000,
             toolCallId: nil, toolName: nil, usage: nil, stopReason: nil,
-            errorMessage: nil, seq: nil, startedAt: nil, endedAt: nil,
-            state: "final"
+            errorMessage: nil
         )
         await store.append([userMsg], for: key)
         // 2. Feed a lifecycle=start whose server ts is 5s BEFORE
@@ -585,7 +567,6 @@ final class EventInterpreterItemSortTests: XCTestCase {
         //    flow through the VM's pendingBySession; the final
         //    user message flows to the cache. `chatMessages(for:)`
         //    merges both.
-        try await Task.sleep(nanoseconds: 300_000_000)
         let merged = vm.chatMessages(for: key)
         // The user message (role=user) must come first; the
         // assistant lifecycle=start placeholder (role=assistant,
@@ -758,8 +739,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
             content: blocks,
             timestamp: 1_700_000_000_000,
             toolCallId: nil, toolName: nil, usage: nil, stopReason: nil,
-            errorMessage: nil, seq: messageSeq, startedAt: nil, endedAt: nil,
-            state: "final"
+            errorMessage: nil
         )
         return OpenClawSessionMessageEventPayload(
             sessionKey: "session-1",

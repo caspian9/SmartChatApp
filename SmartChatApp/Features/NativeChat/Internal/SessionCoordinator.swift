@@ -267,7 +267,13 @@ final class SessionCoordinator {
                 // pending data — the view briefly sees a stale
                 // previous session.
                 viewModel?.clearMemory(for: oldKey)
-                MessageCacheStore.shared.clearMemory(for: oldKey)
+                // Use the VM's injected store, not the global
+                // `MessageCacheStore.shared` — tests that wire a
+                // custom store (e.g. `FakeMessageCacheStorage`-backed)
+                // would otherwise see writes land in the wrong
+                // store, breaking test isolation and silently
+                // leaking data across session switches.
+                viewModel?.store.clearMemory(for: oldKey)
             }
         }
         // No `else` branch: if the session key did not change,
@@ -294,8 +300,10 @@ final class SessionCoordinator {
         // Hard-clear every session key in the store. Profile switch
         // is a clean slate — old messages have no business surviving
         // a gateway change. Per spec §4.4 (profile switch).
+        // Use the VM's injected store rather than the global
+        // `.shared` — same DI reasoning as `selectSession` above.
         Task { @MainActor in
-            await MessageCacheStore.shared.clearAll()
+            await vm.store.clearAll()
         }
         AppLogger.log("switchProfile from \(previousProfileId?.uuidString.prefix(8) ?? "nil") to \(newProfileId.uuidString.prefix(8))", category: .nativeChat)
 
