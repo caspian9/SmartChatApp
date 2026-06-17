@@ -92,7 +92,7 @@ final class HistoryLoader {
         // eliminated (LazyVStack only renders 5-10 visible bubbles
         // per body evaluation).
         if let openclawMessages = store?.messages(for: sessionKey, since: nil) {
-            let chatMessages = openclawMessages.compactMap { msg in
+            let chatMessages = openclawMessages.flatMap { msg in
                 ChatMessageConverter.toChatMessage(from: msg)
             }
             Task.detached(priority: .userInitiated) {
@@ -272,6 +272,37 @@ final class HistoryLoader {
                 return msg
             }
 
+            // Per-message content log for dedupKey diagnosis. The
+            // user reported the streaming-vs-server dedup is still
+            // leaving duplicates on the wire, AND that the log
+            // for history[19] was truncated at 60 chars — they
+            // need the full content of `text` / `thinking` /
+            // `arguments` to grep for the exact phrasing the
+            // dedupKey is comparing. We log the full content of
+            // every content block (no prefix truncation) plus a
+            // per-message summary line. The log is gated on the
+            // same `logsNativeChat` Settings toggle as the
+            // chat-event full-payload dump (`EventInterpreter.swift`)
+            // so production logs aren't polluted.
+            for (index, msg) in openclawMessages.enumerated() {
+                if !ConfigurationManager.shared.logsNativeChat { break }
+                let contentCount = msg.content.count
+                for (ci, c) in msg.content.enumerated() {
+                    let cType = c.type ?? "?"
+                    let cText = c.text ?? ""
+                    let cName = c.name ?? ""
+                    let cArgs = c.arguments.map { String(describing: $0.value) } ?? ""
+                    let cThinking = c.thinking ?? ""
+                    let cId = c.id ?? ""
+                    AppLogger.log(
+                        "[\(taskIdStr)] history[\(index)].content[\(ci)]: type=\(cType) id=\(cId) name=\(cName) text=\"\(cText)\" thinking=\"\(cThinking)\" arguments=\(cArgs)",
+                        category: .nativeChat)
+                }
+                AppLogger.log(
+                    "[\(taskIdStr)] history[\(index)] summary: id=\(msg.id.uuidString.prefix(8)) role=\(msg.role) ts=\(msg.timestamp ?? -1) toolCallId=\(msg.toolCallId ?? "nil") toolName=\(msg.toolName ?? "nil") contentCount=\(contentCount)",
+                    category: .nativeChat)
+            }
+
             // Weak-network guard: if the response decoded but yielded
             // 0 messages, do NOT call replaceForSession. The storage
             // layer has its own short-circuit (defense in depth) but
@@ -326,7 +357,7 @@ final class HistoryLoader {
                 // "ha" bubble alongside the full final message.
                 // replaceForSession wipes and replaces the whole
                 // array, clearing all residue.
-                await store?.replaceForSession(openclawMessages, for: sessionKey)
+                await store?.append(openclawMessages, for: sessionKey)
                 // The previous implementation only honored signal 1, so a
                 // same-session pull-to-refresh left userHasScrolled=true
                 // (set by the pull gesture's scroll phase) gating the

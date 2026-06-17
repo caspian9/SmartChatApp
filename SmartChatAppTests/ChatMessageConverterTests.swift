@@ -15,13 +15,20 @@ final class ChatMessageConverterTests: XCTestCase {
             id: UUID(), role: "assistant", content: content,
             timestamp: 1_700_000_000_000, toolCallId: nil, toolName: nil,
             usage: nil, stopReason: nil, errorMessage: nil)
-        let chat = ChatMessageConverter.toChatMessage(from: msg)
-        XCTAssertEqual(chat?.text, "hello")
-        XCTAssertEqual(chat?.role, "assistant")
-        XCTAssertEqual(chat?.id, msg.id.uuidString)
+        let chats = ChatMessageConverter.toChatMessage(from: msg)
+        XCTAssertEqual(chats.count, 1)
+        XCTAssertEqual(chats[0].text, "hello")
+        XCTAssertEqual(chats[0].role, "assistant")
+        XCTAssertEqual(chats[0].id, msg.id.uuidString)
     }
 
-    func testToChatMessage_emptyText_returnsNil() {
+    func testToChatMessage_emptyText_returnsEmpty() {
+        // Empty content (no text, no thinking) returns an empty
+        // array (not nil). Callers (e.g. `vm.chatMessages(for:)`) skip
+        // empty arrays naturally. The previous "nil for empty"
+        // contract was tied to the singular `ChatMessage?` return
+        // type; with the current `[ChatMessage]` return, "no
+        // displayable content" means an empty array.
         let content = [OpenClawChatMessageContent(
             type: "text", text: "", thinking: nil, thinkingSignature: nil,
             mimeType: nil, fileName: nil, content: nil)]
@@ -29,7 +36,8 @@ final class ChatMessageConverterTests: XCTestCase {
             id: UUID(), role: "assistant", content: content,
             timestamp: 0, toolCallId: nil, toolName: nil,
             usage: nil, stopReason: nil, errorMessage: nil)
-        XCTAssertNil(ChatMessageConverter.toChatMessage(from: msg))
+        let chats = ChatMessageConverter.toChatMessage(from: msg)
+        XCTAssertTrue(chats.isEmpty, "empty text + no thinking → empty array (caller skips)")
     }
 
     func testToChatMessage_thinkingOnly_roleIsThinking() {
@@ -40,9 +48,79 @@ final class ChatMessageConverterTests: XCTestCase {
             id: UUID(), role: "assistant", content: content,
             timestamp: 0, toolCallId: nil, toolName: nil,
             usage: nil, stopReason: nil, errorMessage: nil)
-        let chat = ChatMessageConverter.toChatMessage(from: msg)
-        XCTAssertEqual(chat?.role, "thinking")
-        XCTAssertEqual(chat?.text, "let me think")
+        let chats = ChatMessageConverter.toChatMessage(from: msg)
+        XCTAssertEqual(chats.count, 1)
+        XCTAssertEqual(chats[0].role, "thinking")
+        XCTAssertEqual(chats[0].text, "let me think")
+    }
+
+    func testToChatMessage_textAndThinkingBundle_emitsBoth() {
+        // Regression for the user-reported "thinking not visible in
+        // chat.history" complaint. The server sometimes returns
+        // text + thinking in the same `content` array
+        // (e.g., [{type:"text", text:"Hello"}, {type:"thinking",
+        // thinking:"reasoning"}]). The previous converter's
+        // "first text wins" rule took the text and dropped the
+        // thinking, so the user saw the answer but not the
+        // reasoning that led to it. The fix emits BOTH as
+        // separate ChatMessages — the first text (role:assistant)
+        // and a separate thinking entry (role:thinking) with a
+        // deterministic id derived from the source message id.
+        // The view renders each as its own bubble, preserving the
+        // pre-existing display logic (ThinkingCardView for
+        // role:"thinking").
+        let content: [OpenClawChatMessageContent] = [
+            OpenClawChatMessageContent(
+                type: "text", text: "Hello!", thinking: nil,
+                thinkingSignature: nil, mimeType: nil, fileName: nil, content: nil),
+            OpenClawChatMessageContent(
+                type: "thinking", text: nil, thinking: "reasoning",
+                thinkingSignature: nil, mimeType: nil, fileName: nil, content: nil),
+        ]
+        let msg = OpenClawChatMessage(
+            id: UUID(), role: "assistant", content: content,
+            timestamp: 0, toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        let chats = ChatMessageConverter.toChatMessage(from: msg)
+        XCTAssertEqual(chats.count, 2, "[text, thinking] bundle must emit both as separate ChatMessages")
+        XCTAssertEqual(chats[0].role, "assistant", "first entry is the text response")
+        XCTAssertEqual(chats[0].text, "Hello!")
+        XCTAssertEqual(chats[1].role, "thinking", "second entry is the thinking")
+        XCTAssertEqual(chats[1].text, "reasoning")
+    }
+
+    func testToChatMessage_thinkingThenText_emitThinkingFirst() {
+        // Companion to `testToChatMessage_textAndThinkingBundle_emitsBoth`:
+        // the server's `chat.history` also returns the
+        // mirror order [{type:"thinking", thinking:"..."},
+        // {type:"text", text:"..."}] when the model produced
+        // reasoning BEFORE its response in the same assistant
+        // turn (server preserves content order). The previous
+        // converter's "first text wins, then thinking" rule
+        // inverted this and rendered the response ABOVE its
+        // reasoning, so a user reading the bubble saw the
+        // answer first and only then the rationale — a
+        // long-standing "why did the model answer this?" mystery.
+        // The new rule detects `content[0]` is a thinking
+        // block and emits the thinking bubbles first.
+        let content: [OpenClawChatMessageContent] = [
+            OpenClawChatMessageContent(
+                type: "thinking", text: nil, thinking: "reasoning",
+                thinkingSignature: nil, mimeType: nil, fileName: nil, content: nil),
+            OpenClawChatMessageContent(
+                type: "text", text: "Hello!", thinking: nil,
+                thinkingSignature: nil, mimeType: nil, fileName: nil, content: nil),
+        ]
+        let msg = OpenClawChatMessage(
+            id: UUID(), role: "assistant", content: content,
+            timestamp: 0, toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        let chats = ChatMessageConverter.toChatMessage(from: msg)
+        XCTAssertEqual(chats.count, 2, "[thinking, text] bundle must emit both as separate ChatMessages")
+        XCTAssertEqual(chats[0].role, "thinking", "first entry is the reasoning (content[0])")
+        XCTAssertEqual(chats[0].text, "reasoning")
+        XCTAssertEqual(chats[1].role, "assistant", "second entry is the text response (content[1])")
+        XCTAssertEqual(chats[1].text, "Hello!")
     }
 
     func testToChatMessage_toolCallOnly_roleIsToolCall() {
@@ -54,9 +132,73 @@ final class ChatMessageConverterTests: XCTestCase {
             id: UUID(), role: "tool", content: content,
             timestamp: 0, toolCallId: "tc-1", toolName: "read_file",
             usage: nil, stopReason: nil, errorMessage: nil)
-        let chat = ChatMessageConverter.toChatMessage(from: msg)
-        XCTAssertEqual(chat?.role, "toolCall")
-        XCTAssertTrue(chat?.text.contains("read_file") ?? false)
+        let chats = ChatMessageConverter.toChatMessage(from: msg)
+        XCTAssertEqual(chats.count, 1)
+        XCTAssertEqual(chats[0].role, "toolCall")
+        XCTAssertTrue(chats[0].text.contains("read_file"))
+    }
+
+    func testToChatMessage_serverRoleVariants_normalizeToCanonical() {
+        // Regression for the user-reported "TOOLCALL not showing
+        // even with showToolCalls on" bug. The server's
+        // chat.history projection emits tool messages with
+        // lowercase / underscored role names ("tool",
+        // "function", "toolresult", "tool_result",
+        // "toolcall", "tool_call"). The client's view filter
+        // and bubble rendering branches both check for
+        // camelCase ("toolCall" / "toolResult"). Without
+        // normalization, server-returned tool messages pass the
+        // view filter (since "tool" ≠ "toolCall") but then
+        // render as plain text bubbles (the role-specific
+        // branches never fire) — the user sees the tool's
+        // content as a text bubble, not a labeled "ToolCall"
+        // bubble. The fix normalizes the role on read.
+        let variants: [(input: String, expected: String)] = [
+            ("tool", "toolCall"),
+            ("function", "toolCall"),
+            ("toolcall", "toolCall"),
+            ("tool_call", "toolCall"),
+            ("tooluse", "toolCall"),
+            ("tool_use", "toolCall"),
+            ("ToolCall", "toolCall"),
+            ("TOOLCALL", "toolCall"),
+            ("toolresult", "toolResult"),
+            ("tool_result", "toolResult"),
+            ("ToolResult", "toolResult"),
+            ("assistant", "assistant"),
+            ("user", "user"),
+        ]
+        for (input, expected) in variants {
+            let msg = OpenClawChatMessage(
+                id: UUID(), role: input,
+                content: [OpenClawChatMessageContent(
+                    type: "text", text: "x", thinking: nil,
+                    thinkingSignature: nil, mimeType: nil, fileName: nil,
+                    content: nil)],
+                timestamp: 0, toolCallId: nil, toolName: nil,
+                usage: nil, stopReason: nil, errorMessage: nil)
+            let chats = ChatMessageConverter.toChatMessage(from: msg)
+            XCTAssertEqual(chats.count, 1, "input role=\(input) should produce one chat message")
+            XCTAssertEqual(chats[0].role, expected, "input role=\(input) must normalize to \(expected)")
+        }
+    }
+
+    func testToOpenClawChatMessage_toolRoleInput_normalizesOnWrite() {
+        // The cache writer must also normalize, so the dedupKey
+        // (which keys on `message.role`) treats streaming
+        // toolCall messages and history toolCall messages as
+        // duplicates of each other. Without this, a server-
+        // returned toolCall with role "tool" lands in the
+        // cache alongside a streaming toolCall with role
+        // "toolCall" — two bubbles for the same logical call.
+        let chat = ChatMessage(
+            id: UUID().uuidString, text: "x",
+            timestamp: Date(timeIntervalSince1970: 0), role: "tool",
+            state: "final", runId: nil, seq: nil,
+            startedAt: nil, endedAt: nil, livenessState: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil, isFresh: true)
+        let msg = ChatMessageConverter.toOpenClawChatMessage(from: chat)
+        XCTAssertEqual(msg?.role, "toolCall", "writer normalizes lowercase 'tool' to camelCase 'toolCall'")
     }
 
     // MARK: - toOpenClawChatMessage
@@ -252,16 +394,15 @@ final class ChatMessageConverterTests: XCTestCase {
             timestamp: endedMs, toolCallId: nil, toolName: nil,
             usage: nil, stopReason: nil, errorMessage: nil,
             seq: 7, startedAt: startedMs, endedAt: endedMs)
-        let chat = ChatMessageConverter.toChatMessage(from: openclaw)
-        XCTAssertEqual(chat?.seq, 7)
+        let chats = ChatMessageConverter.toChatMessage(from: openclaw)
+        XCTAssertEqual(chats.count, 1)
+        XCTAssertEqual(chats[0].seq, 7)
         // Epoch ms → Date, matching how `timestamp` is unwrapped.
-        // `XCTUnwrap` is required because `chat` itself is optional
-        // and `startedAt` is optional — `?.timeIntervalSince1970`
-        // would still be `Double?` and XCTAssertEqual(accuracy:)
-        // needs a non-optional Double.
-        guard let chat,
-              let startedDate = chat.startedAt,
-              let endedDate = chat.endedAt else {
+        // `XCTUnwrap` is required because `startedAt` is optional —
+        // `?.timeIntervalSince1970` would still be `Double?` and
+        // XCTAssertEqual(accuracy:) needs a non-optional Double.
+        guard let startedDate = chats[0].startedAt,
+              let endedDate = chats[0].endedAt else {
             XCTFail("expected chat with non-nil startedAt/endedAt")
             return
         }
@@ -281,10 +422,11 @@ final class ChatMessageConverterTests: XCTestCase {
                 mimeType: nil, fileName: nil, content: nil)],
             timestamp: 1_700_000_000_000, toolCallId: nil, toolName: nil,
             usage: nil, stopReason: nil, errorMessage: nil)
-        let chat = ChatMessageConverter.toChatMessage(from: openclaw)
-        XCTAssertNil(chat?.seq)
-        XCTAssertNil(chat?.startedAt)
-        XCTAssertNil(chat?.endedAt)
+        let chats = ChatMessageConverter.toChatMessage(from: openclaw)
+        XCTAssertEqual(chats.count, 1)
+        XCTAssertNil(chats[0].seq)
+        XCTAssertNil(chats[0].startedAt)
+        XCTAssertNil(chats[0].endedAt)
     }
 
     func testToChatMessage_emptyTextStreaming_keepsPlaceholder() {
@@ -301,10 +443,10 @@ final class ChatMessageConverterTests: XCTestCase {
             timestamp: 1_700_000_000_000, toolCallId: nil, toolName: nil,
             usage: nil, stopReason: nil, errorMessage: nil,
             seq: nil, startedAt: nil, endedAt: nil, state: "streaming")
-        let chat = ChatMessageConverter.toChatMessage(from: openclaw)
-        XCTAssertNotNil(chat, "empty-text streaming placeholder must survive converter (it drives the typing indicator)")
-        XCTAssertEqual(chat?.text, "")
-        XCTAssertEqual(chat?.state, "streaming")
+        let chats = ChatMessageConverter.toChatMessage(from: openclaw)
+        XCTAssertEqual(chats.count, 1, "empty-text streaming placeholder must survive converter (it drives the typing indicator)")
+        XCTAssertEqual(chats[0].text, "")
+        XCTAssertEqual(chats[0].state, "streaming")
     }
 
     func testToChatMessage_emptyTextFinal_isDropped() {
@@ -319,7 +461,8 @@ final class ChatMessageConverterTests: XCTestCase {
             timestamp: 1_700_000_000_000, toolCallId: nil, toolName: nil,
             usage: nil, stopReason: nil, errorMessage: nil,
             seq: nil, startedAt: nil, endedAt: nil, state: "final")
-        XCTAssertNil(ChatMessageConverter.toChatMessage(from: openclaw))
+        let chats = ChatMessageConverter.toChatMessage(from: openclaw)
+        XCTAssertTrue(chats.isEmpty, "empty text + no thinking + state=final → empty array (caller skips)")
     }
 
     func testToOpenClawChatMessage_roundTripsState() {

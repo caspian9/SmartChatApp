@@ -4,33 +4,131 @@ import OpenClawProtocol
 import CryptoKit
 
 enum ChatMessageConverter {
-    /// OpenClawChatMessage → ChatMessage, applying the project's content
-    /// extraction rules (text → assistant, thinking → thinking, toolCall →
-    /// toolCall). Returns nil when the message has no displayable text.
-    /// Body mirrors the `compactMap { msg -> ChatMessage? in ... }` blocks
-    /// previously duplicated 3× in NativeChatViewModel.loadHistory.
-    static func toChatMessage(from msg: OpenClawChatMessage) -> ChatMessage? {
-        var text = ""
-        var role = msg.role
+    /// OpenClawChatMessage → [ChatMessage], applying the project's
+    /// content extraction rules. Returns one ChatMessage per
+    /// displayable bubble the view should render. The previous
+    /// version collapsed to a single ChatMessage with the
+    /// "first text wins" rule, which silently dropped any
+    /// `thinking` content when the same source message also had
+    /// `text` — the user reported "thinking not visible in
+    /// chat.history" for exactly this case. The new contract:
+    /// - `[text]` alone → 1 ChatMessage (role: assistant)
+    /// - `[thinking]` alone → 1 ChatMessage (role: thinking)
+    /// - `[text, thinking]` → 2 ChatMessages (assistant + thinking)
+    /// - `[text, toolCall]` → 1 ChatMessage (text with toolCall inline)
+    /// - `[thinking, toolCall]` → 1 ChatMessage (thinking with toolCall inline)
+    /// - `[text, thinking, toolCall]` → 2 ChatMessages (text+toolCall, then thinking)
+    /// - empty / placeholder-only content → [] (caller skips)
+    ///
+    /// Each emitted ChatMessage has a deterministic id derived
+    /// from `msg.id.uuidString`:
+    /// - The main entry (text or first thinking) → `msg.id.uuidString`
+    /// - Additional thinking entries → `"<msg.id.uuidString>:thinking:<i>"`
+    /// The id namespace is stable across re-fetches (same source →
+    /// same ChatMessage id) so `MessageCacheStorage.upsert` can
+    /// replace by id on a subsequent pull-up refresh, and the
+    /// view's `CollapseStateCache.expandedMessageIds` keyed on
+    /// these ids survives a `chat.history` round-trip.
+    ///
+    /// Returns empty array (not nil) when the source has no
+    /// displayable content of any kind.
+    /// Normalize a role string from the server's `chat.history`
+    /// projection to the client's display naming convention. The
+    /// server emits lowercase tool-related roles (`tool`,
+    /// `toolresult`, `tool_result`, `function`) per
+    /// `chat-display-projection.ts:286-294`, while the rest of the
+    /// client (view filter, bubble rendering, `MarkdownCache`,
+    /// `EventInterpreter` streaming writes) uses camelCase
+    /// `toolCall` / `toolResult`. Without normalization, a server-
+    /// returned toolCall sits in the cache with `role: "tool"`,
+    /// passes the view's `showToolCalls` filter (since "tool" ≠
+    /// "toolCall"), but then renders as a plain text bubble (the
+    /// bubble's `role == "toolCall"` branch never fires) — the
+    /// user sees a text bubble with the tool's args but no
+    /// "ToolCall" label. The fix maps every server-side variant
+    /// to the canonical client form so both paths render the
+    /// same.
+    static func normalizeRole(_ role: String) -> String {
+        switch role.lowercased() {
+        case "toolcall", "tool_call", "tooluse", "tool_use", "tool", "function":
+            return "toolCall"
+        case "toolresult", "tool_result":
+            return "toolResult"
+        default:
+            return role
+        }
+    }
+
+    static func toChatMessage(from msg: OpenClawChatMessage) -> [ChatMessage] {
+        // First non-empty text is the main text entry (assistant role by default)
+        var mainText: String? = nil
         for contentItem in msg.content {
             if let t = contentItem.text, !t.isEmpty {
-                text = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                mainText = t.trimmingCharacters(in: .whitespacesAndNewlines)
                 break
             }
         }
-        if text.isEmpty {
+        // If no text, the first non-empty thinking becomes the main entry (thinking role)
+        var mainIsThinking = false
+        if mainText == nil {
             for contentItem in msg.content {
                 if let thinking = contentItem.thinking, !thinking.isEmpty {
-                    text = thinking.trimmingCharacters(in: .whitespacesAndNewlines)
-                    role = "thinking"
+                    mainIsThinking = true
                     break
                 }
             }
         }
+        // Collect ALL thinking blocks (in server-content order).
+        // Each emitted thinking bubble has a deterministic id
+        // `msg.id.uuidString:thinking:<i>` so upsert-by-id on a
+        // refresh collapses the same source thinking into one
+        // bubble, and the view's `CollapseStateCache` survives
+        // the round-trip.
+        var allThinking: [String] = []
+        for contentItem in msg.content {
+            if let thinking = contentItem.thinking, !thinking.isEmpty {
+                allThinking.append(thinking.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        // First-block-is-thinking heuristic. The previous converter
+        // always emitted the main text first, then thinking — that
+        // collapsed a `[thinking, text]` content order (the model's
+        // actual reasoning-then-response flow) into `[text,
+        // thinking]`, showing the response above its reasoning.
+        // The user reported the order looks wrong for history
+        // messages whose `role == "assistant"` carries a thinking
+        // block first; they expect the reasoning to lead the
+        // response. The new rule: when the FIRST non-empty content
+        // block is a thinking block, emit the thinking bubbles
+        // first, then the main text. When the first block is a
+        // text block, keep the previous [text, then thinking]
+        // order (the existing `testToChatMessage_textAndThinkingBundle_emitsBoth`
+        // contract).
+        var firstBlockIsThinking = false
+        for contentItem in msg.content {
+            if let t = contentItem.text, !t.isEmpty { break }
+            if let th = contentItem.thinking, !th.isEmpty {
+                firstBlockIsThinking = true
+                break
+            }
+        }
+        let emitThinkingFirst = firstBlockIsThinking
+            && !mainIsThinking
+            && !allThinking.isEmpty
+        // ToolCall text (for inline merging with the main entry).
+        // toolCall never gets its own bubble — it's always inline
+        // with the text or the thinking, mirroring the previous
+        // display contract.
         var hasToolCall = false
         var toolCallText = ""
         for contentItem in msg.content {
-            if contentItem.type == "toolCall", let name = contentItem.name {
+            // Server uses lowercase content types too: `toolcall`,
+            // `tool_call`, `tooluse`, `tool_use`. Match any so
+            // server-returned messages with these types still
+            // produce the inline toolCall text below.
+            if let type = contentItem.type?.lowercased(),
+               ["toolcall", "tool_call", "tooluse", "tool_use"].contains(type),
+               let name = contentItem.name {
                 let callText = MessageFormatters.formatToolCallBubbleText(
                     name: name, arguments: contentItem.arguments)
                 guard !callText.isEmpty else { continue }
@@ -42,35 +140,21 @@ enum ChatMessageConverter {
                 }
             }
         }
-        if hasToolCall {
-            if text.isEmpty {
-                text = toolCallText
-                role = "toolCall"
-            } else {
-                text = text + "\n\n" + toolCallText
-            }
-        }
-        guard !text.isEmpty || msg.state == "streaming" else { return nil }
         let ts = msg.timestamp ?? 0
-        return ChatMessage(
-            id: msg.id.uuidString,
-            text: text,
-            timestamp: Date(timeIntervalSince1970: ts / 1000),
-            role: role,
-            // Server-persisted history messages leave `state` nil; default
-            // to "final" so the view doesn't try to render a typing
-            // indicator on a historical message. The streaming
-            // placeholder (lifecycle=start) keeps its `"streaming"`
-            // value so the view's `TypingIndicatorView` renders before
-            // the first delta arrives.
-            state: msg.state ?? "final",
-            runId: nil,
+        let dateTimestamp = Date(timeIntervalSince1970: ts / 1000)
+        // Server-persisted history messages leave `state` nil;
+        // default to "final" so the view doesn't try to render a
+        // typing indicator on a historical message. The streaming
+        // placeholder (lifecycle=start) keeps its `"streaming"`
+        // value so the view's `TypingIndicatorView` renders
+        // before the first delta arrives.
+        let baseState = msg.state ?? "final"
+        let sharedBase = ChatMessage.ChatMessageBaseFields(
+            timestamp: dateTimestamp,
             seq: msg.seq,
-            // Persisted startedAt/endedAt are epoch milliseconds
-            // (matching `timestamp`); ChatMessage wants Date.
             startedAt: msg.startedAt.map { Date(timeIntervalSince1970: $0 / 1000) },
             endedAt: msg.endedAt.map { Date(timeIntervalSince1970: $0 / 1000) },
-            livenessState: nil,
+            state: baseState,
             inputTokens: msg.usage?.input,
             outputTokens: msg.usage?.output,
             cacheRead: msg.usage?.cacheRead,
@@ -79,6 +163,122 @@ enum ChatMessageConverter {
             toolName: msg.toolName,
             stopReason: msg.stopReason
         )
+        let normalizedRole = ChatMessageConverter.normalizeRole(msg.role)
+        var result: [ChatMessage] = []
+        // 1. Thinking blocks (only when main is NOT the first
+        //    thinking). When `emitThinkingFirst` is true, the
+        //    server's content was `[thinking, text]` (or
+        //    `[thinking, thinking, text]`); render the reasoning
+        //    bubbles first so the response is preceded by its
+        //    rationale. When `emitThinkingFirst` is false, we
+        //    preserve the previous "main text first" order for
+        //    `[text, thinking]` content.
+        if emitThinkingFirst {
+            for (i, t) in allThinking.enumerated() {
+                result.append(ChatMessage(
+                    id: "\(msg.id.uuidString):thinking:\(i)",
+                    text: t,
+                    role: "thinking",
+                    base: sharedBase
+                ))
+            }
+        }
+        // 2. Main entry — text or first-thinking-as-main.
+        if let main = mainText {
+            var mainFinalText = main
+            if hasToolCall {
+                mainFinalText = mainFinalText + "\n\n" + toolCallText
+            }
+            // role: assistant for text (after normalize), thinking
+            // for the first-thinking-as-main case. toolCall never
+            // produces its own role here — it lives inline.
+            let mainRole: String = mainIsThinking ? "thinking" : normalizedRole
+            result.append(ChatMessage(
+                id: msg.id.uuidString,
+                text: mainFinalText,
+                role: mainRole,
+                base: sharedBase
+            ))
+        } else if mainIsThinking, let firstThinking = allThinking.first {
+            // No text block, but the first thinking block IS the
+            // main entry. allThinking hasn't been pre-trimmed
+            // (the previous "removeFirst" pass moved into the
+            // emit-thinking-first branch above for the
+            // `[thinking, text]` case). Emit the first thinking
+            // as the main thinking bubble; the remaining entries
+            // are emitted as separate thinking bubbles below.
+            var mainFinalText = firstThinking
+            if hasToolCall {
+                mainFinalText = mainFinalText + "\n\n" + toolCallText
+            }
+            result.append(ChatMessage(
+                id: msg.id.uuidString,
+                text: mainFinalText,
+                role: "thinking",
+                base: sharedBase
+            ))
+        }
+        // 3. Additional thinking entries (each as a separate
+        //    bubble). Emitted after the main entry when
+        //    `emitThinkingFirst` is false (i.e., main was text).
+        //    When `emitThinkingFirst` is true, the main text
+        //    comes AFTER the thinking blocks above and there's
+        //    no extras to add here.
+        //
+        //    When `mainIsThinking` is true, the first thinking
+        //    is the main entry and the rest are extras — we
+        //    skip the first with `dropFirst()` to avoid
+        //    emitting it twice. When `mainIsThinking` is
+        //    false, every thinking entry in `allThinking` is
+        //    an extra (the main was a text block, emitted
+        //    above) — iterate over the full list.
+        if !emitThinkingFirst {
+            let extras = mainIsThinking ? allThinking.dropFirst() : allThinking[...]
+            for (i, t) in extras.enumerated() {
+                result.append(ChatMessage(
+                    id: "\(msg.id.uuidString):thinking:\(i)",
+                    text: t,
+                    role: "thinking",
+                    base: sharedBase
+                ))
+            }
+        }
+        // 4. Fallback: only toolCall content (no text, no thinking)
+        if result.isEmpty && hasToolCall {
+            result.append(ChatMessage(
+                id: msg.id.uuidString,
+                text: toolCallText,
+                role: "toolCall",
+                base: sharedBase
+            ))
+        }
+        // 5. Streaming placeholder fallback: the `lifecycle=start`
+        //    event creates a `text=""` `state="streaming"` entry
+        //    that drives the view's TypingIndicatorView. Even if
+        //    the message has no displayable content, the
+        //    placeholder must reach the view — otherwise the user
+        //    sees a blank gap between sending and the first delta.
+        if result.isEmpty && baseState == "streaming" {
+            result.append(ChatMessage(
+                id: msg.id.uuidString,
+                text: "",
+                role: normalizedRole,
+                base: sharedBase
+            ))
+        }
+        return result
+    }
+
+    /// Shared construction fields for the multiple ChatMessages a
+    /// single `OpenClawChatMessage` may emit. Lets the converter
+    /// loop build each entry without repeating the same
+    /// `Date(timeIntervalSince1970:)` / `usage` / `stopReason`
+    /// boilerplate four times.
+    private struct ChatMessageBaseFieldsUnusedStub {
+        // Removed in favor of the canonical `ChatMessage.ChatMessageBaseFields`
+        // defined in `MessageBubbleView.swift` (where the ChatMessage
+        // type lives). Kept as a comment-only marker so the diff
+        // history is clear about what moved.
     }
 
     /// ChatMessage → OpenClawChatMessage (cache writer).
@@ -127,7 +327,18 @@ enum ChatMessageConverter {
         }
         return OpenClawChatMessage(
             id: uuid,
-            role: chatMessage.role,
+            // Normalize the role on the way in so the cache
+            // (and the dedupKey, which keys on `message.role`)
+            // always carries the canonical client form. A
+            // server-returned message that went through the
+            // reader's `normalizeRole` lands here with the
+            // already-normalized value; a streaming message
+            // already uses camelCase; either way, the cache
+            // ends up with a consistent `toolCall` / `toolResult`
+            // so streaming and history dedup against each other
+            // and the view's role branches all see the same
+            // strings.
+            role: ChatMessageConverter.normalizeRole(chatMessage.role),
             content: [OpenClawChatMessageContent(
                 type: "text", text: chatMessage.text, thinking: nil,
                 thinkingSignature: nil, mimeType: nil, fileName: nil,

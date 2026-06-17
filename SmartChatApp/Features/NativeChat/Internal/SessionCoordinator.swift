@@ -259,6 +259,14 @@ final class SessionCoordinator {
             // `store[B]` is populated, so the view never reads
             // an empty `store[B]` while we're transitioning.
             if let oldKey = previousKey {
+                // Clear the VM's in-memory derived state
+                // (pendingBySession + chatMessagesBySession
+                // conversion cache) before clearing the store.
+                // Otherwise, during the switch window,
+                // `vm.chatMessages(oldKey)` may still return
+                // pending data — the view briefly sees a stale
+                // previous session.
+                viewModel?.clearMemory(for: oldKey)
                 MessageCacheStore.shared.clearMemory(for: oldKey)
             }
         }

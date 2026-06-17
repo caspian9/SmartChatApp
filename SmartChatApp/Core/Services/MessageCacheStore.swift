@@ -168,22 +168,6 @@ public final class MessageCacheStore {
     /// weak-network rationale. Returning early here too means the
     /// `@Observable` setter never fires on an empty update, so the
     /// view doesn't churn on a no-op.
-    public func replaceForSession(_ messages: [OpenClawChatMessage], for sessionKey: String) async {
-        guard !messages.isEmpty else {
-            AppLogger.log(
-                "[MessageCacheStore replaceForSession] sessionKey=\(String(sessionKey.prefix(8))) SKIPPED: empty payload, keeping in-memory \(self.messagesBySession[sessionKey]?.count ?? -1) entries",
-                category: .cache, level: .warning)
-            return
-        }
-        let updated = await storage.replaceForSession(messages, for: sessionKey)
-        setMessages(updated, for: sessionKey)
-        if let newMax = updated.compactMap(\.timestamp).max() {
-            lastSeenTimestampBySession[sessionKey] = newMax
-        } else {
-            lastSeenTimestampBySession[sessionKey] = nil
-        }
-        hydratedSessions.insert(sessionKey)
-    }
     public func clear(for sessionKey: String) async {
         await storage.clear(for: sessionKey)
         setMessages([], for: sessionKey)

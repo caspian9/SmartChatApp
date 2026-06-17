@@ -5,11 +5,8 @@ import os
 
 final class FakeMessageCacheStorage: MessageCacheStorageProtocol, @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock<[String: [OpenClawChatMessage]]>(initialState: [:])
-    private let maxLocalMessages: Int
 
-    init(maxLocalMessages: Int = 200) {
-        self.maxLocalMessages = maxLocalMessages
-    }
+    init() {}
 
     func loadSync(for sessionKey: String) -> [OpenClawChatMessage] {
         lock.withLock { $0[sessionKey] ?? [] }
@@ -23,13 +20,12 @@ final class FakeMessageCacheStorage: MessageCacheStorageProtocol, @unchecked Sen
         let result: [OpenClawChatMessage] = lock.withLock { state in
             var all = state[sessionKey] ?? []
             for msg in messages {
-                // Simplified: fake doesn't dedup, just appends.
                 all.append(msg)
             }
             all.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
-            if all.count > maxLocalMessages {
-                all = Array(all.suffix(maxLocalMessages))
-            }
+            // No cap — the persistent cache dropped the 200-entry
+            // cap so user-managed sessions can grow without silent
+            // oldest-entry eviction.
             state[sessionKey] = all
             return all
         }
@@ -47,30 +43,25 @@ final class FakeMessageCacheStorage: MessageCacheStorageProtocol, @unchecked Sen
                 }
             }
             all.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
-            if all.count > maxLocalMessages {
-                all = Array(all.suffix(maxLocalMessages))
-            }
+            // No cap — mirrors `append` above.
             state[sessionKey] = all
             return all
         }
         return result
     }
 
-    func replaceForSession(_ messages: [OpenClawChatMessage], for sessionKey: String) async -> [OpenClawChatMessage] {
-        let result: [OpenClawChatMessage] = lock.withLock { state in
-            var sorted = messages
-            sorted.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
-            if sorted.count > maxLocalMessages {
-                sorted = Array(sorted.suffix(maxLocalMessages))
-            }
-            state[sessionKey] = sorted
-            return sorted
-        }
-        return result
-    }
-
     func clear(for sessionKey: String) async {
         lock.withLock { $0[sessionKey] = [] }
+    }
+
+    /// Legacy authoritative-replace method. The persistence plan
+    /// removes this from the protocol once the
+    /// `MessageCacheStore` migration lands; for now this stub
+    /// preserves protocol conformance for the test mock by
+    /// delegating to `append`. The dedup behavior is equivalent
+    /// for the test cases that exercise this path.
+    func replaceForSession(_ messages: [OpenClawChatMessage], for sessionKey: String) async -> [OpenClawChatMessage] {
+        return await append(messages, for: sessionKey)
     }
 
     func clearAll() async {

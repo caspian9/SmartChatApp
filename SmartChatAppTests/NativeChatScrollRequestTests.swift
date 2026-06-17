@@ -35,10 +35,10 @@ final class NativeChatScrollRequestTests: XCTestCase {
     /// calls per history load, which is what caused the visible
     /// up-down jitter. The post-refactor receiver writes to the store
     /// and fires a single `.newMessage` scroll request.
-    func testReceiveMessage_freshInsert_incrementsTokenOnce() {
+    func testReceiveMessage_freshInsert_incrementsTokenOnce() async {
         let initialToken = sut.scrollRequest.token
         let msg = makeMessage(id: "m1", text: "hi", role: "assistant", state: "final")
-        sut.messageReceiver.receiveMessage(msg)
+        await sut.messageReceiver.receiveMessage(msg)
         XCTAssertEqual(sut.scrollRequest.token, initialToken &+ 1)
         XCTAssertEqual(sut.scrollRequest.kind, .newMessage)
     }
@@ -48,13 +48,13 @@ final class NativeChatScrollRequestTests: XCTestCase {
     /// this case should not cause visible viewport jumps — but each
     /// receive still fires a single token bump (the store handles
     /// the id-match dedup).
-    func testReceiveMessage_idMatch_stillIncrementsTokenOnce() {
+    func testReceiveMessage_idMatch_stillIncrementsTokenOnce() async {
         let initialToken = sut.scrollRequest.token
         let first = makeMessage(id: "run-1", text: "", role: "assistant", state: "streaming")
-        sut.messageReceiver.receiveMessage(first)
+        await sut.messageReceiver.receiveMessage(first)
         let tokenAfterFirst = sut.scrollRequest.token
         let delta = makeMessage(id: "run-1", text: "Hello world", role: "assistant", state: "streaming")
-        sut.messageReceiver.receiveMessage(delta)
+        await sut.messageReceiver.receiveMessage(delta)
         XCTAssertEqual(sut.scrollRequest.token, tokenAfterFirst &+ 1)
         XCTAssertEqual(sut.scrollRequest.token, initialToken &+ 2)
         XCTAssertEqual(sut.scrollRequest.kind, .newMessage)
@@ -63,11 +63,11 @@ final class NativeChatScrollRequestTests: XCTestCase {
     /// Multiple back-to-back receives must produce a monotonically
     /// increasing token. The wrapping `&+` operator is used so the test
     /// stays valid even if the token were ever to overflow Int.max.
-    func testReceiveMessage_multipleReceives_tokenMonotonic() {
+    func testReceiveMessage_multipleReceives_tokenMonotonic() async {
         var lastToken = sut.scrollRequest.token
         for i in 0..<5 {
             let msg = makeMessage(id: "m\(i)", text: "msg \(i)", role: "user", state: "final")
-            sut.messageReceiver.receiveMessage(msg)
+            await sut.messageReceiver.receiveMessage(msg)
             XCTAssertGreaterThan(sut.scrollRequest.token, lastToken, "token must increase after receive #\(i)")
             XCTAssertEqual(sut.scrollRequest.kind, .newMessage)
             lastToken = sut.scrollRequest.token
