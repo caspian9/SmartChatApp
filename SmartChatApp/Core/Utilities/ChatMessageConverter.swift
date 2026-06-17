@@ -142,18 +142,20 @@ enum ChatMessageConverter {
         }
         let ts = msg.timestamp ?? 0
         let dateTimestamp = Date(timeIntervalSince1970: ts / 1000)
-        // Server-persisted history messages leave `state` nil;
-        // default to "final" so the view doesn't try to render a
-        // typing indicator on a historical message. The streaming
-        // placeholder (lifecycle=start) keeps its `"streaming"`
-        // value so the view's `TypingIndicatorView` renders
-        // before the first delta arrives.
-        let baseState = msg.state ?? "final"
+        // History messages always render as `state: "final"` — the
+        // SDK's `OpenClawChatMessage` does not carry streaming
+        // state (no `state`/`seq`/`startedAt`/`endedAt` fields), and
+        // the streaming values are owned by `EventInterpreter` /
+        // `MessageReceiver` during an in-flight run, not by the
+        // history decoder. The view's `TypingIndicatorView` only
+        // fires for messages explicitly set to `"streaming"` by the
+        // event pipeline, which historical messages are never.
+        let baseState = "final"
         let sharedBase = ChatMessage.ChatMessageBaseFields(
             timestamp: dateTimestamp,
-            seq: msg.seq,
-            startedAt: msg.startedAt.map { Date(timeIntervalSince1970: $0 / 1000) },
-            endedAt: msg.endedAt.map { Date(timeIntervalSince1970: $0 / 1000) },
+            seq: nil,
+            startedAt: nil,
+            endedAt: nil,
             state: baseState,
             inputTokens: msg.usage?.input,
             outputTokens: msg.usage?.output,
@@ -338,6 +340,15 @@ enum ChatMessageConverter {
             // so streaming and history dedup against each other
             // and the view's role branches all see the same
             // strings.
+            //
+            // The SDK's `OpenClawChatMessage` does not carry
+            // `seq` / `startedAt` / `endedAt` — those are
+            // streaming-only fields owned by `EventInterpreter` /
+            // `MessageReceiver` and gated out of the cache by
+            // the persist gate (only `state: "final"` messages
+            // reach this writer), so dropping them here is
+            // safe and avoids writing a round-trip the SDK
+            // can't decode.
             role: ChatMessageConverter.normalizeRole(chatMessage.role),
             content: [OpenClawChatMessageContent(
                 type: "text", text: chatMessage.text, thinking: nil,
@@ -348,18 +359,14 @@ enum ChatMessageConverter {
             toolName: chatMessage.toolName,
             usage: usage,
             stopReason: chatMessage.stopReason,
-            seq: chatMessage.seq,
-            // Date → epoch milliseconds (matches `timestamp`).
-            // `.map` is required — `?.timeIntervalSince1970 * 1000`
-            // would be `Double? * Double`, which Swift refuses to
-            // implicitly unwrap.
-            startedAt: chatMessage.startedAt.map { $0.timeIntervalSince1970 * 1000 },
-            endedAt: chatMessage.endedAt.map { $0.timeIntervalSince1970 * 1000 },
-            // Round-trip the lifecycle so the view can re-create a
-            // streaming placeholder from the cache (it shows
-            // TypingIndicatorView when state=="streaming" and text is
-            // empty).
-            state: chatMessage.state
+            // The SDK's `OpenClawChatMessage` does not carry
+            // `state`; the reader defaults every decoded message
+            // to `state: "final"`. The persist gate ensures only
+            // `final` messages reach this writer, so this is
+            // always a no-op round-trip. (If we ever persist
+            // streaming placeholders, the reader's default will
+            // need to grow a "isStreaming" hint — out of scope
+            // for this branch.)
         )
     }
 

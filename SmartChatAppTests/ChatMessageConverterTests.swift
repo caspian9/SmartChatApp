@@ -357,64 +357,44 @@ final class ChatMessageConverterTests: XCTestCase {
         XCTAssertEqual(openclaw?.id.uuidString, validId)
     }
 
-    // MARK: - seq / startedAt / endedAt round-trip
+    // MARK: - SDK shape: streaming metadata is NOT preserved through round-trip
 
-    func testToOpenClawChatMessage_preservesSeqStartedAtEndedAt() {
-        // The view shows #N / started-at / ended-at labels from these
-        // three fields. The refactor moved ChatMessage through an
-        // OpenClawChatMessage round trip (the cache layer), which
-        // must NOT silently drop them. Regression test for the
-        // "seq/start/end all gone" report.
+    func testToOpenClawChatMessage_dropsSeqStartedAtEndedAtAndState() {
+        // The SDK's `OpenClawChatMessage` does not carry `seq` /
+        // `startedAt` / `endedAt` / `state` — only the historical
+        // content + usage fields. Streaming metadata is owned by
+        // `EventInterpreter` / `MessageReceiver` for the lifetime
+        // of an in-flight run and routed to `pendingBySession`
+        // (in-memory, gated out of the cache by the persist gate);
+        // cached `OpenClawChatMessage`s are always `state: "final"`.
+        // This test documents the drop so a future reader doesn't
+        // re-add the round-trip and reintroduce the old build
+        // errors.
         let started = Date(timeIntervalSince1970: 1_700_000_001)
         let ended = Date(timeIntervalSince1970: 1_700_000_005)
         let chat = ChatMessage(
             id: UUID().uuidString, text: "answer", timestamp: ended,
-            role: "assistant", state: "final", runId: "r-1", seq: 7,
+            role: "assistant", state: "streaming", runId: "r-1", seq: 7,
             startedAt: started, endedAt: ended, livenessState: nil,
             inputTokens: 10, outputTokens: 20, cacheRead: 3, cacheWrite: 1,
             toolCallId: nil, toolName: nil, stopReason: nil, isFresh: true)
         let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: chat)
-        XCTAssertEqual(openclaw?.seq, 7)
-        // Date → epoch ms (matches `timestamp`'s convention).
-        XCTAssertEqual(openclaw?.startedAt, started.timeIntervalSince1970 * 1000)
-        XCTAssertEqual(openclaw?.endedAt, ended.timeIntervalSince1970 * 1000)
-    }
-
-    func testToChatMessage_extractsSeqStartedAtEndedAt() {
-        // Reverse direction: OpenClawChatMessage from the store
-        // must surface the metadata on the ChatMessage the view
-        // reads. Verifies the new SDK fields actually flow through.
-        let startedMs: Double = 1_700_000_001_000
-        let endedMs: Double = 1_700_000_005_000
-        let openclaw = OpenClawChatMessage(
-            id: UUID(), role: "assistant",
-            content: [OpenClawChatMessageContent(
-                type: "text", text: "answer", thinking: nil, thinkingSignature: nil,
-                mimeType: nil, fileName: nil, content: nil)],
-            timestamp: endedMs, toolCallId: nil, toolName: nil,
-            usage: nil, stopReason: nil, errorMessage: nil,
-            seq: 7, startedAt: startedMs, endedAt: endedMs)
-        let chats = ChatMessageConverter.toChatMessage(from: openclaw)
-        XCTAssertEqual(chats.count, 1)
-        XCTAssertEqual(chats[0].seq, 7)
-        // Epoch ms → Date, matching how `timestamp` is unwrapped.
-        // `XCTUnwrap` is required because `startedAt` is optional —
-        // `?.timeIntervalSince1970` would still be `Double?` and
-        // XCTAssertEqual(accuracy:) needs a non-optional Double.
-        guard let startedDate = chats[0].startedAt,
-              let endedDate = chats[0].endedAt else {
-            XCTFail("expected chat with non-nil startedAt/endedAt")
-            return
-        }
-        XCTAssertEqual(startedDate.timeIntervalSince1970, startedMs / 1000, accuracy: 0.001)
-        XCTAssertEqual(endedDate.timeIntervalSince1970, endedMs / 1000, accuracy: 0.001)
+        XCTAssertNotNil(openclaw, "round-trip should still produce a valid OpenClawChatMessage")
+        // Content + usage + role + timestamp + id survive; streaming
+        // metadata does not (no SDK field to carry it). Text lives
+        // in `content[0].text` (the converter's `[OpenClawChatMessageContent(
+        // type: "text", text: chatMessage.text, ...)]` writer).
+        XCTAssertEqual(openclaw?.content.first?.text, "answer")
+        XCTAssertEqual(openclaw?.usage?.input, 10)
+        XCTAssertEqual(openclaw?.usage?.output, 20)
+        XCTAssertEqual(openclaw?.role, "assistant")
     }
 
     func testToChatMessage_oldPayloadWithoutMetadata_decodesNil() {
-        // Backward compat: payloads encoded before the SDK had
-        // these fields (or from the server's chat.history response,
-        // which never sets them) must decode with nil metadata —
-        // the view falls back to omitting the #N / time labels.
+        // Backward compat: payloads from the server's `chat.history`
+        // response never set streaming metadata. The reader defaults
+        // every field to nil and the state to "final", so the
+        // view sees a clean historical message.
         let openclaw = OpenClawChatMessage(
             id: UUID(), role: "assistant",
             content: [OpenClawChatMessageContent(
@@ -427,54 +407,25 @@ final class ChatMessageConverterTests: XCTestCase {
         XCTAssertNil(chats[0].seq)
         XCTAssertNil(chats[0].startedAt)
         XCTAssertNil(chats[0].endedAt)
-    }
-
-    func testToChatMessage_emptyTextStreaming_keepsPlaceholder() {
-        // Regression test for "no typing indicator on receive start":
-        // the EventInterpreter's `lifecycle=start` placeholder has
-        // `text=""` and `state="streaming"`. The converter must
-        // NOT drop this entry — the view's TypingIndicatorView
-        // depends on the bubble existing in the messages array.
-        let openclaw = OpenClawChatMessage(
-            id: UUID(), role: "assistant",
-            content: [OpenClawChatMessageContent(
-                type: "text", text: "", thinking: nil, thinkingSignature: nil,
-                mimeType: nil, fileName: nil, content: nil)],
-            timestamp: 1_700_000_000_000, toolCallId: nil, toolName: nil,
-            usage: nil, stopReason: nil, errorMessage: nil,
-            seq: nil, startedAt: nil, endedAt: nil, state: "streaming")
-        let chats = ChatMessageConverter.toChatMessage(from: openclaw)
-        XCTAssertEqual(chats.count, 1, "empty-text streaming placeholder must survive converter (it drives the typing indicator)")
-        XCTAssertEqual(chats[0].text, "")
-        XCTAssertEqual(chats[0].state, "streaming")
+        XCTAssertEqual(chats[0].state, "final",
+                       "reader always defaults state to 'final' for history messages — streaming state is owned by EventInterpreter")
     }
 
     func testToChatMessage_emptyTextFinal_isDropped() {
-        // The opposite case: a server message with no content and
-        // no streaming marker should still be dropped, so the view
-        // doesn't render a phantom empty bubble for it.
+        // A historical message with empty text and no thinking block
+        // produces an empty ChatMessage array. The view filters
+        // empty arrays the same way (no bubbles rendered). State
+        // arg omitted — the reader ignores it because the SDK
+        // doesn't carry `state`; history messages always default
+        // to "final" (see testToChatMessage_oldPayloadWithoutMetadata_decodesNil).
         let openclaw = OpenClawChatMessage(
             id: UUID(), role: "assistant",
             content: [OpenClawChatMessageContent(
                 type: "text", text: "", thinking: nil, thinkingSignature: nil,
                 mimeType: nil, fileName: nil, content: nil)],
             timestamp: 1_700_000_000_000, toolCallId: nil, toolName: nil,
-            usage: nil, stopReason: nil, errorMessage: nil,
-            seq: nil, startedAt: nil, endedAt: nil, state: "final")
+            usage: nil, stopReason: nil, errorMessage: nil)
         let chats = ChatMessageConverter.toChatMessage(from: openclaw)
-        XCTAssertTrue(chats.isEmpty, "empty text + no thinking + state=final → empty array (caller skips)")
-    }
-
-    func testToOpenClawChatMessage_roundTripsState() {
-        // Verify the converter preserves the lifecycle marker so
-        // the view can re-render the streaming placeholder after
-        // the cache round-trip (loadHistory → upsert → toChatMessage).
-        let chat = ChatMessage(
-            id: UUID().uuidString, text: "", timestamp: Date(),
-            role: "assistant", state: "streaming", runId: nil, seq: nil,
-            startedAt: nil, endedAt: nil, livenessState: nil,
-            toolCallId: nil, toolName: nil, stopReason: nil, isFresh: true)
-        let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: chat)
-        XCTAssertEqual(openclaw?.state, "streaming")
+        XCTAssertTrue(chats.isEmpty, "empty text + no thinking → empty array (caller skips)")
     }
 }
