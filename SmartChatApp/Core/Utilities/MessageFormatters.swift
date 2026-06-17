@@ -2,6 +2,38 @@ import Foundation
 import OpenClawKit
 
 enum MessageFormatters {
+    /// Builds a short human-readable label for a tool call: "name: args".
+    /// Falls back to a one-line JSON dump of args so the bubble has something
+    /// to show even when no friendly field is present.
+    ///
+    /// Distinct from `formatToolCallBubbleText(name:arguments:meta:)`
+    /// which produces a richer multi-line render with metadata. This
+    /// one is the "name only" fallback used by the tool-call bubble
+    /// when args is nil/empty, and is also exercised by
+    /// `NativeChatViewModelFormatterTests` (5 tests). Keep this
+    /// around even though the "rich" path has more callers — the
+    /// tests pin down this fallback's contract.
+    static func formatToolCallText(name: String, args: Any?) -> String {
+        if name.isEmpty { return "" }
+        guard let args else { return name }
+        if let str = args as? String, !str.isEmpty {
+            return "\(name): \(str)"
+        }
+        if let dict = args as? [String: Any] {
+            if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.fragmentsAllowed, .sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                return "\(name): \(json)"
+            }
+        }
+        if let arr = args as? [Any] {
+            if let data = try? JSONSerialization.data(withJSONObject: arr, options: [.fragmentsAllowed, .sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                return "\(name): \(json)"
+            }
+        }
+        return name
+    }
+
     /// Pretty-prints a tool result payload. JSON values get indented; raw
     /// strings pass through. The MessageBubbleView will further pretty-print
     /// anything it sees for `role == "toolResult"`, so this stays minimal.
