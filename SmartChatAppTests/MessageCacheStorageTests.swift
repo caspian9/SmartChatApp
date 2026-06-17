@@ -590,4 +590,97 @@ final class MessageCacheStorageTests: XCTestCase {
         let loaded = await storage.load(for: key)
         XCTAssertEqual(loaded.count, 2, "different text must not dedup even with different usage")
     }
+
+    // MARK: - id stability across process restart
+
+    func test_idStability_survivesStorageReinit() async throws {
+        // Regression test for the "id regenerates on every load"
+        // bug. The SDK's `OpenClawChatMessage.CodingKeys` omits
+        // `id`; without the `PersistedMessageEnvelope` wrapper the
+        // decoder falls back to `var id: UUID = .init()` and the
+        // loaded message gets a fresh UUID every time the app
+        // restarts — breaking dedup-by-id in `upsert` and
+        // invalidating `CollapseStateCache.expandedMessageIds`.
+        //
+        // Simulates a process restart by creating two storage
+        // instances against the same UserDefaults suite. The
+        // in-memory `cache` is empty in the second instance, so
+        // the only way the loaded id can match the saved id is
+        // through the on-disk envelope.
+        let key = "session-restart"
+        let suite = "test-id-stability-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)
+        XCTAssertNotNil(defaults, "test UserDefaults suite must be writable")
+        defer { defaults?.removePersistentDomain(forName: suite) }
+
+        let originalId = UUID()
+        let original = OpenClawChatMessage(
+            id: originalId, role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: "stable id please",
+                thinking: nil, thinkingSignature: nil,
+                mimeType: nil, fileName: nil, content: nil,
+                id: nil, name: nil, arguments: nil)],
+            timestamp: 1_700_000_000_000, toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+
+        // First storage writes the message. `load()` here
+        // round-trips through the disk (cache is empty pre-append),
+        // exercising the envelope encode/decode path.
+        let storage1 = MessageCacheStorage(defaults: defaults!)
+        _ = await storage1.append([original], for: key)
+        let reloadedBySameInstance = await storage1.load(for: key)
+        XCTAssertEqual(reloadedBySameInstance.count, 1)
+        XCTAssertEqual(reloadedBySameInstance.first?.id, originalId,
+                       "id must survive a load that round-trips through disk")
+
+        // Second storage simulates process restart — fresh
+        // in-memory cache, same UserDefaults. The only way the
+        // loaded id matches is via the envelope.
+        let storage2 = MessageCacheStorage(defaults: defaults!)
+        let reloadedByFreshInstance = await storage2.load(for: key)
+        XCTAssertEqual(reloadedByFreshInstance.count, 1,
+                       "fresh storage instance must read the same on-disk data")
+        XCTAssertEqual(reloadedByFreshInstance.first?.id, originalId,
+                       "id must survive across storage-instance boundaries (= process restart)")
+        XCTAssertEqual(reloadedByFreshInstance.first?.content.first?.text,
+                       "stable id please",
+                       "content must also survive intact")
+    }
+
+    func test_idStability_multipleMessages_allPreserved() async throws {
+        // A second id-stability test covering the multi-message
+        // case: every id in the saved array must come back as
+        // the same UUID, not as 4 fresh ones. Catches a regression
+        // where the envelope wrapper handles 1 message correctly
+        // but drops ids for N>1.
+        let key = "session-multi"
+        let suite = "test-id-stability-multi-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)
+        XCTAssertNotNil(defaults)
+        defer { defaults?.removePersistentDomain(forName: suite) }
+
+        let originalIds = (0..<4).map { _ in UUID() }
+        let messages = originalIds.enumerated().map { i, id in
+            OpenClawChatMessage(
+                id: id, role: "user",
+                content: [OpenClawChatMessageContent(
+                    type: "text", text: "msg \(i)",
+                    thinking: nil, thinkingSignature: nil,
+                    mimeType: nil, fileName: nil, content: nil,
+                    id: nil, name: nil, arguments: nil)],
+                timestamp: Double(1_700_000_000_000 + i * 1000),
+                toolCallId: nil, toolName: nil, usage: nil,
+                stopReason: nil, errorMessage: nil)
+        }
+        let storage1 = MessageCacheStorage(defaults: defaults!)
+        _ = await storage1.append(messages, for: key)
+        let storage2 = MessageCacheStorage(defaults: defaults!)
+        let loaded = await storage2.load(for: key)
+        XCTAssertEqual(loaded.count, 4)
+        let loadedIds = Set(loaded.map { $0.id })
+        let originalIdsSet = Set(originalIds)
+        XCTAssertEqual(loadedIds, originalIdsSet,
+                       "all 4 ids must match originals after restart")
+    }
 }
