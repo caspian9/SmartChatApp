@@ -407,7 +407,7 @@ final class NativeChatViewModel {
         let text = inputText
         let sessionKey = session.key
         let textPreview = String(text.prefix(100))
-        print("SMAlog: sendMessage role=user text_len=\(text.count) text_preview=\(textPreview)")
+        AppLogger.log("sendMessage role=user text_len=\(text.count) text_preview=\(textPreview)", category: .nativeChat)
         let message = ChatMessage(
             id: UUID().uuidString,
             text: text,
@@ -441,7 +441,7 @@ final class NativeChatViewModel {
         // truth for the view's message list). The view reads from
         // `viewModel.store.messagesBySession` via the new computed
         // property in `NativeChatView`, so the bubble appears without
-        // needing an in-memory `vm.messages` mirror.
+        // needing a per-VM message array mirror.
         if let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: message) {
             Task { @MainActor in
                 await store.append([openclaw], for: sessionKey)

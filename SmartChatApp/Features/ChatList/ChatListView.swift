@@ -121,7 +121,7 @@ struct ChatListView: View {
                     }
                 }
             } catch {
-                print("Failed to create session: \(error)")
+                AppLogger.log("Failed to create session: \(error)", category: .network, level: .error)
             }
         }
     }
