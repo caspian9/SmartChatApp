@@ -2,6 +2,57 @@ import Foundation
 import OpenClawChatUI
 import CryptoKit
 
+/// JSON-serializable wrapper around `OpenClawChatMessage` that
+/// preserves the message's `id` across the on-disk round-trip.
+///
+/// The SDK's `OpenClawChatMessage.CodingKeys` (ChatModels.swift)
+/// OMITS `id` — only `role`, `content`, `timestamp`, `toolCallId`,
+/// `toolName`, `usage`, `stopReason`, `errorMessage` are
+/// persisted. The default `var id: UUID = .init()` regenerates
+/// a fresh UUID on every decode, so without this wrapper:
+///
+///   1. App saves a message with `id = A`.
+///   2. App restarts. Storage reads the JSON, decoder sees no
+///      `id` key, falls back to `UUID()` → fresh `id = B`.
+///   3. The view's `ForEach(messages, id: \.id)` re-creates the
+///      bubble with a new identity, breaking the dedup contract
+///      (KEEP-on-id in `MessageCacheStorage.upsert` /
+///      `MessageReceiver.receiveMessage`) and invalidating
+///      `CollapseStateCache.expandedMessageIds` (keyed on the
+///      streaming-time synthesized UUID).
+///
+/// The fix is a 1-field envelope at the disk boundary. The
+/// in-memory `cache` is still `[OpenClawChatMessage]` — the
+/// envelope only appears in `loadFromDisk` / `saveToDisk` /
+/// `stats`, which is the only place the SDK's broken encoding
+/// bites us. Public API (protocol methods) still take and return
+/// `[OpenClawChatMessage]`; the conversion is internal to the
+/// actor.
+struct PersistedMessageEnvelope: Codable, Sendable {
+    /// The stable message id. Taken from `OpenClawChatMessage.id`
+    /// at wrap time, restored to the same field at unwrap time.
+    let id: UUID
+    /// The SDK message itself. On disk this loses its `id`
+    /// (SDK's CodingKeys omit it); on unwrap we restore `id`
+    /// from the envelope above so the in-memory value matches
+    /// what was written.
+    let message: OpenClawChatMessage
+
+    init(wrapping message: OpenClawChatMessage) {
+        self.id = message.id
+        self.message = message
+    }
+
+    /// Returns the SDK message with `id` restored from the
+    /// envelope. The SDK's `id` is a `var` (declared with
+    /// `= .init()` default), so we can mutate it post-decode.
+    func unwrapped() -> OpenClawChatMessage {
+        var msg = self.message
+        msg.id = self.id
+        return msg
+    }
+}
+
 public protocol MessageCacheStorageProtocol: Sendable {
     /// Synchronous load. Reads UserDefaults directly. Use this from
     /// the @MainActor store for the *initial* hydrate on session
@@ -176,13 +227,20 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(keyPrefix) {
             sessionCount += 1
             if let data = defaults.data(forKey: key),
-               let messages = try? JSONDecoder().decode([OpenClawChatMessage].self, from: data) {
-                messageCount += messages.count
+               let envelopes = try? JSONDecoder().decode([PersistedMessageEnvelope].self, from: data) {
+                messageCount += envelopes.count
             }
             // A session whose entry can't decode still counts as a
             // session — the user can see it (and Clear All will
             // remove it). Reporting (0, 0) for an undecodable
-            // session would understate the cache size.
+            // session would understate the cache size. The decode
+            // failure here is a clean break with the pre-envelope
+            // format (older payloads were `[OpenClawChatMessage]`
+            // without the `id` wrapper); those sessions silently
+            // report as 0 messages but the count is still +1 for
+            // the session itself. A future maintenance pass can
+            // add a one-shot migration if the in-the-wild install
+            // base has pre-envelope data to recover.
         }
         return (sessionCount: sessionCount, messageCount: messageCount)
     }
@@ -255,11 +313,7 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
                         toolName: incoming.toolName,
                         usage: oldUsage,
                         stopReason: incoming.stopReason,
-                        errorMessage: incoming.errorMessage,
-                        seq: incoming.seq,
-                        startedAt: incoming.startedAt,
-                        endedAt: incoming.endedAt,
-                        state: incoming.state
+                        errorMessage: incoming.errorMessage
                     )
                 }
                 return incoming
@@ -344,15 +398,26 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         // thread-safe) and `storageKey` (pure function), so there's
         // no actor-isolation requirement. The async `load(for:)`
         // continues to use this same method.
+        //
+        // Decodes `[PersistedMessageEnvelope]` (not raw
+        // `[OpenClawChatMessage]`) so the stable `id` survives
+        // the round-trip. See the type doc on
+        // `PersistedMessageEnvelope` for the rationale.
         guard let data = defaults.data(forKey: storageKey(for: sessionKey)),
-              let messages = try? JSONDecoder().decode([OpenClawChatMessage].self, from: data) else {
+              let envelopes = try? JSONDecoder().decode([PersistedMessageEnvelope].self, from: data) else {
             return []
         }
-        return messages
+        return envelopes.map { $0.unwrapped() }
     }
 
     private func saveToDisk(_ messages: [OpenClawChatMessage], for sessionKey: String) {
-        if let data = try? JSONEncoder().encode(messages) {
+        // Wrap each message in `PersistedMessageEnvelope` so the
+        // stable `id` is part of the JSON encoding — the SDK's
+        // `OpenClawChatMessage.CodingKeys` omit it, which would
+        // otherwise cause id regeneration on the next load (see
+        // `PersistedMessageEnvelope` doc).
+        let envelopes = messages.map { PersistedMessageEnvelope(wrapping: $0) }
+        if let data = try? JSONEncoder().encode(envelopes) {
             defaults.set(data, forKey: storageKey(for: sessionKey))
         }
     }
