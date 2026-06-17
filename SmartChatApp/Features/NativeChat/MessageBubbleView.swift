@@ -14,11 +14,11 @@ struct MessageBubbleView: View {
     /// or when an external caller (e.g. `MessageReceiver` at `lifecycle
     /// end`) wants to mark it expanded. The callback is responsible for
     /// writing through to `viewModel.messages[i] = updated` so the
-    /// `@Observable` setter on `messages` fires and the parent view
+    /// `@Observable` setter on the store fires and the parent view
     /// re-evaluates body. `MessageBubbleView` itself no longer reaches
     /// into any external collapse-state cache — `isExpanded` reads
     /// directly off `message.isUserExpanded`, so the value travels with
-    /// the message through `vm.messages = messages` reassignments
+    /// the message through the new `MessageCacheStore` SoT
     /// (refresh, session switch, history replace) without any cache
     /// tracking dependency.
     var onExpandChange: (Bool) -> Void
@@ -317,11 +317,11 @@ struct MessageBubbleView: View {
     }
 
     /// User-driven expand state. Reads directly off `message.isUserExpanded`
-    /// — the value travels with the message through any
-    /// `vm.messages = messages` reassignment (refresh, session switch,
+    /// — the value travels with the message through the new
+    /// `MessageCacheStore` SoT (refresh, session switch,
     /// history replace). No external cache tracking required: when
     /// `onExpandChange(true)` writes through to
-    /// `viewModel.messages[i] = updated` (the parent view's job), the
+    /// `CollapseStateCache.shared.setExpanded(msg.id, true)` (the parent view's job), the
     /// `@Observable` setter on `messages` fires, the parent re-evaluates
     /// `ForEach`, and the new `message` (with `isUserExpanded = true`)
     /// reaches this view's body. `HistoryLoader` is responsible for
@@ -365,9 +365,10 @@ struct MessageBubbleView: View {
         }
         // Already-expanded messages (user tapped Show more, or
         // `MessageReceiver` marked at lifecycle end) should never
-        // auto-collapse, even after a `vm.messages = messages` reassign
-        // — the `HistoryLoader` re-merges `isUserExpanded` on
-        // network-refreshed messages so the value flows through.
+        // auto-collapse, even after a fresh history load —
+        // `CollapseStateCache.shared.expandedMessageIds` persists
+        // across reloads, and `NativeChatView.messages` re-merges
+        // it on every body evaluation.
         if message.isUserExpanded == true {
             return false
         }
@@ -478,7 +479,8 @@ struct ChatMessage: Identifiable, Equatable {
     /// expands. The legacy rationale for excluding it (EventInterpreter
     /// / MessageReceiver array diffs churning on expand toggles) no
     /// longer applies in the new `MessageCacheStore` architecture —
-    /// those writers no longer mutate `vm.messages` in place.
+    /// those writers go through `store.append` / `store.upsert`,
+    /// not through a per-VM `messages` array.
     var isUserExpanded: Bool? = nil
 
     var isOutgoing: Bool {

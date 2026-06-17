@@ -274,15 +274,6 @@ enum ChatMessageConverter {
     /// Shared construction fields for the multiple ChatMessages a
     /// single `OpenClawChatMessage` may emit. Lets the converter
     /// loop build each entry without repeating the same
-    /// `Date(timeIntervalSince1970:)` / `usage` / `stopReason`
-    /// boilerplate four times.
-    private struct ChatMessageBaseFieldsUnusedStub {
-        // Removed in favor of the canonical `ChatMessage.ChatMessageBaseFields`
-        // defined in `MessageBubbleView.swift` (where the ChatMessage
-        // type lives). Kept as a comment-only marker so the diff
-        // history is clear about what moved.
-    }
-
     /// ChatMessage → OpenClawChatMessage (cache writer).
     ///
     /// The `OpenClawChatMessage.id` field is the primary key that

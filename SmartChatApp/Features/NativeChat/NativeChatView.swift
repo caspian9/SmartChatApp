@@ -69,10 +69,6 @@ struct NativeChatView: View {
     /// measurement window. Debounced to once per 80ms, the loop
     /// is bounded and the user sees at most a few re-anchors, not
     /// a per-frame stampede.
-    ///
-    /// Build 7488: removed. The previous onScrollGeometryChange
-    /// re-anchor is gone, replaced by UITableView's content-size-
-    /// based scroll. The @State is no longer needed.
 
     /// Minimum pull distance before the refresh indicator appears.
     /// 30pt — large enough that scroll momentum overshoot or the
