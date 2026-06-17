@@ -81,4 +81,9 @@ final class FakeMessageCacheStorage: MessageCacheStorageProtocol, @unchecked Sen
         let messageCount = snapshot.values.reduce(0) { $0 + $1.count }
         return (sessionCount: snapshot.count, messageCount: messageCount)
     }
+
+    // No-op for the fake: the in-memory dict IS the
+    // authoritative state, and `append` / `upsert` write to it
+    // synchronously. No debounce window to drain.
+    func flushPendingWrites() async {}
 }

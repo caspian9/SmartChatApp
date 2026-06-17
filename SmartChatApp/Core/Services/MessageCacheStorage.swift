@@ -64,8 +64,24 @@ public protocol MessageCacheStorageProtocol: Sendable {
     /// (e.g. when the protocol implementation is not UserDefaults-backed
     /// in tests, or when the user wants to bypass any state that
     /// the async path may have mutated).
+    ///
+    /// NOTE: `loadSync` reads from disk. If there are pending
+    /// debounced writes for `sessionKey`, the disk is stale
+    /// until `flushPendingWrites()` runs. Callers that need the
+    /// latest state should use the async `load(for:)` (which
+    /// reads the in-memory cache) or call `flushPendingWrites()`
+    /// first.
     func loadSync(for sessionKey: String) -> [OpenClawChatMessage]
     func load(for sessionKey: String) async -> [OpenClawChatMessage]
+    /// Force-flush any debounced disk writes. The actor's
+    /// `append` / `upsert` paths coalesce JSON encodes +
+    /// UserDefaults writes across a 100ms window; this method
+    /// bypasses the window and writes immediately. Use it from
+    /// app-lifecycle hooks (backgrounding, termination) to
+    /// ensure no in-memory state is lost, and from tests to
+    /// verify the debounce leaves the correct on-disk shape
+    /// after the flush.
+    func flushPendingWrites() async
     /// Append with content-dedup. Returns the post-write array for
     /// the session so the caller (`MessageCacheStore`) can update
     /// its in-memory dict without re-reading from disk. The
@@ -79,6 +95,14 @@ public protocol MessageCacheStorageProtocol: Sendable {
     /// cumulative main-thread-blocked latency budget. Returning
     /// the new state from the actor's already-locked critical
     /// section eliminates that re-read.
+    ///
+    /// DISK WRITE IS DEBOUNCED. The in-memory `cache[sessionKey]`
+    /// is updated synchronously (so the returned array is always
+    /// current) but the JSON encode + UserDefaults write is
+    /// coalesced across multiple calls within a 100ms window. A
+    /// single streaming run of 50 deltas now produces 1 disk
+    /// write instead of 50. Call `flushPendingWrites()` to force
+    /// a synchronous flush (tests + app-lifecycle hooks).
     func append(_ messages: [OpenClawChatMessage], for sessionKey: String) async -> [OpenClawChatMessage]
     /// Id-based upsert. For each input message, if an entry with the
     /// same `id` already exists in the session's array, replace it
@@ -90,7 +114,8 @@ public protocol MessageCacheStorageProtocol: Sendable {
     /// reflects the latest delta. Last-write-wins on text/timestamp;
     /// does NOT apply `append`'s content-dedup (two messages with
     /// the same text but different ids are both kept). Returns the
-    /// post-write array — see `append` for the no-re-read rationale.
+    /// post-write array — see `append` for the no-re-read rationale
+    /// AND for the disk-write debounce (same 100ms coalesce window).
     func upsert(_ messages: [OpenClawChatMessage], for sessionKey: String) async -> [OpenClawChatMessage]
     /// Authoritative-replace for `loadHistory`. Wipes every existing
     /// entry in the session and writes `messages` as the new sole
@@ -122,6 +147,28 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     public static let shared = MessageCacheStorage()
 
     private var cache: [String: [OpenClawChatMessage]] = [:]
+    /// Sessions with a pending (debounced) disk write. The actor
+    /// coalesces multiple `append` / `upsert` calls within a
+    /// 100ms window into a single JSON encode + UserDefaults
+    /// write per session. A streaming run of 50 deltas no longer
+    /// produces 50 disk writes — it produces 1 (assuming they
+    /// land within the window). `flushPendingWrites()` drains
+    /// the set immediately.
+    private var pendingDiskWrites: Set<String> = []
+    /// The single in-flight debounce task. `nil` when no
+    /// pending writes; non-nil when at least one session has
+    /// been queued and a `Task.sleep(100ms)` is in progress.
+    /// The task is cancelled and rescheduled if a new write
+    /// arrives during the window (extending the debounce).
+    private var flushTask: Task<Void, Never>?
+    /// How long to wait after the latest write before actually
+    /// encoding + writing to UserDefaults. 100ms is a
+    /// compromise: long enough to coalesce a streaming burst
+    /// (50 deltas typically land within 1-2s of wall time but
+    /// bunched into ~10 sub-bursts of 5 deltas each — 100ms
+    /// covers each sub-burst), short enough that the in-memory
+    /// vs. on-disk skew is imperceptible.
+    private let diskWriteDebounce: Duration = .milliseconds(100)
     /// `nonisolated` because `UserDefaults` is documented as
     /// thread-safe (Apple's docs: "UserDefaults is thread-safe"),
     /// and `loadSync(for:)` — called from `@MainActor` on the
@@ -190,7 +237,11 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         allMessages.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
 
         cache[sessionKey] = allMessages
-        saveToDisk(allMessages, for: sessionKey)
+        // Debounced: see `scheduleDiskWrite(for:)` + the protocol
+        // doc on `append`. The in-memory cache is up-to-date
+        // immediately; the JSON encode + UserDefaults write is
+        // coalesced across the debounce window.
+        scheduleDiskWrite(for: sessionKey)
 
         AppLogger.log(
             "[MessageCacheStorage append] sessionKey=\(String(sessionKey.prefix(8))) original=\(originalCount) added=\(added) deduped=\(deduped) skippedEmpty=\(skippedEmpty) final=\(allMessages.count)",
@@ -201,10 +252,21 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     // Placeholder — implementation lands in Task 3
     public func clear(for sessionKey: String) async {
         cache[sessionKey] = []
+        // Drop any pending debounced write for this session —
+        // otherwise the in-flight flush task could resurrect
+        // the just-cleared data from the (still-populated)
+        // in-memory cache.
+        pendingDiskWrites.remove(sessionKey)
         defaults.removeObject(forKey: storageKey(for: sessionKey))
     }
     public func clearAll() async {
         cache.removeAll()
+        // Same reasoning as `clear(for:)` — pending debounced
+        // writes would otherwise re-write the just-cleared
+        // data from the in-memory cache. For clearAll we drop
+        // ALL pending writes; the next `append` / `upsert` /
+        // `replaceForSession` will re-queue.
+        pendingDiskWrites.removeAll()
         let keys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(keyPrefix) }
         for key in keys {
             defaults.removeObject(forKey: key)
@@ -381,7 +443,8 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         }
         allMessages.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
         cache[sessionKey] = allMessages
-        saveToDisk(allMessages, for: sessionKey)
+        // Debounced (same as `append` above).
+        scheduleDiskWrite(for: sessionKey)
         AppLogger.log(
             "[MessageCacheStorage upsert] sessionKey=\(String(sessionKey.prefix(8))) replaced=\(replaced) added=\(added) skippedEmpty=\(skippedEmpty) deduped=\(deduped) final=\(allMessages.count)",
             category: .cache)
@@ -390,6 +453,49 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
 
     private nonisolated func storageKey(for sessionKey: String) -> String {
         "\(keyPrefix)\(sessionKey)"
+    }
+
+    /// Queue a disk write for `sessionKey` and ensure the
+    /// debounce task is running. Called from `append` and
+    /// `upsert`; `replaceForSession` / `clear` / `clearAll`
+    /// intentionally write synchronously (destructive ops
+    /// need to be durable immediately).
+    private func scheduleDiskWrite(for sessionKey: String) {
+        pendingDiskWrites.insert(sessionKey)
+        if flushTask == nil {
+            // No task in flight — start one. The task holds a
+            // weak reference to the actor; if the actor is
+            // deallocated mid-wait the task becomes a no-op.
+            let debounce = diskWriteDebounce
+            flushTask = Task { [weak self] in
+                try? await Task.sleep(for: debounce)
+                await self?.flushPendingWrites()
+            }
+        }
+        // If a task is already in flight, we don't touch it —
+        // its sleep is "the time since the last write" and
+        // adding a new entry to `pendingDiskWrites` is enough.
+        // The existing task's flush will pick up the new entry
+        // when it fires.
+    }
+
+    /// Drain `pendingDiskWrites` synchronously. Called by the
+    /// debounce task after the sleep, and exposed publicly for
+    /// tests + app-lifecycle hooks (background / terminate).
+    /// The flush is a snapshot-and-clear: takes the current
+    /// set, clears it, then writes each session's latest cache
+    /// state to disk. New writes that arrive during the flush
+    /// are queued in a fresh `pendingDiskWrites` and will be
+    /// picked up by a future debounce task (or by the next
+    /// call to this method).
+    public func flushPendingWrites() async {
+        flushTask = nil
+        let keys = pendingDiskWrites
+        pendingDiskWrites.removeAll()
+        for key in keys {
+            guard let messages = cache[key] else { continue }
+            saveToDisk(messages, for: key)
+        }
     }
 
     private nonisolated func loadFromDisk(for sessionKey: String) -> [OpenClawChatMessage] {

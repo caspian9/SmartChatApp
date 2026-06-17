@@ -39,6 +39,13 @@ final class MessageCacheStorageTests: XCTestCase {
         let key = "session-1"
         let msg = makeMsg(text: "first", timestamp: 1000)
         await storage.append([msg], for: key)
+        // Disk write is debounced (100ms coalesce window); force
+        // the flush so the fresh-instance read below sees the
+        // expected 1 entry on disk. Without this, `storage2.load`
+        // would see an empty disk (the in-memory cache hasn't
+        // been flushed yet) and `loaded[0]` would crash with
+        // "Index out of range".
+        await storage.flushPendingWrites()
 
         // Re-load from disk via new instance
         let storage2 = MessageCacheStorage(defaults: defaults)
@@ -627,8 +634,15 @@ final class MessageCacheStorageTests: XCTestCase {
         // First storage writes the message. `load()` here
         // round-trips through the disk (cache is empty pre-append),
         // exercising the envelope encode/decode path.
+        //
+        // Force a flush so the disk write is durable before
+        // the fresh-instance read. Without this, the test would
+        // race the 100ms debounce window — sometimes the disk
+        // write lands in time, sometimes not. The flush makes
+        // the test deterministic.
         let storage1 = MessageCacheStorage(defaults: defaults!)
         _ = await storage1.append([original], for: key)
+        await storage1.flushPendingWrites()
         let reloadedBySameInstance = await storage1.load(for: key)
         XCTAssertEqual(reloadedBySameInstance.count, 1)
         XCTAssertEqual(reloadedBySameInstance.first?.id, originalId,
@@ -675,6 +689,10 @@ final class MessageCacheStorageTests: XCTestCase {
         }
         let storage1 = MessageCacheStorage(defaults: defaults!)
         _ = await storage1.append(messages, for: key)
+        // Flush so the disk write is durable before the
+        // fresh-instance read (see idStability_survivesStorageReinit
+        // for the debounce interaction rationale).
+        await storage1.flushPendingWrites()
         let storage2 = MessageCacheStorage(defaults: defaults!)
         let loaded = await storage2.load(for: key)
         XCTAssertEqual(loaded.count, 4)
@@ -682,5 +700,103 @@ final class MessageCacheStorageTests: XCTestCase {
         let originalIdsSet = Set(originalIds)
         XCTAssertEqual(loadedIds, originalIdsSet,
                        "all 4 ids must match originals after restart")
+    }
+
+    // MARK: - Disk-write debounce
+
+    func test_diskWriteDebounce_pendingWritesCoalesce() async throws {
+        // Regression test for write amplification: 5 streaming
+        // deltas used to produce 5 JSON encodes + 5 UserDefaults
+        // writes. With the debounce, the in-memory cache updates
+        // synchronously (so the caller sees the right state) but
+        // the disk write is deferred to `flushPendingWrites()`.
+        //
+        // We verify the debounce by:
+        //   1. Appending 5 messages
+        //   2. Reading disk via a *fresh* storage instance before
+        //      flush → must be empty (or stale from prior tests)
+        //   3. Calling `flushPendingWrites()`
+        //   4. Reading disk again → must be the 5 messages
+        let key = "session-debounce"
+        let suite = "test-debounce-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)
+        XCTAssertNotNil(defaults)
+        defer { defaults?.removePersistentDomain(forName: suite) }
+
+        let storage1 = MessageCacheStorage(defaults: defaults!)
+        let messages = (0..<5).map { i in
+            OpenClawChatMessage(
+                id: UUID(), role: "user",
+                content: [OpenClawChatMessageContent(
+                    type: "text", text: "delta \(i)",
+                    thinking: nil, thinkingSignature: nil,
+                    mimeType: nil, fileName: nil, content: nil,
+                    id: nil, name: nil, arguments: nil)],
+                timestamp: Double(1_700_000_000_000 + i * 100),
+                toolCallId: nil, toolName: nil, usage: nil,
+                stopReason: nil, errorMessage: nil)
+        }
+        for msg in messages {
+            _ = await storage1.append([msg], for: key)
+        }
+        // In-memory state is current (read via a fresh
+        // instance, which is forced to round-trip through
+        // disk — should be empty until flush).
+        let inMemory = await storage1.load(for: key)
+        XCTAssertEqual(inMemory.count, 5, "in-memory cache is synchronous and authoritative")
+        // Before flush: a fresh storage instance reads from
+        // disk directly. The 5 writes haven't been flushed yet,
+        // so disk should be empty (or stale from a prior test
+        // — we just verify the 5 messages aren't there yet).
+        let storage2 = MessageCacheStorage(defaults: defaults!)
+        let onDiskBeforeFlush = await storage2.load(for: key)
+        XCTAssertEqual(onDiskBeforeFlush.count, 0,
+                       "no disk write should have happened yet (5 appends coalesce into 1 deferred write)")
+
+        // Force the flush. After this, disk is up-to-date.
+        await storage1.flushPendingWrites()
+        let storage3 = MessageCacheStorage(defaults: defaults!)
+        let onDiskAfterFlush = await storage3.load(for: key)
+        XCTAssertEqual(onDiskAfterFlush.count, 5,
+                       "all 5 messages must be on disk after flush")
+        XCTAssertEqual(Set(onDiskAfterFlush.map { $0.content.first?.text }),
+                       Set(messages.map { $0.content.first?.text }),
+                       "flushed content matches what was appended")
+    }
+
+    func test_diskWriteDebounce_clearRemovesPendingWrite() async throws {
+        // Edge case: if `clear(for:)` runs while a debounced
+        // write is pending for the same session, the in-flight
+        // flush would otherwise resurrect the just-cleared data
+        // from the (still-populated) in-memory cache. Verify
+        // the clear also drops the pending write so the flush
+        // is a no-op for that session.
+        let key = "session-clear-debounce"
+        let suite = "test-clear-debounce-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)
+        XCTAssertNotNil(defaults)
+        defer { defaults?.removePersistentDomain(forName: suite) }
+
+        let storage = MessageCacheStorage(defaults: defaults!)
+        let msg = OpenClawChatMessage(
+            id: UUID(), role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: "ephemeral",
+                thinking: nil, thinkingSignature: nil,
+                mimeType: nil, fileName: nil, content: nil,
+                id: nil, name: nil, arguments: nil)],
+            timestamp: 1_700_000_000_000, toolCallId: nil,
+            toolName: nil, usage: nil, stopReason: nil,
+            errorMessage: nil)
+        _ = await storage.append([msg], for: key)
+        // Clear BEFORE flush. Pending write for `key` should
+        // be dropped — the flush task will see an empty set
+        // and do nothing.
+        await storage.clear(for: key)
+        await storage.flushPendingWrites()
+        let storage2 = MessageCacheStorage(defaults: defaults!)
+        let onDisk = await storage2.load(for: key)
+        XCTAssertEqual(onDisk.count, 0,
+                       "cleared session must not resurrect its data via a debounced flush")
     }
 }
