@@ -122,6 +122,32 @@ final class NativeChatViewModel {
     private var chatMessagesBySession: [String: [ChatMessage]] = [:]
     @ObservationIgnored
     private var chatMessagesCachedVersionBySession: [String: Int] = [:]
+    /// TEMP DIAG: tracks the last `store.version` for which we
+    /// emitted the per-message DIAG dump. `chatMessages(for:)`
+    /// is a computed property called by the view on every render
+    /// frame, so without this gate the DIAG log would print
+    /// dozens of copies per scroll, drowning out the signal.
+    /// Only log when the version changes (= a real write
+    /// happened in the store) AND the user has the
+    /// `logsNativeChat` Settings toggle on.
+    @ObservationIgnored
+    private var chatMessagesDiagVersionBySession: [String: Int] = [:]
+    /// In-flight streaming delta buffer, held **in memory only**
+    /// and never written to the persistent `MessageCacheStore`.
+    /// `MessageReceiver` attaches entries here when
+    /// `state != "final"`, and writes to the cache when
+    /// `state == "final"`. The key trade-off: session switches
+    /// and app backgrounding lose intermediate streaming deltas,
+    /// but the `lifecycle=start` placeholder and the
+    /// `lifecycle=end` final both survive in the cache — the
+    /// user does not lose the two endpoints of a complete
+    /// response. The intermediate deltas (typing-indicator
+    /// phase) are not perceptually important to preserve.
+    /// `@ObservationIgnored` because the view reads
+    /// `chatMessages(for:)` (which merges pending with cache),
+    /// not `pending` directly.
+    @ObservationIgnored
+    private var pendingBySession: [String: [ChatMessage]] = [:]
 
     // MARK: - Collaborators
 
@@ -158,21 +184,180 @@ final class NativeChatViewModel {
     /// Returns the cached `ChatMessage` array for `sessionKey`,
     /// converting from the underlying `OpenClawChatMessage` list
     /// on first read (or when `MessageCacheStore.version` advances).
-    /// See `chatMessagesBySession` for the rationale. The view's
-    /// `messages` computed property is the only intended caller.
+    /// Merges the cache with pending (`pendingBySession`).
+    /// Preserves the cache's native order to avoid
+    /// `Array(byId.values).sorted(...)` re-ordering entries
+    /// with identical `startedAt` (a stable-order regression
+    /// risk). The view's `messages` computed property is the
+    /// sole caller.
     func chatMessages(for sessionKey: String) -> [ChatMessage] {
         let version = store.version
-        if let cached = chatMessagesBySession[sessionKey],
+        let cached: [ChatMessage]
+        if let hit = chatMessagesBySession[sessionKey],
            chatMessagesCachedVersionBySession[sessionKey] == version {
-            return cached
+            cached = hit
+        } else {
+            let openclaw = store.messagesBySession[sessionKey] ?? []
+            // TEMP DIAG: dump raw cache layer BEFORE the converter
+            // hides the duplication. Gated on `logsNativeChat` AND
+            // on `store.version` actually advancing (see
+            // `chatMessagesDiagVersionBySession`) so the dump only
+            // fires when the store's content changed, not on every
+            // view re-render frame.
+            if ConfigurationManager.shared.logsNativeChat,
+               chatMessagesDiagVersionBySession[sessionKey] != version {
+                for (i, m) in openclaw.enumerated() {
+                    let textPreview = String(
+                        m.content.compactMap { $0.text }
+                            .joined(separator: " | ")
+                            .prefix(60))
+                    let thinkingPreview = String(
+                        m.content.compactMap { $0.thinking }
+                            .joined(separator: " | ")
+                            .prefix(40))
+                    AppLogger.log(
+                        "[chatMessages DIAG] session=\(String(sessionKey.prefix(8))) CACHE[\(i)] id=\(m.id.uuidString.prefix(12)) role=\(m.role) ts=\(m.timestamp ?? -1) text=\"\(textPreview)\" thinking=\"\(thinkingPreview)\"",
+                        category: .nativeChat)
+                }
+            }
+            // The converter returns [ChatMessage] — flatMap because
+            // a single OpenClawChatMessage (e.g. `[text, thinking]`
+            // bundle) can emit 2 ChatMessages (assistant + thinking).
+            let converted = openclaw.flatMap { msg in
+                ChatMessageConverter.toChatMessage(from: msg)
+            }
+            chatMessagesBySession[sessionKey] = converted
+            chatMessagesCachedVersionBySession[sessionKey] = version
+            chatMessagesDiagVersionBySession[sessionKey] = version
+            cached = converted
         }
-        let openclaw = store.messagesBySession[sessionKey] ?? []
-        let converted = openclaw.compactMap { msg in
-            ChatMessageConverter.toChatMessage(from: msg)
+        let pending = pendingBySession[sessionKey] ?? []
+        if ConfigurationManager.shared.logsNativeChat,
+           chatMessagesDiagVersionBySession[sessionKey] != version,
+           !pending.isEmpty {
+            for (i, m) in pending.enumerated() {
+                AppLogger.log(
+                    "[chatMessages DIAG] session=\(String(sessionKey.prefix(8))) PENDING[\(i)] id=\(String(m.id.prefix(12))) role=\(m.role) state=\(m.state ?? "nil") text=\"\(String(m.text.prefix(60)))\"",
+                    category: .nativeChat)
+            }
         }
-        chatMessagesBySession[sessionKey] = converted
-        chatMessagesCachedVersionBySession[sessionKey] = version
-        return converted
+        let merged = pending.isEmpty ? cached : mergePending(pending, into: cached)
+        // TEMP DIAG: dump the post-merge ChatMessage array the view
+        // is about to render. Same version gate as the CACHE dump
+        // above. Will be removed once the duplicate-bubble diagnosis
+        // is complete.
+        if ConfigurationManager.shared.logsNativeChat,
+           chatMessagesDiagVersionBySession[sessionKey] != version {
+            for (i, m) in merged.enumerated() {
+                let textPreview = String(m.text.prefix(60))
+                AppLogger.log(
+                    "[chatMessages DIAG] session=\(String(sessionKey.prefix(8))) [\(i)] id=\(String(m.id.prefix(12))) role=\(m.role) state=\(m.state ?? "nil") text=\"\(textPreview)\"",
+                    category: .nativeChat)
+            }
+            chatMessagesDiagVersionBySession[sessionKey] = version
+        }
+        // Per-run display ordering: the order of events within
+        // a single `runId` is determined by the **server's per-run
+        // monotonic `seq`** (payload.seq), not the wall-clock
+        // arrival time. The user-reported bug was that the chat
+        // event (carrying the final thinking block) often arrived
+        // AFTER `lifecycle=end` (carrying the response), so a
+        // pure timestamp sort rendered `response → thinking` —
+        // the user saw the answer before its reasoning. The seq
+        // sort fixes this: every event within a run has a `seq`
+        // from the server, and the server's order is the actual
+        // reasoning order (whatever it is — `toolCall →
+        // toolResult → thinking → assistant` is also valid if the
+        // model decides to think AFTER the tool result). A fixed
+        // phase priority (e.g., always thinking < toolCall <
+        // assistant) was the first attempt but is wrong: it
+        // forces a fixed order even when the server's order
+        // differs. Using `seq` lets the server's actual order win.
+        // Across runs (different `runId`, or `runId: nil` for
+        // the user bubble), fall back to timestamp.
+        return sortForDisplay(merged)
+    }
+
+    private func sortForDisplay(_ messages: [ChatMessage]) -> [ChatMessage] {
+        return messages.sorted { a, b in
+            // Same non-nil runId → seq (server's monotonic order).
+            // Missing `seq` falls back to Int.max (i.e., sort last
+            // among the run's events), then to timestamp as the
+            // final tie-breaker.
+            if let runA = a.runId, let runB = b.runId, runA == runB {
+                let seqA = a.seq ?? Int.max
+                let seqB = b.seq ?? Int.max
+                if seqA != seqB { return seqA < seqB }
+                if a.timestamp != b.timestamp { return a.timestamp < b.timestamp }
+            }
+            // Different runs (or either has nil runId) → timestamp
+            return a.timestamp < b.timestamp
+        }
+    }
+
+    /// PERSIST GATE companion: attaches a streaming delta to
+    /// pending and invalidates the `chatMessagesBySession`
+    /// conversion cache so the view re-evaluates on next read.
+    func appendPending(_ message: ChatMessage, for sessionKey: String) {
+        var pending = pendingBySession[sessionKey] ?? []
+        if let idx = pending.firstIndex(where: { $0.id == message.id }) {
+            pending[idx] = message
+        } else {
+            pending.append(message)
+        }
+        pendingBySession[sessionKey] = pending
+        chatMessagesBySession[sessionKey] = nil
+        chatMessagesCachedVersionBySession[sessionKey] = nil
+    }
+
+    /// PERSIST GATE companion: the final message has been
+    /// upserted into the cache; any in-flight streaming deltas
+    /// are now obsolete — clear them so the view does not stack
+    /// stale pending on top of the cached final. Called by
+    /// `EventInterpreter` after the lifecycle=end `receiveMessage`
+    /// completes.
+    func clearPending(for sessionKey: String) {
+        if pendingBySession[sessionKey]?.isEmpty == false {
+            pendingBySession[sessionKey] = nil
+            chatMessagesBySession[sessionKey] = nil
+            chatMessagesCachedVersionBySession[sessionKey] = nil
+        }
+    }
+
+    /// Clears all in-memory derived state for a session. Called
+    /// by `SessionCoordinator` before switching sessions.
+    /// `store.clearMemory(for:)` clears the store's in-memory
+    /// copy; this method clears the VM's own pending and
+    /// conversion caches.
+    func clearMemory(for sessionKey: String) {
+        pendingBySession[sessionKey] = nil
+        chatMessagesBySession[sessionKey] = nil
+        chatMessagesCachedVersionBySession[sessionKey] = nil
+    }
+
+    /// Merges pending entries on top of the cache while
+    /// preserving the cache's native order. Walks the cache in
+    /// order, replacing or appending pending entries by id —
+    /// no re-sort, no `Array(byId.values).sorted(...)` (which
+    /// would re-order entries with identical `startedAt`).
+    private func mergePending(_ pending: [ChatMessage], into cached: [ChatMessage]) -> [ChatMessage] {
+        var pendingById: [String: ChatMessage] = [:]
+        for msg in pending { pendingById[msg.id] = msg }
+        var result: [ChatMessage] = []
+        result.reserveCapacity(cached.count + pending.count)
+        var pendingIdsUsed: Set<String> = []
+        for msg in cached {
+            if let pendingVersion = pendingById[msg.id] {
+                result.append(pendingVersion)
+                pendingIdsUsed.insert(msg.id)
+            } else {
+                result.append(msg)
+            }
+        }
+        for msg in pending where !pendingIdsUsed.contains(msg.id) {
+            result.append(msg)
+        }
+        return result
     }
 
     /// Drops the cached `ChatMessage` array for `sessionKey` so
@@ -378,8 +563,8 @@ final class NativeChatViewModel {
 
     func loadMoreHistory() {}
 
-    func receiveMessage(_ message: ChatMessage) {
-        messageReceiver.receiveMessage(message)
+    func receiveMessage(_ message: ChatMessage) async {
+        await messageReceiver.receiveMessage(message)
     }
 
     private func setError(_ error: String?) {

@@ -31,77 +31,76 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         vm = nil
     }
 
-    func test_streamingMessage_appendsToStore() async throws {
+    func test_streamingMessage_appendsToPending_notStore() async throws {
+        // PERSIST GATE: state="streaming" → VM's pendingBySession;
+        // does NOT enter the persistent cache. The store stays empty.
         let key = "session-1"
         let chat = makeChat(text: "delta", state: "streaming")
-        receiver.receiveMessage(chat)
-        // Poll for the async store write to complete (don't rely on a fixed sleep — flaky under CI)
-        let deadline = Date().addingTimeInterval(2.0)
-        while store.messages(for: key, since: nil).isEmpty {
-            if Date() > deadline {
-                XCTFail("store.append did not complete within 2s")
-                return
-            }
-            try await Task.sleep(nanoseconds: 10_000_000)  // 10ms poll interval
-        }
-        let messages = store.messages(for: key, since: nil)
-        XCTAssertEqual(messages.count, 1)
-        XCTAssertEqual(messages[0].content.first?.text, "delta")
-    }
+        await receiver.receiveMessage(chat)
 
-    func test_streamingDeltas_sameSyntheticId_collapseToOneEntry() async throws {
-        // End-to-end regression for the "duplicate messages /
-        // typing indicator won't disappear" bug. EventInterpreter's
-        // `lifecycle=start` placeholder, every
-        // assistant delta, and `lifecycle=end` all share `id: runId` —
-        // a synthetic string, NOT a UUID. `toOpenClawChatMessage` must
-        // derive a DETERMINISTIC UUID from it (not a fresh UUID per
-        // call), otherwise `MessageCacheStorage.upsert` can't find the
-        // existing entry and every delta appends a new bubble. After
-        // the fix the three receiveMessage calls collapse to a single
-        // store entry carrying the last delta's text.
-        let key = "session-1"
-        let runId = "f1e2d3c4-b5a6-7890-1234-56789abcdef0"  // synthetic
-        receiver.receiveMessage(makeChat(id: runId, text: "", state: "streaming"))
-        receiver.receiveMessage(makeChat(id: runId, text: "ha", state: "streaming"))
-        receiver.receiveMessage(makeChat(id: runId, text: "hello there", state: "final"))
-
-        // Poll for at least 1 entry to land, then give a small grace
-        // window for the third write to complete. We can't poll for
-        // "exactly 1" because the broken behavior would also produce
-        // ≥1 entries — the assertion is on the count after a stable
-        // settle, not on arrival order.
-        let deadline = Date().addingTimeInterval(2.0)
-        while store.messages(for: key, since: nil).isEmpty {
-            if Date() > deadline {
-                XCTFail("store.upsert did not complete within 2s")
-                return
-            }
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        // Wait a short grace period so the third async write has time
-        // to land before we assert the count.
+        // Give 200ms for the persist gate to complete (the streaming
+        // branch itself is synchronous, but the await is still
+        // crossed).
         try await Task.sleep(nanoseconds: 200_000_000)
 
         let messages = store.messages(for: key, since: nil)
-        XCTAssertEqual(
-            messages.count, 1,
-            "Same synthetic id streaming deltas must collapse to one entry (id-based upsert); got \(messages.count) entries")
-        XCTAssertEqual(
-            messages.first?.content.first?.text, "hello there",
-            "Last delta must win (in-place replace, not append)")
+        XCTAssertEqual(messages.count, 0, "PERSIST GATE: streaming delta must NOT enter the persistent cache")
+        // The streaming message is visible in the merged view
+        // (pending overlay).
+        let merged = vm.chatMessages(for: key)
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.text, "delta")
+        XCTAssertEqual(merged.first?.role, "assistant")
     }
 
-    func test_lifecycleEnd_setsIsUserExpandedInCollapseCache() {
+    func test_finalMessage_appendsToStore() async throws {
+        // PERSIST GATE: state="final" → upsert into the cache.
+        let key = "session-1"
+        let chat = makeChat(text: "done", state: "final")
+        await receiver.receiveMessage(chat)
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let messages = store.messages(for: key, since: nil)
+        XCTAssertEqual(messages.count, 1, "final message must enter the persistent cache")
+        XCTAssertEqual(messages.first?.content.first?.text, "done")
+    }
+
+    func test_streamingThenFinal_storesOnlyFinal() async throws {
+        // PERSIST GATE: streaming → pending, final → cache, dedup
+        // by id. Multiple streaming deltas with the same runId
+        // replace each other by id in pending; the final lands in
+        // the cache and pending is cleared.
+        let key = "session-1"
+        let runId = "f1e2d3c4-b5a6-7890-1234-56789abcdef0"
+        await receiver.receiveMessage(makeChat(id: runId, text: "", state: "streaming"))
+        await receiver.receiveMessage(makeChat(id: runId, text: "ha", state: "streaming"))
+        await receiver.receiveMessage(makeChat(id: runId, text: "hello there", state: "final"))
+        // Simulate the clearPending call that EventInterpreter
+        // makes after lifecycle=end.
+        vm.clearPending(for: key)
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let messages = store.messages(for: key, since: nil)
+        XCTAssertEqual(messages.count, 1, "store has only the final entry")
+        XCTAssertEqual(messages.first?.content.first?.text, "hello there")
+        // The merged view also contains only the final entry.
+        let merged = vm.chatMessages(for: key)
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.text, "hello there")
+    }
+
+    func test_lifecycleEnd_setsIsUserExpandedInCollapseCache() async {
         let id = "msg-final-1"
         let chat = makeChat(id: id, text: "done", state: "final")
-        receiver.receiveMessage(chat)
+        await receiver.receiveMessage(chat)
         XCTAssertTrue(CollapseStateCache.shared.isExpanded(id))
     }
 
-    func test_scrollRequestBumpedOnNewMessage() {
+    func test_scrollRequestBumpedOnNewMessage() async {
         let originalToken = vm.scrollRequest.token
-        receiver.receiveMessage(makeChat(text: "x", state: "streaming"))
+        await receiver.receiveMessage(makeChat(text: "x", state: "streaming"))
         XCTAssertEqual(vm.scrollRequest.token, originalToken &+ 1)
         XCTAssertEqual(vm.scrollRequest.kind, .newMessage)
     }

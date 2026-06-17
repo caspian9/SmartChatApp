@@ -71,7 +71,6 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     public static let shared = MessageCacheStorage()
 
     private var cache: [String: [OpenClawChatMessage]] = [:]
-    private let maxLocalMessages: Int
     /// `nonisolated` because `UserDefaults` is documented as
     /// thread-safe (Apple's docs: "UserDefaults is thread-safe"),
     /// and `loadSync(for:)` — called from `@MainActor` on the
@@ -84,9 +83,8 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     nonisolated private let defaults: UserDefaults
     nonisolated private let keyPrefix = "openclaw_messages_"
 
-    public init(defaults: UserDefaults = .standard, maxLocalMessages: Int = 200) {
+    public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.maxLocalMessages = maxLocalMessages
     }
 
     public nonisolated func loadSync(for sessionKey: String) -> [OpenClawChatMessage] {
@@ -139,9 +137,6 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         }
 
         allMessages.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
-        if allMessages.count > maxLocalMessages {
-            allMessages = Array(allMessages.suffix(maxLocalMessages))
-        }
 
         cache[sessionKey] = allMessages
         saveToDisk(allMessages, for: sessionKey)
@@ -231,9 +226,6 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         let existing = cache[sessionKey] ?? []
         var sorted = messages
         sorted.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
-        if sorted.count > maxLocalMessages {
-            sorted = Array(sorted.suffix(maxLocalMessages))
-        }
         if !existing.isEmpty {
             var preservedCount = 0
             sorted = sorted.map { incoming in
@@ -291,6 +283,7 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         var replaced = 0
         var added = 0
         var skippedEmpty = 0
+        var deduped = 0
         for msg in messages {
             if isEmptyTextPlaceholder(msg) {
                 // Allow empty-text placeholders in the upsert path —
@@ -308,6 +301,22 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
                 skippedEmpty += 1
                 continue
             }
+            let key = dedupKey(for: msg)
+            if allMessages.contains(where: { dedupKey(for: $0) == key && $0.id != msg.id }) {
+                // Content-dedup hit (different ids, same content).
+                // The streaming path can emit the same logical
+                // message via different transport events
+                // (`command_output stream=end`,
+                // `item phase=end summary=...`, and the
+                // trailer-augmented `command_output` end) with
+                // different ids but identical content; without
+                // this dedup all three land in the cache and the
+                // user sees the same text 3x. KEEP the first
+                // arrival (id stability > content authority, same
+                // as `append`'s KEEP behavior).
+                deduped += 1
+                continue
+            }
             if let idx = allMessages.firstIndex(where: { $0.id == msg.id }) {
                 allMessages[idx] = msg
                 replaced += 1
@@ -317,13 +326,10 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
             }
         }
         allMessages.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
-        if allMessages.count > maxLocalMessages {
-            allMessages = Array(allMessages.suffix(maxLocalMessages))
-        }
         cache[sessionKey] = allMessages
         saveToDisk(allMessages, for: sessionKey)
         AppLogger.log(
-            "[MessageCacheStorage upsert] sessionKey=\(String(sessionKey.prefix(8))) replaced=\(replaced) added=\(added) skippedEmpty=\(skippedEmpty) final=\(allMessages.count)",
+            "[MessageCacheStorage upsert] sessionKey=\(String(sessionKey.prefix(8))) replaced=\(replaced) added=\(added) skippedEmpty=\(skippedEmpty) deduped=\(deduped) final=\(allMessages.count)",
             category: .cache)
         return allMessages
     }
@@ -351,16 +357,46 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         }
     }
 
-    // Internal helper — ported from the old MessageCache.swift:79-107
+    // Internal helper — content-shape-invariant hash for the
+    // session's append dedup. The same logical message arrives
+    // in two `OpenClawChatMessage` shapes depending on source:
+    // the streaming path flattens toolCall / toolResult /
+    // thinking bodies into `content[0].text` (the
+    // `ChatMessageConverter.toOpenClawChatMessage` path); the
+    // server's `chat.history` returns typed content blocks
+    // (`{type:"thinking", thinking: "..."}` or
+    // `{type:"toolcall", name:..., arguments:...}`) with
+    // `text: nil`. A text-only hash would miss the dedup and
+    // leave both copies in the cache. We fall back to the
+    // `thinking` field when `text` is empty, and normalize the
+    // role to its canonical client form so a server-side
+    // `role: "tool"` (lowercase variant) hashes the same as the
+    // streaming-side `role: "toolCall"`. If the message carries
+    // a thinking block, we force the role to "thinking" so the
+    // server's `role: "assistant"` (typical shape for a
+    // thinking sub-block of the assistant turn) collides with
+    // the streaming-side `role: "thinking"`.
     private func dedupKey(for message: OpenClawChatMessage) -> String {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawThinking = message.content.compactMap { $0.thinking }.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasThinkingBlock = message.content.contains(where: { $0.thinking?.isEmpty == false })
 
-        var textForHash = rawText
-        if message.role == "toolCall" || message.role == "toolResult" || message.role == "thinking" {
-            if let firstLine = rawText.split(separator: "\n", omittingEmptySubsequences: false).first {
-                textForHash = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+        let textForHash: String
+        if !rawText.isEmpty {
+            textForHash = rawText
+        } else if !rawThinking.isEmpty {
+            textForHash = rawThinking
+        } else {
+            textForHash = ""
+        }
+
+        let roleForHash: String
+        if hasThinkingBlock {
+            roleForHash = "thinking"
+        } else {
+            roleForHash = MessageCacheStorage.normalizeRoleForDedup(message.role)
         }
 
         let tsBucket: Int64 = {
@@ -368,18 +404,27 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
             return Int64(ts / 10_000)
         }()
 
-        let usage = message.usage.map { u in
-            "\(u.input ?? 0),\(u.output ?? 0),\(u.cacheRead ?? 0),\(u.cacheWrite ?? 0),\(u.total ?? 0)"
-        } ?? "-"
-
-        let data = "\(message.role)|\(textForHash)|\(tsBucket)|\(usage)".data(using: .utf8) ?? Data()
+        let data = "\(roleForHash)|\(textForHash)|\(tsBucket)".data(using: .utf8) ?? Data()
         let hash = SHA256.hash(data: data)
         return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func normalizeRoleForDedup(_ role: String) -> String {
+        switch role.lowercased() {
+        case "toolcall", "tool_call", "tooluse", "tool_use", "tool", "function":
+            return "toolCall"
+        case "toolresult", "tool_result":
+            return "toolResult"
+        default:
+            return role
+        }
     }
 
     private func isEmptyTextPlaceholder(_ message: OpenClawChatMessage) -> Bool {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return rawText.isEmpty
+        let rawThinking = message.content.compactMap { $0.thinking }.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return rawText.isEmpty && rawThinking.isEmpty
     }
 }

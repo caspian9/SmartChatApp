@@ -133,7 +133,7 @@ final class EventInterpreter {
                         stopReason: nil,
                         isFresh: true
                     )
-                    viewModel?.receiveMessage(message)
+                    await viewModel?.receiveMessage(message)
                 } else if phase == "end" {
                     // End of run. The previous implementation keyed off phase=end
                     // for every event, which caused tool end phases to prematurely
@@ -158,6 +158,26 @@ final class EventInterpreter {
                     if cacheRead == nil, let cr = data["cacheRead"]?.intValue { cacheRead = cr }
                     if cacheWrite == nil, let cw = data["cacheWrite"]?.intValue { cacheWrite = cw }
                     AppLogger.log("agent lifecycle end - tokens: input: \(inputTokens ?? -1), output: \(outputTokens ?? -1), cacheRead: \(cacheRead ?? -1), cacheWrite: \(cacheWrite ?? -1)", category: .nativeChat)
+                    // TEMP DIAG: confirm the cache-anchor
+                    // resolution picks `assistantStartedAtByRun[runId]`
+                    // (the lifecycle=start wall clock), which is the
+                    // same value the server's `chat.history` uses as
+                    // the message's `timestamp` field. Earlier
+                    // implementations of this logic got the priority
+                    // order wrong; the current order is `start` →
+                    // event-`startedAt` → event-`endedAt` → now().
+                    // Log both candidates so future regressions show
+                    // the split. The `timestamp: chosenAnchor` line
+                    // below uses the same value — sharing
+                    // `chosenAnchor` here so the log and the actual
+                    // cache write are guaranteed to match.
+                    let chosenAnchor = assistantStartedAtByRun[runId]
+                        ?? (startedAtMs > 0
+                            ? Date(timeIntervalSince1970: startedAtMs / 1000)
+                            : (endedAtMs > 0
+                                ? Date(timeIntervalSince1970: endedAtMs / 1000)
+                                : Date()))
+                    AppLogger.log("agent lifecycle end - cache anchor: startedAtRun=\(assistantStartedAtByRun[runId]?.timeIntervalSince1970 ?? -1) endedAtMs=\(endedAtMs) → chosen=\(chosenAnchor.timeIntervalSince1970)", category: .nativeChat)
                     // Flush the markdown stream buffer and read the full
                     // accumulated text so it can be persisted. The
                     // authoritative source is our local accumulator (server
@@ -191,11 +211,21 @@ final class EventInterpreter {
                     let message = ChatMessage(
                         id: runId,
                         text: effectiveFullText,
-                        // Local received time for the sort key — see
-                        // the matching comment on the lifecycle=start
-                        // branch above. `startedAt` and `endedAt`
-                        // keep the server's payload.ts for display.
-                        timestamp: Date(),
+                        // Cache-anchor: the run's
+                        // `lifecycle=start` `startedAt` (recorded in
+                        // `assistantStartedAtByRun[runId]` above).
+                        // This is the same value the server's
+                        // `chat.history` projection uses as the
+                        // message `timestamp` field for the same
+                        // run, so the streaming entry and the
+                        // server's later history entry land in the
+                        // same `MessageCacheStorage.dedupKey` 10s
+                        // bucket and dedup against each other. The
+                        // same `chosenAnchor` is logged above so the
+                        // value the log shows is the value that
+                        // actually reaches the cache (no chance of
+                        // drift between the two).
+                        timestamp: chosenAnchor,
                         role: "assistant",
                         state: "final",
                         runId: runId,
@@ -212,7 +242,15 @@ final class EventInterpreter {
                         stopReason: nil,
                         isFresh: true
                     )
-                    viewModel?.receiveMessage(message)
+                    await viewModel?.receiveMessage(message)
+                    // PERSIST GATE companion: the final message has
+                    // been upserted into the cache, so any in-flight
+                    // streaming deltas (now obsolete) must be cleared
+                    // to avoid the view stacking them on top of the
+                    // cached final. Awaiting the upsert above before
+                    // clearing pending eliminates the
+                    // "pending cleared before upsert landed" race.
+                    viewModel?.clearPending(for: sessionKey)
                     // Cleanup: drop the per-run accumulators. Holder
                     // is released below — `MarkdownStreamManager.release`
                     // would have been the right place to also nil the
@@ -327,7 +365,7 @@ final class EventInterpreter {
                     stopReason: nil,
                     isFresh: true
                 )
-                viewModel?.receiveMessage(message)
+                await viewModel?.receiveMessage(message)
             case "thinking":
                 // Thinking deltas are emitted as a separate stream from the
                 // assistant text — they don't share an id with the assistant
@@ -394,7 +432,16 @@ final class EventInterpreter {
                     role: "thinking",
                     state: "final",
                     runId: runId,
-                    seq: nil,
+                    // Carry the server's per-run monotonic `seq`
+                    // so the view's `chatMessages(for:)` can sort
+                    // thinking BEFORE the response even when the
+                    // chat event (carrying the same thinking text,
+                    // id `runId:thinking`) arrives AFTER
+                    // `lifecycle=end`. Without `seq`, a pure
+                    // timestamp sort rendered the response
+                    // (received first) before the thinking
+                    // (received later).
+                    seq: seq,
                     startedAt: nil,
                     endedAt: nil,
                     livenessState: nil,
@@ -403,7 +450,7 @@ final class EventInterpreter {
                     stopReason: nil,
                     isFresh: true
                 )
-                viewModel?.receiveMessage(message)
+                await viewModel?.receiveMessage(message)
             case "tool":
                 // Tool events share stream="tool" and discriminate via phase.
                 // - start: tool begins (name + args)
@@ -454,7 +501,7 @@ final class EventInterpreter {
                         stopReason: nil,
                         isFresh: true
                     )
-                    viewModel?.receiveMessage(message)
+                    await viewModel?.receiveMessage(message)
                 } else if phase == "update" {
                     // Intermediate state. Refresh the toolCall bubble with the
                     // latest args/progress so the user sees the tool is alive.
@@ -484,7 +531,7 @@ final class EventInterpreter {
                         stopReason: nil,
                         isFresh: true
                     )
-                    viewModel?.receiveMessage(message)
+                    await viewModel?.receiveMessage(message)
                 } else if phase == "result" {
                     let resultValue = data["result"]?.value
                     let text = MessageFormatters.formatToolResultText(result: resultValue)
@@ -519,7 +566,7 @@ final class EventInterpreter {
                         stopReason: isError ? "error" : nil,
                         isFresh: true
                     )
-                    viewModel?.receiveMessage(message)
+                    await viewModel?.receiveMessage(message)
                     // Tool call is fully done — drop the start-timestamp
                     // entries so memory doesn't grow across many tool
                     // calls in one run.
@@ -630,7 +677,7 @@ final class EventInterpreter {
                             stopReason: (errorText != nil) ? "error" : nil,
                             isFresh: true
                         )
-                        viewModel?.receiveMessage(message)
+                        await viewModel?.receiveMessage(message)
                     }
                 }
                 // Always update the toolCall bubble so start/update/end phases
@@ -666,7 +713,7 @@ final class EventInterpreter {
                     stopReason: nil,
                     isFresh: true
                 )
-                viewModel?.receiveMessage(message)
+                await viewModel?.receiveMessage(message)
                 if itemPhase == "end" {
                     toolStartedAtByCall.removeValue(forKey: toolKey)
                     toolReceivedAtByCall.removeValue(forKey: toolKey)
@@ -731,7 +778,7 @@ final class EventInterpreter {
                     stopReason: exitCode.map { $0 != 0 ? "error" : nil } ?? nil,
                     isFresh: true
                 )
-                viewModel?.receiveMessage(message)
+                await viewModel?.receiveMessage(message)
             default:
                 // plan, approval, patch, compaction, error — not yet surfaced.
                 AppLogger.log("agent UNHANDLED stream=\(payload.stream) runId=\(payload.runId) seq=\(payload.seq ?? -1) data=\(EventInterpreter.serializeDataForLog(data))", category: .nativeChat)
@@ -857,7 +904,7 @@ final class EventInterpreter {
                         stopReason: nil,
                         isFresh: true
                     )
-                    viewModel?.receiveMessage(message)
+                    await viewModel?.receiveMessage(message)
                 }
             }
 
@@ -931,7 +978,7 @@ final class EventInterpreter {
                         stopReason: nil,
                         isFresh: true
                     )
-                    viewModel?.receiveMessage(message)
+                    await viewModel?.receiveMessage(message)
                 }
             }
 

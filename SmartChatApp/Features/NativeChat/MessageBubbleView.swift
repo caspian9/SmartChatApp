@@ -485,6 +485,30 @@ struct ChatMessage: Identifiable, Equatable {
         role.lowercased() == "user"
     }
 
+    /// The converter's per-source shared fields. Most fields
+    /// (timestamp, seq, startedAt, endedAt, state, usage, toolCall*)
+    /// are shared across every ChatMessage emitted from a single
+    /// `OpenClawChatMessage` (text vs. thinking entries); the
+    /// converter passes them in this struct so it can build each
+    /// entry without repeating 12+ named arguments. Kept here
+    /// (not in the converter file) so the file that owns the
+    /// `ChatMessage` type also owns the type that drives its
+    /// secondary init.
+    struct ChatMessageBaseFields {
+        let timestamp: Date
+        let seq: Int?
+        let startedAt: Date?
+        let endedAt: Date?
+        let state: String
+        let inputTokens: Int?
+        let outputTokens: Int?
+        let cacheRead: Int?
+        let cacheWrite: Int?
+        let toolCallId: String?
+        let toolName: String?
+        let stopReason: String?
+    }
+
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id &&
         lhs.text == rhs.text &&
@@ -497,5 +521,35 @@ struct ChatMessage: Identifiable, Equatable {
         lhs.livenessState == rhs.livenessState &&
         lhs.isFresh == rhs.isFresh &&
         lhs.isUserExpanded == rhs.isUserExpanded
+    }
+}
+
+extension ChatMessage {
+    /// Convenience initializer for the converter. Lives in
+    /// an extension (NOT in the struct body) so the auto-
+    /// synthesized memberwise init is still generated — adding
+    /// the explicit init in the struct body would suppress it
+    /// and break every existing call site (e.g. `sendMessage`'s
+    /// user-bubble construction) that uses positional args.
+    init(id: String, text: String, role: String, base: ChatMessageBaseFields) {
+        self.id = id
+        self.text = text
+        self.timestamp = base.timestamp
+        self.role = role
+        self.state = base.state
+        self.runId = nil
+        self.seq = base.seq
+        self.startedAt = base.startedAt
+        self.endedAt = base.endedAt
+        self.livenessState = nil
+        self.inputTokens = base.inputTokens
+        self.outputTokens = base.outputTokens
+        self.cacheRead = base.cacheRead
+        self.cacheWrite = base.cacheWrite
+        self.toolCallId = base.toolCallId
+        self.toolName = base.toolName
+        self.stopReason = base.stopReason
+        self.isFresh = false
+        self.isUserExpanded = nil
     }
 }
