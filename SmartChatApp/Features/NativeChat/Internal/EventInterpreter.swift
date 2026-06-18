@@ -366,7 +366,17 @@ final class EventInterpreter {
                     stopReason: nil,
                     isFresh: true
                 )
+                AppLogger.log("agent assistant delta - building ChatMessage: id=\(message.id.prefix(12)) seq=\(seq ?? -1) textLen=\(accText.count) textPreview=\"\(String(accText.prefix(40)))\(accText.count > 40 ? "…(\(accText.count))" : "")\"", category: .nativeChat)
                 await viewModel?.receiveMessage(message)
+                // Post-upsert: confirm the bubble is in the store
+                // and what it looks like. Helps diagnose "bubble
+                // not shown" issues — if this log shows the bubble
+                // but the view doesn't, the problem is in the
+                // view's read path; if this log shows the bubble
+                // ISN'T there, the upsert is being dropped.
+                let postUpsert = viewModel?.store.messages(for: message.runId ?? "?", since: nil) ?? []
+                let postForOurId = postUpsert.first(where: { $0.id.uuidString == runId })
+                AppLogger.log("agent assistant delta - post-upsert in store: bubbleExists=\(postForOurId != nil) storedTextLen=\(postForOurId?.content.first?.text?.count ?? -1) storedTextPreview=\"\(String((postForOurId?.content.first?.text ?? "").prefix(40)))\"", category: .nativeChat)
             case "thinking":
                 // Thinking deltas are emitted as a separate stream from the
                 // assistant text — they don't share an id with the assistant

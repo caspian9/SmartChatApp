@@ -297,7 +297,23 @@ final class NativeChatViewModel {
         // most recently active streaming bubble at the TOP —
         // the user-reported bug.
         let withMeta = applyStreamingMetadata(cached, for: sessionKey)
-        return sortForDisplay(withMeta)
+        let sorted = sortForDisplay(withMeta)
+        // DIAG: confirms whether the runId's bubble made it into
+        // the merged view. Pair this with the post-upsert log in
+        // EventInterpreter to disambiguate "upsert was dropped"
+        // (in-store bubble exists but view doesn't show it) from
+        // "upsert was lost" (in-store bubble doesn't exist).
+        // Gated on the user's `logsNativeChat` Settings toggle
+        // (default ON in debug, OFF in release) so production
+        // log volume is unaffected.
+        if ConfigurationManager.shared.logsNativeChat {
+            for msg in sorted.prefix(3) {
+                AppLogger.log(
+                    "[chatMessages VIEW-DIAG] session=\(String(sessionKey.prefix(8))) id=\(String(msg.id.prefix(12))) role=\(msg.role) state=\(msg.state ?? "nil") textLen=\(msg.text.count) seq=\(msg.seq ?? -1) startedAt=\(msg.startedAt != nil) endedAt=\(msg.endedAt != nil) textPreview=\"\(String(msg.text.prefix(40)))\(msg.text.count > 40 ? "…(\(msg.text.count))" : "")\"",
+                    category: .nativeChat)
+            }
+        }
+        return sorted
     }
 
     /// Overlay in-session streaming metadata (seq /
