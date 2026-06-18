@@ -253,4 +253,77 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
             inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
             toolCallId: nil, toolName: nil, stopReason: nil)
     }
+
+    func test_streamingMetadata_receivedAtSortsMostRecentAtBottom() async throws {
+        // The persisted `timestamp` for a streaming bubble is the
+        // run's start time (chosenAnchor = assistantStartedAtByRun
+        // for the lifecycle=end, which is set at the start), NOT
+        // the latest activity time. Without the `receivedAt`
+        // overlay, a still-streaming placeholder from a NEWER run
+        // (its `timestamp` = its own start) would sort BELOW the
+        // final of an OLDER run (its `timestamp` = the older run's
+        // start). The user expects the most recently updated
+        // streaming bubble at the bottom of the list. The fix
+        // overlays `receivedAt` (wall-clock of the most recent
+        // `receiveMessage` call) and the sort uses it preferentially.
+
+        let key = "session-1"
+        let now = Date()
+
+        // Use real UUIDs for the run ids so they round-trip
+        // through toOpenClawChatMessage unchanged (non-UUID ids
+        // are mapped to a deterministic UUID by the converter,
+        // which would require a second lookup key here).
+        let runAId = UUID().uuidString
+        let runBId = UUID().uuidString
+
+        // Call order: B placeholder first, then A placeholder,
+        // then A delta. So A is the MOST RECENT receiveMessage
+        // call → A's receivedAt is the latest → A should be at
+        // the bottom.
+        //
+        // Without the `receivedAt` overlay, the sort would use
+        // `timestamp` (the run's start time, set by
+        // EventInterpreter): B's start is -5s, A's start is
+        // -30s, so A's start < B's start → A at the TOP — the
+        // bug the user reported. With the overlay, A's
+        // receivedAt is now (last call) > B's receivedAt
+        // (earlier call) → A at the BOTTOM.
+        await receiver.receiveMessage(ChatMessage(
+            id: runBId, text: "", timestamp: now.addingTimeInterval(-5),
+            role: "assistant", state: "streaming", runId: runBId, seq: 1,
+            startedAt: now.addingTimeInterval(-5), endedAt: nil,
+            livenessState: "working",
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil))
+        await receiver.receiveMessage(ChatMessage(
+            id: runAId, text: "a", timestamp: now.addingTimeInterval(-30),
+            role: "assistant", state: "streaming", runId: runAId, seq: 1,
+            startedAt: now.addingTimeInterval(-30), endedAt: nil,
+            livenessState: "working",
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil))
+        // A's delta is the LAST receiveMessage call → A's
+        // receivedAt is the latest, A is the most recent activity.
+        await receiver.receiveMessage(ChatMessage(
+            id: runAId, text: "a updated", timestamp: now.addingTimeInterval(-30),
+            role: "assistant", state: "streaming", runId: runAId, seq: 2,
+            startedAt: now.addingTimeInterval(-30), endedAt: nil,
+            livenessState: "working",
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil))
+
+        let merged = vm.chatMessages(for: key)
+        XCTAssertEqual(merged.count, 2, "two distinct runIds → 2 bubbles")
+
+        // A is the most recent receiveMessage call (B was first).
+        // A's receivedAt is later than B's → A at the bottom.
+        let aIndex = merged.firstIndex { $0.id == runAId }
+        let bIndex = merged.firstIndex { $0.id == runBId }
+        XCTAssertNotNil(aIndex, "A's bubble should be in the merged view (id=\(runAId))")
+        XCTAssertNotNil(bIndex, "B's bubble should be in the merged view (id=\(runBId))")
+        XCTAssertLessThan(bIndex!, aIndex!,
+            "B (older activity) should be ABOVE A (most recent activity). " +
+            "The most recently updated streaming bubble goes to the BOTTOM.")
+    }
 }
