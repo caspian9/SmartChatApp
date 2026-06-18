@@ -220,6 +220,29 @@ enum ChatMessageConverter {
                 base: sharedBase
             ))
         }
+        // 4. Fallthrough: no main text and no thinking block.
+        // After routing streaming bubbles through the store
+        // (id-upsert via `MessageReceiver.receiveMessage`), the
+        // lifecycle=start placeholder arrives here with
+        // `text=""` and no thinking — the previous filter
+        // dropped it, causing the view's TypingIndicatorView to
+        // never render during streaming. Emit a bubble with
+        // whatever text is available (toolCall if present, else
+        // empty for the streaming placeholder) so the bubble is
+        // visible. The view's `if message.text.isEmpty` branch
+        // renders a small empty bubble that marks the streaming
+        // position; a tool-call-only bubble keeps the inline
+        // toolCall text the user was seeing before this path
+        // was added.
+        if result.isEmpty {
+            let fallbackText = hasToolCall ? toolCallText : ""
+            result.append(ChatMessage(
+                id: msg.id.uuidString,
+                text: fallbackText,
+                role: hasToolCall ? "toolCall" : normalizedRole,
+                base: sharedBase
+            ))
+        }
         // 3. Additional thinking entries (each as a separate
         //    bubble). Emitted after the main entry when
         //    `emitThinkingFirst` is false (i.e., main was text).

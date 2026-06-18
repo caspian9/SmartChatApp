@@ -6,15 +6,28 @@ final class MessageReceiver {
     weak var viewModel: NativeChatViewModel?
     weak var store: MessageCacheStore?
 
-    /// PERSIST GATE: dispatches by `state`. Messages with
-    /// `state == "final"` are upserted into the cache; all
-    /// other (streaming) messages are attached to the VM's
-    /// `pendingBySession` (in-memory only — not persisted to
-    /// the cache). Awaiting the upsert before returning
-    /// eliminates the previous "pending cleared before upsert
-    /// completed" race — the caller clears pending only after
-    /// the upsert lands, so there is no window where the cache
-    /// has no final but pending has already been cleared.
+    /// Routes incoming messages directly to the persistent
+    /// `MessageCacheStore` via `upsert` — no in-memory pending
+    /// layer. Both streaming (state="streaming") and final
+    /// (state="final") bubbles go through the same write path;
+    /// `MessageCacheStorage.upsert` keys on `OpenClawChatMessage.id`
+    /// (= `runId` for assistant deltas, deterministic per-runId
+    /// for thinking/tool), so N streaming deltas sharing one
+    /// runId collapse to a single in-place update whose text
+    /// grows monotonically. When the lifecycle=end final
+    /// arrives with the same runId, the upsert replaces the
+    /// streaming placeholder with the final version (state=
+    /// "final", full text).
+    ///
+    /// Why not gate by state (the old "persist gate"): the
+    /// streaming placeholder and the final share the same
+    /// id, so the gate's "ephemeral vs persistent" split was
+    /// unnecessary indirection. It also caused "bubbles
+    /// disappear on completion" because the lifecycle=end
+    /// path nixed the entire pending list (including any
+    /// other in-flight runs). Routing everything through the
+    /// store with id-upsert makes the lifecycle=end transition
+    /// a natural in-place replacement, not a nuke-and-rebuild.
     func receiveMessage(_ message: ChatMessage) async {
         guard let store = store else { return }
         guard let sessionKey = viewModel?.selectedSession?.key else { return }
@@ -24,12 +37,10 @@ final class MessageReceiver {
             return
         }
 
-        // 2. PERSIST GATE
-        if message.state == "final" {
-            await store.upsert([openclaw], for: sessionKey)
-        } else {
-            viewModel?.appendPending(message, for: sessionKey)
-        }
+        // 2. Upsert. Same code path for streaming and final;
+        // the store keys on id (runId-derived), so deltas
+        // collapse and final replaces placeholder in place.
+        await store.upsert([openclaw], for: sessionKey)
 
         // 3. Trigger scrollRequest
         let currentToken = viewModel?.scrollRequest.token ?? 0
@@ -41,7 +52,9 @@ final class MessageReceiver {
         )
 
         // 4. Mark final messages as user-expanded so the bubble
-        // opens to its full content by default.
+        // opens to its full content by default. Streaming
+        // bubbles (state != "final") keep their default
+        // collapse state.
         if message.state == "final" {
             CollapseStateCache.shared.setExpanded(message.id, true)
         }
