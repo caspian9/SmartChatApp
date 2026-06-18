@@ -46,20 +46,4 @@ final class MessageReceiver {
             CollapseStateCache.shared.setExpanded(message.id, true)
         }
     }
-
-    func appendNewMessages(_ newMessages: [ChatMessage]) async {
-        guard let store = store else { return }
-        guard let sessionKey = viewModel?.selectedSession?.key else { return }
-        let openclawMessages = newMessages.compactMap {
-            ChatMessageConverter.toOpenClawChatMessage(from: $0)
-        }
-        // Bulk insert path. `await` lets the caller sequence the
-        // append to completion before continuing.
-        await store.append(openclawMessages, for: sessionKey)
-        let currentToken = viewModel?.scrollRequest.token ?? 0
-        viewModel?.scrollRequest = NativeChatScrollRequest(
-            token: currentToken &+ 1,
-            kind: .newMessage
-        )
-    }
 }
