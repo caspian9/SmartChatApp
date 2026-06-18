@@ -190,8 +190,36 @@ final class NativeChatViewModel {
     /// with identical `startedAt` (a stable-order regression
     /// risk). The view's `messages` computed property is the
     /// sole caller.
+    ///
+    /// @Observable tracking: the SwiftUI Observation framework
+    /// only tracks *direct* property accesses inside the body.
+    /// Reading `store.messagesBySession[sessionKey]` through this
+    /// method body would NOT register tracking on the property
+    /// itself — only on whatever the method body reads first,
+    /// which is `store.version`. That works today because every
+    /// write path bumps `version` via `setMessages`, but it's
+    /// fragile: a future writer that mutated `messagesBySession`
+    /// without bumping `version` would silently miss the
+    /// invalidation. The c0f1f8e fix (the original branch's
+    /// direct-property-access pattern) addressed this; it was
+    /// later reverted by b731a91 in favor of the conversion cache.
+    ///
+    /// The fix is to ALWAYS read `store.messagesBySession[sessionKey]`
+    /// at the top of this method — the read registers tracking
+    /// on the @Observable property, and the conversion cache
+    /// short-circuits the (potentially expensive) flatMap over
+    /// the array. The cost is one dict lookup per call (vs. zero
+    /// before, on cache hits); the benefit is robust tracking
+    /// that doesn't depend on a "version always tracks content"
+    /// invariant maintained by every future writer.
     func chatMessages(for sessionKey: String) -> [ChatMessage] {
         let version = store.version
+        // ALAWYS read the @Observable messagesBySession[sessionKey]
+        // — this is the only line that registers tracking on the
+        // actual data property. The dict lookup result is
+        // intentionally unused in the cache-hit path; see the
+        // method doc for the rationale.
+        let _ = store.messagesBySession[sessionKey]
         let cached: [ChatMessage]
         if let hit = chatMessagesBySession[sessionKey],
            chatMessagesCachedVersionBySession[sessionKey] == version {
