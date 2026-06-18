@@ -31,21 +31,21 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         vm = nil
     }
 
-    func test_streamingMessage_appendsToPending_notStore() async throws {
-        // PERSIST GATE: state="streaming" → VM's pendingBySession;
-        // does NOT enter the persistent cache. The store stays empty.
+    func test_streamingMessage_appendsToStore() async throws {
+        // No persist gate: state="streaming" → upsert into the
+        // store directly. The streaming placeholder is visible
+        // to both the store AND the merged view (no separate
+        // pending tier). The id-based replace (see test below)
+        // handles the streaming→final transition in place.
         let key = "session-1"
         let chat = makeChat(text: "delta", state: "streaming")
         await receiver.receiveMessage(chat)
 
-        // Give 200ms for the persist gate to complete (the streaming
-        // branch itself is synchronous, but the await is still
-        // crossed).
-
         let messages = store.messages(for: key, since: nil)
-        XCTAssertEqual(messages.count, 0, "PERSIST GATE: streaming delta must NOT enter the persistent cache")
-        // The streaming message is visible in the merged view
-        // (pending overlay).
+        XCTAssertEqual(messages.count, 1, "streaming delta enters the store directly (no persist gate)")
+        XCTAssertEqual(messages.first?.content.first?.text, "delta")
+        // The merged view sees the same entry (read straight from
+        // the store — no pending overlay).
         let merged = vm.chatMessages(for: key)
         XCTAssertEqual(merged.count, 1)
         XCTAssertEqual(merged.first?.text, "delta")
@@ -53,34 +53,33 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
     }
 
     func test_finalMessage_appendsToStore() async throws {
-        // PERSIST GATE: state="final" → upsert into the cache.
+        // state="final" → upsert into the cache (same path as
+        // streaming — no gate).
         let key = "session-1"
         let chat = makeChat(text: "done", state: "final")
         await receiver.receiveMessage(chat)
 
-
         let messages = store.messages(for: key, since: nil)
-        XCTAssertEqual(messages.count, 1, "final message must enter the persistent cache")
+        XCTAssertEqual(messages.count, 1, "final message enters the persistent cache")
         XCTAssertEqual(messages.first?.content.first?.text, "done")
     }
 
-    func test_streamingThenFinal_storesOnlyFinal() async throws {
-        // PERSIST GATE: streaming → pending, final → cache, dedup
-        // by id. Multiple streaming deltas with the same runId
-        // replace each other by id in pending; the final lands in
-        // the cache and pending is cleared.
+    func test_streamingThenFinal_storesOnlyFinal_viaIdReplace() async throws {
+        // The id-based upsert is the key behavior: streaming and
+        // final share the same `id=runId`, so the second
+        // receiveMessage call replaces the first in place. After
+        // 2 streaming deltas + 1 final (all sharing runId), the
+        // store has exactly 1 entry — the final. No clearPending
+        // call needed (and indeed no longer exists — removed
+        // when the persist gate collapsed).
         let key = "session-1"
         let runId = "f1e2d3c4-b5a6-7890-1234-56789abcdef0"
         await receiver.receiveMessage(makeChat(id: runId, text: "", state: "streaming"))
         await receiver.receiveMessage(makeChat(id: runId, text: "ha", state: "streaming"))
         await receiver.receiveMessage(makeChat(id: runId, text: "hello there", state: "final"))
-        // Simulate the clearPending call that EventInterpreter
-        // makes after lifecycle=end.
-        vm.clearPending(for: key)
-
 
         let messages = store.messages(for: key, since: nil)
-        XCTAssertEqual(messages.count, 1, "store has only the final entry")
+        XCTAssertEqual(messages.count, 1, "store has only the final entry (streaming placeholders replaced in place by id)")
         XCTAssertEqual(messages.first?.content.first?.text, "hello there")
         // The merged view also contains only the final entry.
         let merged = vm.chatMessages(for: key)

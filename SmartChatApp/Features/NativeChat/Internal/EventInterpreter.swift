@@ -243,14 +243,15 @@ final class EventInterpreter {
                         isFresh: true
                     )
                     await viewModel?.receiveMessage(message)
-                    // PERSIST GATE companion: the final message has
-                    // been upserted into the cache, so any in-flight
-                    // streaming deltas (now obsolete) must be cleared
-                    // to avoid the view stacking them on top of the
-                    // cached final. Awaiting the upsert above before
-                    // clearing pending eliminates the
-                    // "pending cleared before upsert landed" race.
-                    viewModel?.clearPending(for: sessionKey)
+                    // Streaming bubbles (the lifecycle=start placeholder
+                    // and all deltas) share the same `id=runId` as
+                    // this final message, so the receiveMessage
+                    // upsert above has already replaced them in place
+                    // inside `MessageCacheStore`. No explicit
+                    // "clear pending" call is needed — and in fact
+                    // would be harmful, since a session with multiple
+                    // in-flight runs (nested tool call, etc.) would
+                    // have those other runs' pending entries nuked.
                     // Cleanup: drop the per-run accumulators. Holder
                     // is released below — `MarkdownStreamManager.release`
                     // would have been the right place to also nil the

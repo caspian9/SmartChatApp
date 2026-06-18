@@ -22,13 +22,16 @@ final class ChatMessageConverterTests: XCTestCase {
         XCTAssertEqual(chats[0].id, msg.id.uuidString)
     }
 
-    func testToChatMessage_emptyText_returnsEmpty() {
-        // Empty content (no text, no thinking) returns an empty
-        // array (not nil). Callers (e.g. `vm.chatMessages(for:)`) skip
-        // empty arrays naturally. The previous "nil for empty"
-        // contract was tied to the singular `ChatMessage?` return
-        // type; with the current `[ChatMessage]` return, "no
-        // displayable content" means an empty array.
+    func testToChatMessage_emptyText_returnsOneBubble() {
+        // Empty content (no text, no thinking) used to return an
+        // empty array. After routing streaming bubbles through
+        // the store (id-upsert via
+        // MessageReceiver.receiveMessage), the
+        // lifecycle=start placeholder arrives here with
+        // text="" and no thinking — dropping it would make the
+        // view's TypingIndicatorView never render during
+        // streaming. Now we emit an empty-text bubble with
+        // role=assistant so the placeholder is visible.
         let content = [OpenClawChatMessageContent(
             type: "text", text: "", thinking: nil, thinkingSignature: nil,
             mimeType: nil, fileName: nil, content: nil)]
@@ -37,7 +40,9 @@ final class ChatMessageConverterTests: XCTestCase {
             timestamp: 0, toolCallId: nil, toolName: nil,
             usage: nil, stopReason: nil, errorMessage: nil)
         let chats = ChatMessageConverter.toChatMessage(from: msg)
-        XCTAssertTrue(chats.isEmpty, "empty text + no thinking → empty array (caller skips)")
+        XCTAssertEqual(chats.count, 1, "empty text + no thinking → 1 placeholder bubble (was: empty array)")
+        XCTAssertEqual(chats.first?.text, "")
+        XCTAssertEqual(chats.first?.role, "assistant")
     }
 
     func testToChatMessage_thinkingOnly_roleIsThinking() {
@@ -411,13 +416,17 @@ final class ChatMessageConverterTests: XCTestCase {
                        "reader always defaults state to 'final' for history messages — streaming state is owned by EventInterpreter")
     }
 
-    func testToChatMessage_emptyTextFinal_isDropped() {
-        // A historical message with empty text and no thinking block
-        // produces an empty ChatMessage array. The view filters
-        // empty arrays the same way (no bubbles rendered). State
-        // arg omitted — the reader ignores it because the SDK
-        // doesn't carry `state`; history messages always default
-        // to "final" (see testToChatMessage_oldPayloadWithoutMetadata_decodesNil).
+    func testToChatMessage_emptyText_keepsPlaceholder() {
+        // Empty text + no thinking previously dropped the bubble
+        // entirely. After routing streaming bubbles through the
+        // store (id-upsert via MessageReceiver.receiveMessage),
+        // the lifecycle=start placeholder arrives here with
+        // text="" and no thinking — dropping it would make the
+        // view's TypingIndicatorView never render during
+        // streaming. Now we emit an empty-text bubble with
+        // role=assistant so the placeholder is visible. The
+        // view's `if message.text.isEmpty` branch renders an
+        // empty bubble that marks the streaming position.
         let openclaw = OpenClawChatMessage(
             id: UUID(), role: "assistant",
             content: [OpenClawChatMessageContent(
@@ -426,6 +435,8 @@ final class ChatMessageConverterTests: XCTestCase {
             timestamp: 1_700_000_000_000, toolCallId: nil, toolName: nil,
             usage: nil, stopReason: nil, errorMessage: nil)
         let chats = ChatMessageConverter.toChatMessage(from: openclaw)
-        XCTAssertTrue(chats.isEmpty, "empty text + no thinking → empty array (caller skips)")
+        XCTAssertEqual(chats.count, 1, "empty text + no thinking → 1 placeholder bubble (was: dropped)")
+        XCTAssertEqual(chats.first?.text, "")
+        XCTAssertEqual(chats.first?.role, "assistant")
     }
 }
