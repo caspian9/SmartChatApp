@@ -287,7 +287,33 @@ final class NativeChatViewModel {
         // differs. Using `seq` lets the server's actual order win.
         // Across runs (different `runId`, or `runId: nil` for
         // the user bubble), fall back to timestamp.
-        return sortForDisplay(cached)
+        let sorted = sortForDisplay(cached)
+        // Overlay the in-session streaming metadata (seq /
+        // startedAt / endedAt) captured by `recordStreamingMetadata`.
+        // Without this overlay, the view sees these fields as nil
+        // and the message footer's "#N", "HH:mm" start time, and
+        // "→ HH:mm" end time are missing during streaming.
+        return applyStreamingMetadata(sorted, for: sessionKey)
+    }
+
+    /// Overlay in-session streaming metadata (seq /
+    /// startedAt / endedAt) onto a `ChatMessage` array. The
+    /// metadata dict is populated by `MessageReceiver` BEFORE
+    /// upsert (the store can't carry these fields) and read
+    /// here. Without this, the view's footer
+    /// `Text("#\(seq)") Text(formatTime(startedAt)) Text("→ \(formatTime(endedAt))")`
+    /// would be missing for every streaming bubble.
+    private func applyStreamingMetadata(_ messages: [ChatMessage], for sessionKey: String) -> [ChatMessage] {
+        let metadata = streamingMetadataBySession[sessionKey] ?? [:]
+        if metadata.isEmpty { return messages }
+        return messages.map { msg in
+            guard let m = metadata[msg.id] else { return msg }
+            var withMeta = msg
+            withMeta.seq = m.seq ?? msg.seq
+            withMeta.startedAt = m.startedAt ?? msg.startedAt
+            withMeta.endedAt = m.endedAt ?? msg.endedAt
+            return withMeta
+        }
     }
 
     private func sortForDisplay(_ messages: [ChatMessage]) -> [ChatMessage] {
@@ -316,10 +342,12 @@ final class NativeChatViewModel {
     /// by `SessionCoordinator` before switching sessions.
     /// `store.clearMemory(for:)` clears the store's in-memory
     /// copy; this method clears the VM's own conversion caches
-    /// (no more pending tier — see `MessageReceiver`).
+    /// and the streaming-metadata overlay cache (no more
+    /// pending tier — see `MessageReceiver`).
     func clearMemory(for sessionKey: String) {
         chatMessagesBySession[sessionKey] = nil
         chatMessagesCachedVersionBySession[sessionKey] = nil
+        streamingMetadataBySession[sessionKey] = nil
     }
 
     /// Drops the cached `ChatMessage` array for `sessionKey` so
@@ -328,6 +356,69 @@ final class NativeChatViewModel {
     /// external callers — the version-based cache invalidates
     /// automatically on any `setMessages` write in the store.
     func invalidateChatMessagesCache(for sessionKey: String) {
+        chatMessagesBySession[sessionKey] = nil
+        chatMessagesCachedVersionBySession[sessionKey] = nil
+    }
+
+    // MARK: - Streaming metadata overlay
+
+    /// Captured streaming metadata (`seq` / `startedAt` /
+    /// `endedAt`) keyed by session then message id. The SDK's
+    /// `OpenClawChatMessage` doesn't carry these fields — its
+    /// `CodingKeys` omits them and the writer at
+    /// `ChatMessageConverter.toOpenClawChatMessage` drops them
+    /// because the SDK init can't accept them. The store
+    /// round-trip therefore silently nils them on read.
+    /// `MessageReceiver` captures them here BEFORE upsert;
+    /// `chatMessages(for:)` overlays them onto the converted
+    /// `ChatMessage` array on read. In-memory only (no
+    /// persistence) — after app restart the messages are
+    /// historical and the view shows them without the
+    /// seq/start/end footer anyway.
+    struct StreamingMetadata {
+        let seq: Int?
+        let startedAt: Date?
+        let endedAt: Date?
+    }
+
+    /// In-memory overlay for `seq` / `startedAt` / `endedAt`.
+    @ObservationIgnored
+    private var streamingMetadataBySession: [String: [String: StreamingMetadata]] = [:]
+
+    /// Record `seq`/`startedAt`/`endedAt` from an incoming
+    /// message so the view can render them after the store
+    /// round-trip drops them. Called by `MessageReceiver`
+    /// BEFORE the `store.upsert` (the message retains the
+    /// metadata at the call site; the store receives the
+    /// SDK-shaped message without it).
+    func recordStreamingMetadata(for message: ChatMessage) {
+        guard let sessionKey = selectedSession?.key else { return }
+        // The overlay key must match what `chatMessages(for:)`
+        // sees on read — the post-conversion UUID string. A
+        // streaming placeholder uses `id: runId` (a non-UUID
+        // string like "r-meta-1"); `toOpenClawChatMessage`
+        // maps that to a deterministic UUID via
+        // `ChatMessageConverter.deterministicUUID(from:)`.
+        // `toChatMessage` reads it back as the UUID string.
+        // Storing metadata under the raw runId would miss every
+        // lookup; normalize to the deterministic UUID here.
+        let normalizedId: String
+        if UUID(uuidString: message.id) != nil {
+            normalizedId = message.id
+        } else {
+            normalizedId = ChatMessageConverter.deterministicUUID(from: message.id).uuidString
+        }
+        let metadata = StreamingMetadata(
+            seq: message.seq,
+            startedAt: message.startedAt,
+            endedAt: message.endedAt
+        )
+        var perSession = streamingMetadataBySession[sessionKey] ?? [:]
+        perSession[normalizedId] = metadata
+        streamingMetadataBySession[sessionKey] = perSession
+        // The conversion cache (chatMessagesBySession) holds
+        // ChatMessages WITHOUT the metadata; invalidate it so
+        // the next read re-converts + re-overlays.
         chatMessagesBySession[sessionKey] = nil
         chatMessagesCachedVersionBySession[sessionKey] = nil
     }
