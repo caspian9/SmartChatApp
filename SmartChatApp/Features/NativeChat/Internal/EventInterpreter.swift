@@ -65,6 +65,29 @@ final class EventInterpreter {
     /// text path. Cleared on `lifecycle=end`.
     private var accumulatedThinkingTextByRun: [String: String] = [:]
 
+    /// runIds whose `lifecycle=end` has already been processed for
+    /// the current session. The transport (or upstream server) can
+    /// re-deliver the same `lifecycle=end` event multiple times
+    /// for the same runId (same payload, same seq). Without
+    /// idempotency, the 2nd arrival sees
+    /// `accumulatedAssistantTextByRun[runId] == nil` (the 1st
+    /// cleared it after `await viewModel?.receiveMessage` returned)
+    /// AND `MarkdownStreamManager.currentText == ""` (the 1st's
+    /// `end()` call drained the buffer), so it falls through to
+    /// `effectiveFullText = fullText = ""` and `store.upsert`
+    /// overwrites the bubble's `text` with the empty string —
+    /// silently wiping the streaming response.
+    /// Symptom (reproduced 2026-06-18 08:29:30 on device):
+    ///   `bubbleExists=true storedTextLen=30` after the assistant
+    ///   delta, then 3 `agent lifecycle end` lines fire for the
+    ///   same runId; the 3rd shows `accumulated len: -1,
+    ///   effective: 0` and the view renders an empty bubble with
+    ///   the lifecycle=end footer ("#17 13:52 -> 13:52") but no
+    ///   body. Tracking processed runIds and short-circuiting the
+    ///   2nd/3rd arrival keeps the bubble intact.
+    @ObservationIgnored
+    private var processedLifecycleEndByRun: Set<String> = []
+
     func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String) async {
         switch event {
         case .agent(let payload):
@@ -141,6 +164,19 @@ final class EventInterpreter {
                     // only the actual lifecycle end reaches here, so the run-level
                     // state (tokens, endedAt, setSending(false)) is correctly tied
                     // to the real terminal signal.
+                    // Idempotency guard: the upstream transport can re-deliver the
+                    // same `lifecycle=end` event for a runId that's already been
+                    // processed (e.g. WebSocket retransmit). The 2nd arrival would
+                    // see an empty accumulator + an empty
+                    // `MarkdownStreamManager.currentText` (both drained by the
+                    // 1st), and `store.upsert` would overwrite the bubble's text
+                    // with `""`. Skip silently — the 1st processing has already
+                    // written the correct final state. See the comment on
+                    // `processedLifecycleEndByRun` for the full repro.
+                    if processedLifecycleEndByRun.contains(runId) {
+                        AppLogger.log("agent lifecycle end - SKIP (already processed): runId: \(runId)", category: .nativeChat, level: .debug)
+                        return
+                    }
                     AppLogger.log("agent lifecycle end - runId: \(runId), data keys: \(data.keys.map { $0 })", category: .nativeChat)
                     var inputTokens: Int?
                     var outputTokens: Int?
@@ -260,6 +296,13 @@ final class EventInterpreter {
                     accumulatedAssistantTextByRun.removeValue(forKey: runId)
                     assistantStartedAtByRun.removeValue(forKey: runId)
                     accumulatedThinkingTextByRun.removeValue(forKey: runId)
+                    // Mark the runId as processed BEFORE returning so any
+                    // racing re-delivery of the same `lifecycle=end` event
+                    // short-circuits at the top of this branch. Inserting
+                    // after the cleanup also keeps the set's lifetime
+                    // aligned with the per-run accumulators above — they're
+                    // all torn down together at the natural end of the run.
+                    processedLifecycleEndByRun.insert(runId)
                     // Holder no longer needed — SwiftUI flips to the static
                     // MarkdownCardView once state becomes "final", so the streaming
                     // view is dismantled. Release to bound memory across many turns.
@@ -374,9 +417,18 @@ final class EventInterpreter {
                 // but the view doesn't, the problem is in the
                 // view's read path; if this log shows the bubble
                 // ISN'T there, the upsert is being dropped.
-                let postUpsert = viewModel?.store.messages(for: message.runId ?? "?", since: nil) ?? []
+                //
+                // IMPORTANT: `MessageCacheStore.messages(for:)` keys on
+                // SESSION (not runId) — looking up by the runId
+                // returns an empty array even when the bubble is
+                // correctly stored, which is the bug the first version
+                // of this log shipped. Use the VM's selectedSession
+                // key (the same key `MessageReceiver` just upserted
+                // under) for an accurate post-upsert probe.
+                let postSessionKey = viewModel?.selectedSession?.key ?? "?"
+                let postUpsert = viewModel?.store.messages(for: postSessionKey, since: nil) ?? []
                 let postForOurId = postUpsert.first(where: { $0.id.uuidString == runId })
-                AppLogger.log("agent assistant delta - post-upsert in store: bubbleExists=\(postForOurId != nil) storedTextLen=\(postForOurId?.content.first?.text?.count ?? -1) storedTextPreview=\"\(String((postForOurId?.content.first?.text ?? "").prefix(40)))\"", category: .nativeChat)
+                AppLogger.log("agent assistant delta - post-upsert in store: sessionKey=\(String(postSessionKey.prefix(20))) bubbleExists=\(postForOurId != nil) storedTextLen=\(postForOurId?.content.first?.text?.count ?? -1) storedTextPreview=\"\(String((postForOurId?.content.first?.text ?? "").prefix(40)))\"", category: .nativeChat)
             case "thinking":
                 // Thinking deltas are emitted as a separate stream from the
                 // assistant text — they don't share an id with the assistant

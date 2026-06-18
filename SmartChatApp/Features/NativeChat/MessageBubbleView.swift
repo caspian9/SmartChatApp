@@ -210,13 +210,33 @@ struct MessageBubbleView: View {
     private var messageText: some View {
         VStack(alignment: .leading, spacing: 4) {
             if isAssistantStreaming {
-                if #available(iOS 15.0, *) {
-                    StreamingMarkdownCardView(messageId: message.id, content: message.text)
-                } else {
-                    Text(message.text)
-                        .font(.body)
-                        .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
-                }
+                // Streaming: render the partial text as raw characters.
+                // Markdown formatting is intentionally NOT applied here —
+                // the prior `StreamingMarkdownCardView` path routed through
+                // `MarkdownViewTextKit` (MarkdownDisplayView) with
+                // `typewriterTextMode = .append`, which appends the new
+                // characters but does not re-parse the markdown AST on
+                // every incremental push. Net effect: the user saw
+                // `**condition** clear` with the `**` markers visible
+                // (raw text), and the markdown only got applied on the
+                // `state == "final"` view swap (`MarkdownCardView`,
+                // which sets `view.markdown = markdown` for a one-shot
+                // full render). So the streaming view's nominal
+                // "markdown formatting" was never visible during
+                // streaming — and exit/re-enter (forcing a fresh
+                // MarkdownCardView) is what the user relied on to see
+                // formatted text. Making it explicit: during streaming
+                // we render raw text via SwiftUI `Text`; on the
+                // streaming→final transition the view swaps to
+                // `MarkdownCardView` for the one-shot full markdown
+                // parse. This removes the third-party streaming
+                // markdown path (and its TextKit-based height tracking)
+                // from the streaming hot loop, and makes the raw→formatted
+                // transition an explicit design point rather than a
+                // library accident.
+                Text(message.text)
+                    .font(.body)
+                    .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
             } else {
                 let shouldMd = shouldRenderMarkdown
                 // Build 7526: collapsed markdown renders as plain
