@@ -287,13 +287,17 @@ final class NativeChatViewModel {
         // differs. Using `seq` lets the server's actual order win.
         // Across runs (different `runId`, or `runId: nil` for
         // the user bubble), fall back to timestamp.
-        let sorted = sortForDisplay(cached)
         // Overlay the in-session streaming metadata (seq /
-        // startedAt / endedAt) captured by `recordStreamingMetadata`.
-        // Without this overlay, the view sees these fields as nil
-        // and the message footer's "#N", "HH:mm" start time, and
-        // "→ HH:mm" end time are missing during streaming.
-        return applyStreamingMetadata(sorted, for: sessionKey)
+        // startedAt / endedAt / receivedAt) BEFORE sorting, so
+        // the sort can use the overlaid `receivedAt` (the
+        // wall-clock of the most recent `receiveMessage` call
+        // for this id) as the cross-run sort key. Without this
+        // ordering, the sort would use the persisted
+        // `timestamp` (the run's start time), which puts the
+        // most recently active streaming bubble at the TOP —
+        // the user-reported bug.
+        let withMeta = applyStreamingMetadata(cached, for: sessionKey)
+        return sortForDisplay(withMeta)
     }
 
     /// Overlay in-session streaming metadata (seq /
@@ -312,6 +316,7 @@ final class NativeChatViewModel {
             withMeta.seq = m.seq ?? msg.seq
             withMeta.startedAt = m.startedAt ?? msg.startedAt
             withMeta.endedAt = m.endedAt ?? msg.endedAt
+            withMeta.receivedAt = m.receivedAt
             return withMeta
         }
     }
@@ -320,16 +325,32 @@ final class NativeChatViewModel {
         return messages.sorted { a, b in
             // Same non-nil runId → seq (server's monotonic order).
             // Missing `seq` falls back to Int.max (i.e., sort last
-            // among the run's events), then to timestamp as the
-            // final tie-breaker.
+            // among the run's events), then to `receivedAt ?? timestamp`
+            // as the final tie-breaker. `receivedAt` (set by
+            // `recordStreamingMetadata` from `Date()`) is the
+            // wall-clock time of the most recent
+            // `receiveMessage` call for this id — using it as
+            // the tie-breaker puts the most recently active
+            // bubble at the bottom within a run.
             if let runA = a.runId, let runB = b.runId, runA == runB {
                 let seqA = a.seq ?? Int.max
                 let seqB = b.seq ?? Int.max
                 if seqA != seqB { return seqA < seqB }
-                if a.timestamp != b.timestamp { return a.timestamp < b.timestamp }
+                let timeA = a.receivedAt ?? a.timestamp
+                let timeB = b.receivedAt ?? b.timestamp
+                if timeA != timeB { return timeA < timeB }
             }
-            // Different runs (or either has nil runId) → timestamp
-            return a.timestamp < b.timestamp
+            // Different runs (or either has nil runId) → use
+            // `receivedAt` for in-session streaming bubbles
+            // (the user expects the most recently updated
+            // streaming bubble at the bottom of the list) and
+            // fall back to `timestamp` for historical bubbles
+            // (no overlay, defaults to the persisted value,
+            // which is the run's start time as supplied by
+            // chat.history).
+            let timeA = a.receivedAt ?? a.timestamp
+            let timeB = b.receivedAt ?? b.timestamp
+            return timeA < timeB
         }
     }
 
@@ -379,6 +400,14 @@ final class NativeChatViewModel {
         let seq: Int?
         let startedAt: Date?
         let endedAt: Date?
+        /// Wall-clock time of the last `MessageReceiver.receiveMessage`
+        /// call for this id. Used by `sortForDisplay` to put the
+        /// most recently updated streaming bubble at the bottom
+        /// across runIds (the persisted `timestamp` is the run's
+        /// start time, which puts the FINAL of an older run BELOW
+        /// the placeholder of a newer run — opposite of the user's
+        /// "latest update at the bottom" expectation).
+        let receivedAt: Date
     }
 
     /// In-memory overlay for `seq` / `startedAt` / `endedAt`.
@@ -411,7 +440,8 @@ final class NativeChatViewModel {
         let metadata = StreamingMetadata(
             seq: message.seq,
             startedAt: message.startedAt,
-            endedAt: message.endedAt
+            endedAt: message.endedAt,
+            receivedAt: Date()
         )
         var perSession = streamingMetadataBySession[sessionKey] ?? [:]
         perSession[normalizedId] = metadata

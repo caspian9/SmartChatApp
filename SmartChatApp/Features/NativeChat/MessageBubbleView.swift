@@ -467,6 +467,18 @@ struct ChatMessage: Identifiable, Equatable {
     /// by the user or streamed from the agent). False for messages loaded
     /// from history.
     var isFresh: Bool = false
+    /// Wall-clock time of the LAST `MessageReceiver.receiveMessage`
+    /// call for this id. Used by the view-layer sort to put the
+    /// most recently updated streaming bubble at the bottom (the
+    /// persisted `timestamp` is the run's start time, not the latest
+    /// activity time, so without this field a fresh final from an
+    /// older run would sort BELOW a still-streaming placeholder from
+    /// a newer run). In-memory only — defaults nil; the VM's
+    /// streaming-metadata overlay populates it for in-session
+    /// bubbles. Historical bubbles (loaded from `chat.history` on
+    /// session open) have no overlay, so the sort falls back to
+    /// `timestamp`.
+    var receivedAt: Date? = nil
     /// User-driven expand state. Lives on the message struct so the
     /// parent view's `messages` computed property can merge it from
     /// `CollapseStateCache.expandedMessageIds` per render. `nil` until
