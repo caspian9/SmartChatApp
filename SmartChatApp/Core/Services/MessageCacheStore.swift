@@ -156,18 +156,51 @@ public final class MessageCacheStore {
     /// Authoritative-replace used by `loadHistory`. Wipes every
     /// existing entry in the session and replaces with `messages`.
     /// The server's response is treated as ground truth: streaming
-    /// residue from a prior run, stale entries from prior app
-    /// launches, and any other client-only entries are dropped.
-    /// After the storage write, refreshes `messagesBySession` and
-    /// resets `lastSeenTimestamp` to the new max (or nil if the
-    /// server returned empty). Hydration flag stays set so future
-    /// appends don't re-fetch from disk.
+    /// residue from a prior run (id=client-runId, partial text),
+    /// stale entries from prior app launches, and any other
+    /// client-only entries are dropped.
     ///
-    /// Empty payloads are short-circuited (no write, no `messagesBySession`
-    /// change) — see `MessageCacheStorage.replaceForSession` for the
-    /// weak-network rationale. Returning early here too means the
-    /// `@Observable` setter never fires on an empty update, so the
-    /// view doesn't churn on a no-op.
+    /// Unlike `append` / `upsert`, this path is NOT debounced —
+    /// the storage's `replaceForSession` writes synchronously to
+    /// UserDefaults. That's intentional: this is a "wipe + replace"
+    /// operation, and the caller (`HistoryLoader.fetchAndMergeFromNetwork`)
+    /// wants the on-disk state to be the new truth immediately,
+    /// not 100ms later. The next `append` / `upsert` for this
+    /// session WILL coalesce with the immediate-prior
+    /// `replaceForSession` via the normal debounce window, but
+    /// that's fine — the wipe has already landed.
+    ///
+    /// Streaming residue bug fix: the previous `append`-based
+    /// implementation used content-dedup which missed same-content
+    /// different-id entries (the streaming path's synthesized
+    /// runId vs. the server's UUID for the same final message).
+    /// `replaceForSession` wipes the residue entirely.
+    ///
+    /// After the storage write, refreshes `messagesBySession`
+    /// and resets `lastSeenTimestamp` to the new max. The
+    /// hydration flag stays set — the session is still "live",
+    /// just with new content.
+    ///
+    /// Empty payloads are short-circuited at the storage layer
+    /// (no write, no `messagesBySession` change) — see
+    /// `MessageCacheStorage.replaceForSession` for the
+    /// weak-network rationale.
+    public func replaceForSession(_ messages: [OpenClawChatMessage], for sessionKey: String) async {
+        if !isHydrated(for: sessionKey) {
+            let loaded = storage.loadSync(for: sessionKey)
+            setMessages(loaded, for: sessionKey)
+            hydratedSessions.insert(sessionKey)
+        }
+        let updated = await storage.replaceForSession(messages, for: sessionKey)
+        setMessages(updated, for: sessionKey)
+        // Update the water-line. Storage's empty-payload guard
+        // returns the existing array unchanged, so an empty
+        // server response doesn't shift `lastSeen` backwards.
+        if let newMax = updated.compactMap(\.timestamp).max() {
+            lastSeenTimestampBySession[sessionKey] = newMax
+        }
+    }
+
     public func clear(for sessionKey: String) async {
         await storage.clear(for: sessionKey)
         setMessages([], for: sessionKey)

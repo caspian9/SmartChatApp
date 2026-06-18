@@ -346,23 +346,18 @@ final class HistoryLoader {
                     "[\(taskIdStr)] fetchAndMergeFromNetwork: new content (newMax=\(newMaxTimestamp ?? -1)), scrollKind=\(scrollKind)",
                     category: .nativeChat)
                 // Write the server's authoritative response to the
-                // store via `append` (the only public write API on
-                // `MessageCacheStore`). `append` dedups by content
-                // (10s timestamp bucket) so same-content re-fetches
-                // are no-ops.
-                //
-                // KNOWN LIMITATION: a streaming residue from a
-                // previous run (id derived from a client-generated
-                // `runId`, partial text) has a DIFFERENT id from
-                // the server-assigned id for the same content, so
-                // the content-dedup misses and both can co-exist in
-                // the view for the duration of the session. A
-                // `replaceForSession` method exists on the storage
-                // protocol/actor (and would wipe + replace the
-                // whole array, clearing the residue) but
-                // `MessageCacheStore` does not expose it yet —
-                // wiring that through is a follow-up.
-                await store?.append(openclawMessages, for: sessionKey)
+                // store via `replaceForSession` (wipes + writes —
+                // clears any streaming residue from a previous
+                // run). This is the fix for the "both bubbles
+                // co-exist" bug: the previous `append`-based
+                // path used content-dedup which missed same-content
+                // different-id entries (the streaming path's
+                // synthesized runId vs. the server's UUID for the
+                // same final message). The storage's
+                // `replaceForSession` short-circuits on empty
+                // payloads (weak-network guard) so a successful
+                // decode of `[]` doesn't wipe the cache.
+                await store?.replaceForSession(openclawMessages, for: sessionKey)
                 // The previous implementation only honored signal 1, so a
                 // same-session pull-to-refresh left userHasScrolled=true
                 // (set by the pull gesture's scroll phase) gating the
