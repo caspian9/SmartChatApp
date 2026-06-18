@@ -396,7 +396,7 @@ enum ChatMessageConverter {
     /// string → parsed via `UUID(uuidString:)`. Same input always
     /// produces the same output; two distinct inputs colliding in
     /// the first 16 SHA256 bytes is cryptographically negligible.
-    private static func deterministicUUID(from string: String) -> UUID {
+    static func deterministicUUID(from string: String) -> UUID {
         let hash = SHA256.hash(data: Data(string.utf8))
         var bytes = [UInt8]()
         bytes.reserveCapacity(16)

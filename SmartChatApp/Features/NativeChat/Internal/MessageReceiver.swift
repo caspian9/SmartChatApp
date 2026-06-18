@@ -37,7 +37,18 @@ final class MessageReceiver {
             return
         }
 
-        // 2. Upsert. Same code path for streaming and final;
+        // 2. Capture streaming metadata BEFORE upsert. The
+        // SDK's `OpenClawChatMessage` can't carry `seq` /
+        // `startedAt` / `endedAt`, so the toOpenClawChatMessage
+        // call above drops them — they would be lost on the
+        // store round-trip and the view's footer
+        // ("#\(seq)", "HH:mm" start time, "→ HH:mm" end time)
+        // would be missing for every streaming bubble. The
+        // VM caches them in-memory and overlays on
+        // `chatMessages(for:)` read.
+        viewModel?.recordStreamingMetadata(for: message)
+
+        // 3. Upsert. Same code path for streaming and final;
         // the store keys on id (runId-derived), so deltas
         // collapse and final replaces placeholder in place.
         await store.upsert([openclaw], for: sessionKey)
