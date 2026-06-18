@@ -117,7 +117,22 @@ final class MarkdownStreamManager {
 
     func holder(for messageId: String) -> MarkdownHolder {
         if let existing = holders[messageId] {
-            existing.reset()
+            // Do NOT reset here. `holder(for:)` is called on every
+            // `StreamingMarkdownRepresentable.makeUIView` — i.e. every
+            // time SwiftUI recreates the streaming UIView (parent
+            // re-render, view-tree identity change, etc.). The previous
+            // auto-reset wiped `lastReceivedText` on each access; the
+            // next `appendCumulative` then computed a full-text suffix
+            // against an empty baseline and re-fed the entire cumulative
+            // to the TextKit view, duplicating the bubble content (the
+            // user-reported "same assistant response rendered 4x"
+            // symptom). The streaming state must persist across UIView
+            // lifecycles for the same messageId — that is the whole
+            // point of the manager's singleton-by-id shape. Callers
+            // that genuinely need to re-stream (e.g. session switch)
+            // call `releaseAll()` / `release(messageId:)`, both of
+            // which explicitly call `reset()` before removing the
+            // holder.
             return existing
         }
         let new = MarkdownHolder(messageId: messageId)

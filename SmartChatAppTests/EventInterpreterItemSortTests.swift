@@ -748,4 +748,64 @@ final class EventInterpreterItemSortTests: XCTestCase {
             messageSeq: messageSeq
         )
     }
+
+    // MARK: - lifecycle=end idempotency
+
+    /// Regression: the server (or SDK transport) re-delivers the
+    /// same `lifecycle=end` event multiple times for the same
+    /// runId (same payload, same seq — see device log from
+    /// 2026-06-18 08:29:30 with 3 `agent lifecycle end` lines
+    /// for runId 0330ED0C-1480-4F01-9AA6-EA753E5D499F).
+    ///
+    /// Without idempotency, the 1st `lifecycle=end` reads
+    /// `accumulatedAssistantTextByRun[runId]` (populated by the
+    /// prior assistant delta) and upserts text=responseText.
+    /// The 1st then clears the accumulator and drains
+    /// `MarkdownStreamManager`. The 2nd/3rd arrival see an
+    /// empty accumulator AND an empty `MarkdownStreamManager`,
+    /// fall through to `effectiveFullText = fullText = ""`,
+    /// and `store.upsert` replaces the bubble with `text=""` —
+    /// silently wiping the streaming bubble's text. The view
+    /// then renders an empty bubble with the lifecycle=end
+    /// footer ("#seq HH:mm → HH:mm") but no body.
+    ///
+    /// Fix: track runIds whose `lifecycle=end` has been
+    /// processed; skip subsequent arrivals.
+    func test_repeatedLifecycleEnd_keepsAccumulatorTextInStore() async throws {
+        let runId = "r-replay-1"
+        let responseText = "Hi! 👋 Greeting from iOS received. How can I help?"
+        // Seed the accumulator via the assistant-delta path.
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 500, text: responseText)),
+            sessionKey: "session-1")
+        // 1st lifecycle=end → bubble in store with the full text.
+        await interpreter.handleTransportEvent(
+            .agent(makeLifecycleEndEvent(runId: runId, ts: 5_000)),
+            sessionKey: "session-1")
+        // Filter by role rather than by id: ChatMessageConverter's
+        // toChatMessage rewrites the id to the deterministic UUID's
+        // uuidString, so the original runId string isn't preserved
+        // on the merged-view ChatMessage. Role-based lookup mirrors
+        // the convention used by the other tests in this file.
+        let bubble1 = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertNotNil(bubble1, "1st lifecycle=end must produce an assistant bubble in the merged view")
+        XCTAssertEqual(bubble1?.text, responseText,
+            "1st lifecycle=end must upsert the accumulator's text")
+        // 2nd + 3rd lifecycle=end (re-delivery). With the fix,
+        // these are no-ops and the bubble's text is preserved.
+        // Without the fix, the 2nd and 3rd see accumulator=nil
+        // and fullText=0, then upsert text="" — wiping the
+        // bubble. This is the user-reported "empty bubble with
+        // #17 footer HH:mm -> HH:mm" symptom.
+        await interpreter.handleTransportEvent(
+            .agent(makeLifecycleEndEvent(runId: runId, ts: 5_000)),
+            sessionKey: "session-1")
+        await interpreter.handleTransportEvent(
+            .agent(makeLifecycleEndEvent(runId: runId, ts: 5_000)),
+            sessionKey: "session-1")
+        let bubble2 = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertNotNil(bubble2, "bubble must remain in the merged view across repeated lifecycle=end")
+        XCTAssertEqual(bubble2?.text, responseText,
+            "Repeated lifecycle=end must not clobber the response text — 2nd/3rd arrival would write text=\"\" if the EventInterpreter isn't idempotent")
+    }
 }

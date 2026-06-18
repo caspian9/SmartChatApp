@@ -358,6 +358,20 @@ final class HistoryLoader {
                 // payloads (weak-network guard) so a successful
                 // decode of `[]` doesn't wipe the cache.
                 await store?.replaceForSession(openclawMessages, for: sessionKey)
+                // DIAG: confirm the post-replaceForSession state.
+                // Pairs with the agent-delta post-upsert log — together
+                // they disambiguate "stream bubble not in store
+                // (upsert was dropped)" from "stream bubble wiped
+                // by history (chat.history ran after stream)".
+                if ConfigurationManager.shared.logsNativeChat {
+                    let postHistory = await store?.messages(for: sessionKey, since: nil) ?? []
+                    let firstIds = postHistory.prefix(3)
+                        .map { String($0.id.uuidString.prefix(8)) }
+                        .joined(separator: ",")
+                    AppLogger.log(
+                        "[\(taskIdStr)] post-replaceForSession in store: bubbleCount=\(postHistory.count) firstIds=[\(firstIds)]",
+                        category: .nativeChat)
+                }
                 // The previous implementation only honored signal 1, so a
                 // same-session pull-to-refresh left userHasScrolled=true
                 // (set by the pull gesture's scroll phase) gating the
