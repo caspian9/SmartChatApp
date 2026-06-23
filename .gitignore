@@ -73,6 +73,11 @@ Carthage/Carthage.resolved
 # Auto-generated local override (NEVER commit):
 config/.local-signing.xcconfig
 config/.local-version.xcconfig
+# SmartChatApp install-remote layer (committed to repo):
+!config/RemoteBuild.mk
+!config/RemoteBuild.mk.example
+# Manual override for `make install-remote` (NEVER commit):
+config/LocalRemoteBuild.mk
 
 # macOS
 .DS_Store
