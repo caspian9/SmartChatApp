@@ -135,13 +135,13 @@ test: configure-signing
 # SSH auth is key-based. If `ssh -o BatchMode=yes` fails, run `ssh-add`
 # to load your key into the agent.
 install-remote: build-generic
-	@if [ -z "$$REMOTE_TARGET" ]; then \
+	@if [ -z "$(REMOTE_TARGET)" ]; then \
 		echo "Usage: make install-remote REMOTE_TARGET=<host-or-alias>"; \
 		echo "  Or set REMOTE_TARGET in config/RemoteBuild.mk for a per-checkout default."; \
 		echo "  CLI args override config/ values."; \
 		exit 1; \
 	fi
-	@REMOTE_TARGET='$$REMOTE_TARGET' \
-	 REMOTE_DEVICE_NAME='$$REMOTE_DEVICE_NAME' \
-	 REMOTE_APP_DIR='$$REMOTE_APP_DIR' \
+	@REMOTE_TARGET='$(REMOTE_TARGET)' \
+	 REMOTE_DEVICE_NAME='$(REMOTE_DEVICE_NAME)' \
+	 REMOTE_APP_DIR='$(REMOTE_APP_DIR)' \
 	 bash scripts/install-remote.sh
