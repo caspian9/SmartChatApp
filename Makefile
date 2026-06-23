@@ -3,7 +3,7 @@
 # avoiding the CoreDevice-vs-device-UDID mismatch between the two APIs.
 DEVICE_NAME := $(shell xcrun xcdevice list 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((x['name'] for x in d if not x.get('simulator') and x.get('available') and x.get('platform') == 'com.apple.platform.iphoneos'), ''))" 2>/dev/null)
 
-# Remote-build config. Default REMOTE_CONFIG_PATH lives in config/RemoteBuild.mk;
+# Remote-build config. Defaults live in config/RemoteBuild.mk;
 # personal override goes in config/LocalRemoteBuild.mk (gitignored). Pattern
 # parallels config/Signing.xcconfig + config/LocalSigning.xcconfig.
 include config/RemoteBuild.mk
@@ -112,10 +112,12 @@ test: configure-signing
 #
 # Usage: make install-remote REMOTE_TARGET=<host-or-alias>
 #
-# Required on the remote machine:
-#   ~/.config/smartchatapp/build-remote.conf (or whatever REMOTE_CONFIG_PATH
-#   points to) containing REMOTE_DEVICE_NAME and REMOTE_APP_DIR, one per
-#   line, KEY=VALUE format.
+# The remote machine needs `xcrun devicectl` and a paired iPhone.
+# scripts/install-remote.sh auto-detects the iPhone via
+# `xcrun devicectl list devices` (single-iPhone case). To skip
+# auto-detect — e.g. when multiple iPhones are paired — set
+# REMOTE_DEVICE_NAME in config/LocalRemoteBuild.mk (gitignored)
+# or on the command line.
 #
 # SSH auth is key-based. If `ssh -o BatchMode=yes` fails, run `ssh-add`
 # to load your key into the agent.
@@ -127,5 +129,6 @@ install-remote: build
 		exit 1; \
 	fi
 	@REMOTE_TARGET='$$REMOTE_TARGET' \
-	 REMOTE_CONFIG_PATH='$$REMOTE_CONFIG_PATH' \
+	 REMOTE_DEVICE_NAME='$$REMOTE_DEVICE_NAME' \
+	 REMOTE_APP_DIR='$$REMOTE_APP_DIR' \
 	 bash scripts/install-remote.sh

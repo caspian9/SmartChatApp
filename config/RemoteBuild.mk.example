@@ -13,9 +13,13 @@
 # REMOTE_TARGET: ssh/scp target as accepted by `ssh`/`scp`. Can be a
 # literal IP, hostname, or a ~/.ssh/config alias.
 #
-# REMOTE_CONFIG_PATH: path on the REMOTE machine (not this one) to
-# the build-remote.conf file containing REMOTE_DEVICE_NAME and
-# REMOTE_APP_DIR — see scripts/install-remote.sh for the format.
+# REMOTE_DEVICE_NAME: iPhone name as `xcrun devicectl list devices`
+# shows it. Set this if multiple iPhones are paired on REMOTE_TARGET
+# (auto-detect is ambiguous in that case).
+#
+# REMOTE_APP_DIR: scratch directory on REMOTE_TARGET for the uploaded
+# .app. Defaults to /tmp/smartchatapp-build if empty.
 
 REMOTE_TARGET      = your-host-or-alias
-REMOTE_CONFIG_PATH = ~/.config/smartchatapp/build-remote.conf
+REMOTE_DEVICE_NAME =
+REMOTE_APP_DIR     = /tmp/smartchatapp-build

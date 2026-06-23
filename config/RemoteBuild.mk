@@ -1,17 +1,22 @@
 # Defaults used by `make install-remote`. Override with
 # `config/LocalRemoteBuild.mk` (gitignored; see .gitignore) or via
-# `make REMOTE_TARGET=...` / `make REMOTE_CONFIG_PATH=...` on the
-# command line. CLI args win because both variables use `?=`.
+# `make REMOTE_TARGET=...` etc. on the command line. CLI args win
+# because all variables use `?=`.
 #
 # REMOTE_TARGET: the ssh/scp target (literal IP/hostname, or a
 # ~/.ssh/config alias). Empty by default — set it locally per
 # machine so you can run `make install-remote` with no args.
 #
-# REMOTE_CONFIG_PATH: path on the REMOTE machine (not this one) to
-# the build-remote.conf file containing REMOTE_DEVICE_NAME and
-# REMOTE_APP_DIR — see scripts/install-remote.sh for the format.
+# REMOTE_DEVICE_NAME: iPhone name as `xcrun devicectl list devices`
+# shows it. If empty, install-remote.sh auto-detects the first
+# paired device on REMOTE_TARGET via SSH (single-iPhone case).
+#
+# REMOTE_APP_DIR: scratch directory on REMOTE_TARGET for the
+# uploaded .app. Defaults to /tmp/smartchatapp-build. Override
+# locally if /tmp is non-writable or you want a different path.
 #
 # Pattern parallels config/Signing.xcconfig + config/LocalSigning.xcconfig.
 
 REMOTE_TARGET      ?=
-REMOTE_CONFIG_PATH ?= ~/.config/smartchatapp/build-remote.conf
+REMOTE_DEVICE_NAME ?=
+REMOTE_APP_DIR     ?= /tmp/smartchatapp-build

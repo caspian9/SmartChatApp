@@ -6,20 +6,20 @@
 #
 # Required env vars:
 #   REMOTE_TARGET      ssh/scp target (IP, hostname, or ~/.ssh/config alias)
-#   REMOTE_CONFIG_PATH path on the REMOTE machine to the build-remote.conf file
-#                      (default: ~/.config/smartchatapp/build-remote.conf)
-#
-# The remote file must contain (KEY=VALUE per line):
-#   REMOTE_DEVICE_NAME=<xcrun devicectl --device value>
-#   REMOTE_APP_DIR=<user-writable scratch directory>
 #
 # Optional env vars:
-#   APP_PATH     override the auto-detected .app path (smoke-test hook)
+#   REMOTE_DEVICE_NAME  iPhone name as `xcrun devicectl list devices` shows it.
+#                       If unset, auto-detects the first paired device on
+#                       REMOTE_TARGET via SSH (single-iPhone case).
+#   REMOTE_APP_DIR      scratch directory on REMOTE_TARGET for the uploaded
+#                       .app (default: /tmp/smartchatapp-build).
+#   APP_PATH            override the auto-detected .app path (smoke-test hook).
 
 set -euo pipefail
 
 REMOTE_TARGET="${REMOTE_TARGET:-}"
-REMOTE_CONFIG_PATH="${REMOTE_CONFIG_PATH:-~/.config/smartchatapp/build-remote.conf}"
+REMOTE_DEVICE_NAME="${REMOTE_DEVICE_NAME:-}"
+REMOTE_APP_DIR="${REMOTE_APP_DIR:-/tmp/smartchatapp-build}"
 APP_PATH="${APP_PATH:-}"
 
 # --- 1. Validate inputs -----------------------------------------------------
@@ -41,23 +41,47 @@ fi
 
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new)
 
-# --- 2. Read remote config --------------------------------------------------
+# --- 2. Resolve REMOTE_DEVICE_NAME / REMOTE_APP_DIR --------------------------
+#
+# REMOTE_APP_DIR: from env (LocalRemoteBuild.mk / CLI) or default.
+# REMOTE_DEVICE_NAME: from env, else auto-detect from devicectl.
 
-echo ">>> Reading $REMOTE_CONFIG_PATH on $REMOTE_TARGET ..."
+remote_app_dir="$REMOTE_APP_DIR"
 
-remote_config="$(ssh "${SSH_OPTS[@]}" "$REMOTE_TARGET" "cat '$REMOTE_CONFIG_PATH'")"
-remote_device_name="$(printf '%s\n' "$remote_config" | awk -F= '/^[[:space:]]*REMOTE_DEVICE_NAME[[:space:]]*=/{sub(/^[[:space:]]+/,"",$2); print $2; exit}')"
-remote_app_dir="$(printf '%s\n' "$remote_config"   | awk -F= '/^[[:space:]]*REMOTE_APP_DIR[[:space:]]*=/{sub(/^[[:space:]]+/,"",$2); print $2; exit}')"
+if [[ -n "$REMOTE_DEVICE_NAME" ]]; then
+  remote_device_name="$REMOTE_DEVICE_NAME"
+  echo ">>> Using REMOTE_DEVICE_NAME from local config"
+  echo "    REMOTE_DEVICE_NAME=$remote_device_name"
+else
+  echo ">>> Auto-detecting iPhone via xcrun devicectl list devices on $REMOTE_TARGET ..."
 
-if [[ -z "$remote_device_name" || -z "$remote_app_dir" ]]; then
-  echo "On $REMOTE_TARGET, create $REMOTE_CONFIG_PATH with REMOTE_DEVICE_NAME and REMOTE_APP_DIR set." >&2
-  echo "  Example:" >&2
-  echo "    REMOTE_DEVICE_NAME=iPhone" >&2
-  echo "    REMOTE_APP_DIR=/tmp/smartchatapp-build" >&2
-  exit 1
+  paired_devices="$(ssh "${SSH_OPTS[@]}" "$REMOTE_TARGET" \
+    'xcrun devicectl list devices 2>/dev/null' | awk '/available \(paired\)/')"
+
+  if [[ -z "$paired_devices" ]]; then
+    echo "❌ No paired iPhone found on $REMOTE_TARGET." >&2
+    echo "  Pair your iPhone (USB or Wi-Fi) and re-run." >&2
+    exit 1
+  fi
+
+  paired_count="$(printf '%s\n' "$paired_devices" | wc -l | tr -d ' ')"
+
+  if (( paired_count > 1 )); then
+    echo "❌ Multiple paired iPhones ($paired_count) on $REMOTE_TARGET." >&2
+    echo "  Auto-detect is ambiguous. Set REMOTE_DEVICE_NAME in" >&2
+    echo "  config/LocalRemoteBuild.mk and re-run." >&2
+    echo "" >&2
+    echo "  Available paired devices:" >&2
+    printf '%s\n' "$paired_devices" | awk '{sub(/[[:space:]]{2,}.*/,""); print "    " $0}' >&2
+    exit 1
+  fi
+
+  # devicectl output is columnar (Name | Hostname | Identifier | State | Model);
+  # the first field is the device name. Trim at the first 2+ space gap.
+  remote_device_name="$(printf '%s' "$paired_devices" | sed -E 's/[[:space:]]{2,}.*//')"
+  echo "    auto-detected: REMOTE_DEVICE_NAME=$remote_device_name"
 fi
 
-echo "    REMOTE_DEVICE_NAME=$remote_device_name"
 echo "    REMOTE_APP_DIR=$remote_app_dir"
 
 # --- 3. Ensure remote dir exists -------------------------------------------
