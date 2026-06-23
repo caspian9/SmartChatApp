@@ -41,6 +41,19 @@ build: configure-signing inject-build-timestamp
 		-destination "platform=iOS,name=$(DEVICE_NAME)" \
 		-allowProvisioningUpdates build
 
+# Like build, but builds for a generic iOS device — no locally-connected
+# iPhone required. Code signing is still enabled with -allowProvisioningUpdates
+# (Xcode downloads/creates a generic profile). Use this when the .app will
+# be installed on a remote device (e.g. `make install-remote`) or you don't
+# have a device connected to this machine. Output goes to the same
+# DerivedData path as `build`, so install-only / install-remote can pick
+# it up unchanged.
+build-generic: configure-signing inject-build-timestamp
+	xcodegen generate
+	xcodebuild -skipMacroValidation -scheme SmartChatApp \
+		-destination 'generic/platform=iOS' \
+		-allowProvisioningUpdates build
+
 # Build-system env overrides:
 #   IOS_DEVELOPMENT_TEAM  — bypass Team-ID auto-detect; pin
 #                            to a specific Apple Developer
@@ -121,7 +134,7 @@ test: configure-signing
 #
 # SSH auth is key-based. If `ssh -o BatchMode=yes` fails, run `ssh-add`
 # to load your key into the agent.
-install-remote: build
+install-remote: build-generic
 	@if [ -z "$$REMOTE_TARGET" ]; then \
 		echo "Usage: make install-remote REMOTE_TARGET=<host-or-alias>"; \
 		echo "  Or set REMOTE_TARGET in config/RemoteBuild.mk for a per-checkout default."; \
