@@ -1,12 +1,21 @@
 # Manual override template for `make install-remote`.
 #
 # 1. Copy this file:   cp config/RemoteBuild.mk.example config/LocalRemoteBuild.mk
-# 2. Edit REMOTE_CONFIG_PATH below.
+# 2. Edit the values below.
 # 3. Re-run `make install-remote`. LocalRemoteBuild.mk wins because
 #    the Makefile `include`s it after config/RemoteBuild.mk.
 #
-# REMOTE_CONFIG_PATH points to a file on the REMOTE machine (not this one)
-# containing REMOTE_DEVICE_NAME and REMOTE_APP_DIR — see scripts/install-remote.sh
-# for the format. Example: ~/.config/smartchatapp/build-remote.conf
+# Resolution order (highest first):
+#   1. Command line — `make REMOTE_TARGET=other-host install-remote`
+#   2. This file / LocalRemoteBuild.mk — committed per-checkout default
+#   3. config/RemoteBuild.mk — committed repo default (often empty)
+#
+# REMOTE_TARGET: ssh/scp target as accepted by `ssh`/`scp`. Can be a
+# literal IP, hostname, or a ~/.ssh/config alias.
+#
+# REMOTE_CONFIG_PATH: path on the REMOTE machine (not this one) to
+# the build-remote.conf file containing REMOTE_DEVICE_NAME and
+# REMOTE_APP_DIR — see scripts/install-remote.sh for the format.
 
+REMOTE_TARGET      = your-host-or-alias
 REMOTE_CONFIG_PATH = ~/.config/smartchatapp/build-remote.conf
