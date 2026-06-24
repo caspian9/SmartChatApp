@@ -3,7 +3,13 @@
 # avoiding the CoreDevice-vs-device-UDID mismatch between the two APIs.
 DEVICE_NAME := $(shell xcrun xcdevice list 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((x['name'] for x in d if not x.get('simulator') and x.get('available') and x.get('platform') == 'com.apple.platform.iphoneos'), ''))" 2>/dev/null)
 
-.PHONY: build install list-devices compile-only install-only configure-signing detect-team clean-signing inject-build-timestamp bump-patch bump-minor bump-major
+# Remote-build config. Defaults live in config/RemoteBuild.mk;
+# personal override goes in config/LocalRemoteBuild.mk (gitignored). Pattern
+# parallels config/Signing.xcconfig + config/LocalSigning.xcconfig.
+include config/RemoteBuild.mk
+-include config/LocalRemoteBuild.mk
+
+.PHONY: build install install-remote list-devices compile-only install-only configure-signing detect-team clean-signing inject-build-timestamp bump-patch bump-minor bump-major
 
 # Auto-detect the Apple Team ID and write it (plus canonical Bundle IDs) into
 # config/.local-signing.xcconfig, which config/Signing.xcconfig #include?s.
@@ -33,6 +39,19 @@ build: configure-signing inject-build-timestamp
 	xcodegen generate
 	xcodebuild -skipMacroValidation -scheme SmartChatApp \
 		-destination "platform=iOS,name=$(DEVICE_NAME)" \
+		-allowProvisioningUpdates build
+
+# Like build, but builds for a generic iOS device — no locally-connected
+# iPhone required. Code signing is still enabled with -allowProvisioningUpdates
+# (Xcode downloads/creates a generic profile). Use this when the .app will
+# be installed on a remote device (e.g. `make install-remote`) or you don't
+# have a device connected to this machine. Output goes to the same
+# DerivedData path as `build`, so install-only / install-remote can pick
+# it up unchanged.
+build-generic: configure-signing inject-build-timestamp
+	xcodegen generate
+	xcodebuild -skipMacroValidation -scheme SmartChatApp \
+		-destination 'generic/platform=iOS' \
 		-allowProvisioningUpdates build
 
 # Build-system env overrides:
@@ -79,3 +98,50 @@ list-devices:
 	@echo ""
 	@echo "=== Connected iOS devices (devicectl) ==="
 	@xcrun devicectl list devices 2>&1 | tail -n +3
+
+# Run the full unit test suite on the iPhone 17 Pro simulator.
+# Must run `xcodegen generate` first: the project's pbxproj is
+# generated from project.yml's source path filter, so any new
+# test file added under SmartChatAppTests/ won't be picked up
+# by xcodebuild until the project is regenerated. Without
+# this prerequisite, `xcodebuild test` would compile the
+# existing 15 test files and silently skip the newly added
+# 16th, 17th, etc. (Build 7512 incident: `MessageHeightCacheTests`
+# was missing from the test run because xcodegen hadn't
+# been re-run after the file was created.)
+#
+# The simulator destination is hardcoded to iPhone 17 Pro to
+# match the simulator the project's CI uses (see
+# .github/workflows/ci.yml); physical-device tests aren't
+# supported (no UI testing target configured in project.yml).
+test: configure-signing
+	xcodegen generate
+	xcodebuild test -skipMacroValidation -scheme SmartChatApp \
+		-destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+
+# install-remote: build the .app locally (signed with your Team ID),
+# scp it to a remote box where the iPhone is paired, then run
+# `xcrun devicectl device install app` there.
+#
+# Usage: make install-remote REMOTE_TARGET=<host-or-alias>
+#
+# The remote machine needs `xcrun devicectl` and a paired iPhone.
+# scripts/install-remote.sh auto-detects the iPhone via
+# `xcrun devicectl list devices` (single-iPhone case). To skip
+# auto-detect — e.g. when multiple iPhones are paired — set
+# REMOTE_DEVICE_NAME in config/LocalRemoteBuild.mk (gitignored)
+# or on the command line.
+#
+# SSH auth is key-based. If `ssh -o BatchMode=yes` fails, run `ssh-add`
+# to load your key into the agent.
+install-remote: build-generic
+	@if [ -z "$(REMOTE_TARGET)" ]; then \
+		echo "Usage: make install-remote REMOTE_TARGET=<host-or-alias>"; \
+		echo "  Or set REMOTE_TARGET in config/RemoteBuild.mk for a per-checkout default."; \
+		echo "  CLI args override config/ values."; \
+		exit 1; \
+	fi
+	@REMOTE_TARGET='$(REMOTE_TARGET)' \
+	 REMOTE_DEVICE_NAME='$(REMOTE_DEVICE_NAME)' \
+	 REMOTE_APP_DIR='$(REMOTE_APP_DIR)' \
+	 bash scripts/install-remote.sh
