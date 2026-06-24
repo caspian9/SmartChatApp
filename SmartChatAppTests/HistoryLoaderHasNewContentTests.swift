@@ -13,7 +13,7 @@ final class HistoryLoaderHasNewContentTests: XCTestCase {
         await SessionManager.shared.disconnect()
         fakeStorage = FakeMessageCacheStorage()
         store = MessageCacheStore(storage: fakeStorage)
-        vm = NativeChatViewModel(store: store)  // 注入 test store
+        vm = NativeChatViewModel(store: store)  // inject test store
         loader = HistoryLoader()
         loader.viewModel = vm
         loader.store = store
@@ -27,10 +27,10 @@ final class HistoryLoaderHasNewContentTests: XCTestCase {
         fakeStorage = nil
     }
 
-    // —— hasNewContent 逻辑(直接测 helper)——
+    // —— hasNewContent logic (test the helper directly) ——
 
     func test_hasNewContent_firstLoad_lastSeenNil_alwaysTrue() {
-        // 新架构下 store.lastSeenTimestamp(for:) 返回 nil → hasNewContent = true
+        // Under the new architecture, store.lastSeenTimestamp(for:) returns nil → hasNewContent = true
         let result = loader.hasNewContent(newMaxTimestamp: 1000, sessionKey: "k")
         XCTAssertTrue(result)
     }
@@ -59,7 +59,7 @@ final class HistoryLoaderHasNewContentTests: XCTestCase {
     func test_hasNewContent_newMaxNil_false() async {
         let key = "k"
         await store.append([makeMsg(timestamp: 1000)], for: key)
-        // server 返空 messages 数组 → newMax = nil
+        // server returned an empty messages array → newMax = nil
         let result = loader.hasNewContent(newMaxTimestamp: nil, sessionKey: key)
         XCTAssertFalse(result)
     }

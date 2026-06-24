@@ -203,7 +203,7 @@ actor SessionManager {
     /// Fetch the latest history for `sessionKey` from the gateway via `chat.history`
     /// (limit=100, maxChars=100000). The transport is provided by
     /// `makeTransport(sessionKey:)`; `GatewayChatTransport` falls back to
-    /// `MessageCache` on failure. Side effect: updates `currentSessionKey`
+    /// `MessageCacheStore` on failure. Side effect: updates `currentSessionKey`
     /// via `makeTransport` — callers should snapshot/restore via
     /// `getCurrentSessionKey()` if calling outside the active chat.
     func refreshMessages(for sessionKey: String) async throws -> OpenClawChatHistoryPayload {
