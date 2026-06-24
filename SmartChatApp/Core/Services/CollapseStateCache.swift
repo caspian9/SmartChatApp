@@ -185,9 +185,11 @@ final class CollapseStateCache: ObservableObject {
         // `clear()` is called when the user leaves NativeChat or
         // switches sessions. Reset the manual-expand set so a return
         // visit (or the new session) starts every bubble in the
-        // collapsed form. Per the user requirement: "已展开的 showMore
-        // 气泡在用户滚动时不要被自动收起,只退出页面 / 切 session
-        // 时才按折叠形式重置" — this is the reset path.
+        // collapsed form. Per the user requirement: "showMore bubbles
+        // that the user has manually expanded should not auto-collapse
+        // on scroll; they should only be reset to the collapsed form
+        // when the user leaves the page or switches sessions" — this
+        // is the reset path.
         expandedMessageIds.removeAll()
     }
 
