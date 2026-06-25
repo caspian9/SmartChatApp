@@ -7,24 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-### Changed
-### Removed
-
-## [0.0.2] - _in development_
-
-Going-public polish. The repo is being prepared for a public
-release; this section collects the changes since 0.0.1 that
-make the public tree sane. The actual `v0.0.2` tag will be
-cut right before the repo flips to public, after a single
-`git filter-repo` pass to flatten the PII residuals out of
-history (see
-`docs/maintenance/2026-06-08-github-maintenance-review.md`,
-"Going-public follow-up: PII in git history").
+Collected changes since 0.0.1 that have not yet been
+tagged as a release. Per project convention, the next
+version section (`[x.y.z] - YYYY-MM-DD`) is created
+only when the corresponding `vX.Y.Z` tag is cut.
 
 ### Added
 - "What this is NOT" section in README, clarifying the
   project's distribution model and scope.
+- Native chat: slash-command system. Users can type
+  `/help`, `/clear`, `/connect`, `/disconnect`,
+  `/profiles` for in-chat commands; an autocomplete
+  popup appears while typing. Commands dispatch
+  locally first and fall through to the gateway
+  (via `commands.list`) for server-defined ones
+  (PR #22).
+- Settings → Chat: "Show thinking" / "Show tool calls"
+  toggles to hide per-message bubble chrome for users
+  who want a cleaner transcript.
+- `make install-remote`: build locally and install on
+  a remote iPhone over the network (no USB cable
+  needed; PR #19).
 
 ### Changed
 - LICENSE copyright holder: `<Your Name or Company>` →
@@ -32,6 +35,9 @@ history (see
 - CI: fail the build on compiler warnings
   (`GCC_TREAT_WARNINGS_AS_ERRORS=YES` on both build and
   test steps).
+- Release CI: manual codesign path for free personal-
+  team `.ipa` so release builds work without an Apple
+  ID auth step (PR #16, #15).
 - Maintenance review checklist synced to the current state
   (13 items moved from `[ ]` to `[x]`).
 - Maintenance review narrative scrubbed of literal PII
@@ -43,6 +49,26 @@ history (see
 - GitHub Discussions enabled.
 - `deleteBranchOnMerge` enabled; merge commits disallowed
   (squash / rebase only).
+
+### Fixed
+- CONTRIBUTING.md: fixed two broken cross-links. The
+  `CLAUDE.md` link pointed at `.claude/CLAUDE.md` (a
+  gitignored path; the committed file is at the repo
+  root); the README link pointed at `#sourcing-openclawkit`
+  (an anchor that no longer exists — the current section
+  is `Quick Start → 1. Get the code`, anchor `#1-get-the-code`).
+  Also updated the "kept under `.claude/`" framing to
+  reflect that CLAUDE.md is committed.
+- Streaming bubble: three correctness bugs (sequence
+  numbers, footer timing, persistence ordering).
+- Streaming bubbles: sort by `receivedAt` so the most
+  recent message appears at the bottom of the chat.
+- Streaming bubble: footer (sequence number + HH:mm →
+  HH:mm time range) restored after a regression that
+  was dropping it for in-flight messages.
+- Streaming pipeline: stable UUIDs across upserts,
+  deterministic sort, thinking-block isolation,
+  clock-skew tolerance.
 
 ### Removed
 - `docs/superpowers/` design tree moved to the
