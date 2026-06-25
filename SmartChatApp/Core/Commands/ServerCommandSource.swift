@@ -30,16 +30,6 @@ open class ServerCommandSource {
         self.retryDelay = retryDelay
     }
 
-    open func contains(_ token: String) -> Bool {
-        let normalized = token.lowercased()
-        return entries.contains { entry in
-            entry.name.lowercased() == normalized
-                || (entry.textaliases ?? []).contains(where: {
-                    $0.lowercased() == normalized
-                })
-        }
-    }
-
     open var all: [SlashCommand] {
         entries.map(SlashCommand.fromCommandEntry)
     }

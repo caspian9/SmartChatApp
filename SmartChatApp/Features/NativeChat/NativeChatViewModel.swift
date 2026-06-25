@@ -929,10 +929,12 @@ extension NativeChatViewModel: LocalCommandContext {
 // Production adapter from `ServerCommandTransport` to
 // `SessionManager.request`. The seam landed in 982a1de:
 // `SessionManager.request` -> `ConnectionCoordinator.request` ->
-// the private `operatorTransport.request`. This struct is the
+// the private `operatorTransport.request`. This type is the
 // only place slash-command code knows about SessionManager; the
 // rest of the system talks to the narrow `ServerCommandTransport`
-// protocol so tests can swap in a fake.
+// protocol so tests can swap in a fake. Declared `final class`
+// because `ServerCommandTransport` requires `AnyObject`; the
+// class is stateless so `@unchecked Sendable` is safe.
 private final class SessionManagerTransport: ServerCommandTransport, @unchecked Sendable {
     func send(method: String, paramsJSON: String) async throws -> Data {
         try await SessionManager.shared.request(

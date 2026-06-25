@@ -396,13 +396,6 @@ final class FakeServerSource: ServerCommandSource {
         self.fakeEntries = entries
         super.init()
     }
-    override func contains(_ token: String) -> Bool {
-        let n = token.lowercased()
-        return fakeEntries.contains { e in
-            e.name.lowercased() == n
-                || (e.textaliases ?? []).contains(where: { $0.lowercased() == n })
-        }
-    }
     override var all: [SlashCommand] {
         fakeEntries.map(SlashCommand.fromCommandEntry)
     }

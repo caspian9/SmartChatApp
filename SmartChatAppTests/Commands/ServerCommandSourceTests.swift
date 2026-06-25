@@ -13,7 +13,7 @@ final class ServerCommandSourceTests: XCTestCase {
 
     func test_contains_returnsFalseWhenEmpty() {
         let s = ServerCommandSource()
-        XCTAssertFalse(s.contains("/foo"))
+        XCTAssertFalse(s.entries.contains { $0.name == "/foo" })
     }
 
     func test_refresh_noopWithoutTransport() async {
@@ -36,7 +36,7 @@ final class ServerCommandSourceTests: XCTestCase {
         let s = ServerCommandSource(transport: transport)
         await s.refresh()
         XCTAssertTrue(s.isFetched)
-        XCTAssertTrue(s.contains("/status"))
+        XCTAssertTrue(s.entries.contains { $0.name == "/status" })
         XCTAssertEqual(s.entries.first?.description, "Show status")
         XCTAssertNil(s.lastError)
     }

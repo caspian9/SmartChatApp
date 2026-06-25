@@ -323,7 +323,6 @@ struct MessageBubbleView: View {
                     // the same text to a markdown parser would
                     // mangle the alignment.
                     MarkdownCardView(content: message.text)
-                    MarkdownCardView(content: message.text)
                 } else if message.role == "thinking" {
                     ThinkingCardView(content: message.text)
                         .lineLimit(collapseLineLimit)

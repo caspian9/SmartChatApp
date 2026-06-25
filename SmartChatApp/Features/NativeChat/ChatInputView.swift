@@ -28,7 +28,7 @@ struct ChatInputView: View {
             HStack(spacing: 12) {
                 ZStack(alignment: .leading) {
                     if inputText.isEmpty {
-                        Text("输入消息...")
+                        Text("Message...")
                             .foregroundColor(theme.textSecondary)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 10)
