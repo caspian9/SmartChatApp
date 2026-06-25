@@ -101,16 +101,17 @@ final class EventInterpreter {
     ///   2nd/3rd arrival keeps the bubble intact.
     @ObservationIgnored
     private var processedLifecycleEndByRun: Set<String> = []
-    /// Per-run `seq` watermark. The server's `payload.seq` is
-    /// monotonic per-run (verified for both assistant and thinking
-    /// streams — `EventInterpreter.swift:403, 507` already forward
-    /// `seq` into `ChatMessage`). Rejecting a delta with
-    /// `seq <= lastSeen` drops transport-level retransmits and
-    /// out-of-order arrivals at the gate, before any text
-    /// comparison runs. Cleared on `lifecycle=end` alongside the
-    /// other per-run accumulators.
+    /// Per-(runId, stream) `seq` watermark. The server's
+    /// `payload.seq` is monotonic per-stream (assistant and
+    /// thinking are independent streams with their own seq
+    /// counters; an assistant seq of 2 and a thinking seq of 1
+    /// for the same run are both valid and unrelated). Rejecting
+    /// a delta with `seq <= lastSeen` drops transport-level
+    /// retransmits and out-of-order arrivals at the gate, before
+    /// any text comparison runs. Cleared on `lifecycle=end`
+    /// alongside the other per-run accumulators.
     @ObservationIgnored
-    private var lastSeenSeqByRun: [String: Int] = [:]
+    private var lastSeenSeqByRun: [String: [String: Int]] = [:]
 
     func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String) async {
         switch event {
@@ -386,18 +387,27 @@ final class EventInterpreter {
 
                 // Seq guard: drop retransmits / out-of-order
                 // arrivals before any text comparison runs.
-                // payload.seq is monotonic per-run for the
-                // server versions we observe (forwarded into
-                // ChatMessage at line 403 below). Skipped when
-                // seq is nil so older servers without a seq field
-                // aren't blocked at the gate.
-                if let seq, let seen = lastSeenSeqByRun[runId], seq <= seen {
+                // payload.seq is monotonic per-stream (assistant
+                // and thinking are independent; the assistant
+                // seq of 2 and thinking seq of 1 for the same
+                // run are unrelated). The `payload.stream` value
+                // is included in the watermark key so the two
+                // streams don't share a counter — the seq guard
+                // is forwarded into ChatMessage at line 403
+                // below. Skipped when seq is nil so older
+                // servers without a seq field aren't blocked at
+                // the gate.
+                if let seq, let seen = lastSeenSeqByRun[runId]?[payload.stream], seq <= seen {
                     AppLogger.log(
-                        "agent assistant delta - ignored (seq replay): runId: \(runId), seen: \(seen), deltaSeq: \(seq)",
+                        "agent assistant delta - ignored (seq replay): runId: \(runId), stream: \(payload.stream), seen: \(seen), deltaSeq: \(seq)",
                         category: .nativeChat, level: .warning)
                     return
                 }
-                if let seq { lastSeenSeqByRun[runId] = seq }
+                if let seq {
+                    var perStream = lastSeenSeqByRun[runId] ?? [:]
+                    perStream[payload.stream] = seq
+                    lastSeenSeqByRun[runId] = perStream
+                }
 
                 // Exact-duplicate short-circuit. If the new delta
                 // is byte-identical to the accumulator we already
@@ -543,16 +553,57 @@ final class EventInterpreter {
                 // holds the complete thinking rather than the last
                 // fragment.
                 let prev = accumulatedThinkingTextByRun[runId] ?? ""
+
+                // Seq guard: drop retransmits / out-of-order
+                // arrivals for the thinking stream too. The
+                // thinking event's payload.seq is forwarded into
+                // ChatMessage at line 507 below. Per-stream
+                // watermark — see the matching comment in
+                // `case "assistant"` for why we key on
+                // `(runId, stream)` rather than just `runId`.
+                if let seq, let seen = lastSeenSeqByRun[runId]?[payload.stream], seq <= seen {
+                    AppLogger.log(
+                        "agent thinking delta - ignored (seq replay): runId: \(runId), stream: \(payload.stream), seen: \(seen), deltaSeq: \(seq)",
+                        category: .nativeChat, level: .warning)
+                    return
+                }
+                if let seq {
+                    var perStream = lastSeenSeqByRun[runId] ?? [:]
+                    perStream[payload.stream] = seq
+                    lastSeenSeqByRun[runId] = perStream
+                }
+
+                // Exact-duplicate short-circuit (mirror of the
+                // assistant branch above).
+                guard text != prev else {
+                    AppLogger.log(
+                        "agent thinking delta - ignored (identical text): runId: \(runId), text len: \(text.count)",
+                        category: .nativeChat, level: .debug)
+                    return
+                }
+
                 let accText: String
-                if !prev.isEmpty, text.hasPrefix(prev) {
+                if prev.isEmpty || text.hasPrefix(prev) {
                     accText = text
-                } else if !prev.isEmpty, prev.hasPrefix(text) {
+                } else if prev.hasPrefix(text) {
                     AppLogger.log(
                         "agent thinking delta - ignored (stale): prev len: \(prev.count), delta len: \(text.count)",
                         category: .nativeChat, level: .warning)
                     return
                 } else {
-                    accText = prev + text
+                    // Partial overlap — same algorithm as the
+                    // assistant branch. See the matching comment
+                    // in `case "assistant"` for the issue #21
+                    // context.
+                    let lcp = EventInterpreter.longestCommonPrefix(prev, text)
+                    if lcp >= StreamingDelta.partialOverlapMinLCP {
+                        AppLogger.log(
+                            "agent thinking delta - partial-overlap: lcp=\(lcp), prev len: \(prev.count), delta len: \(text.count)",
+                            category: .nativeChat)
+                        accText = String(prev.prefix(lcp)) + String(text.dropFirst(lcp))
+                    } else {
+                        accText = prev + text
+                    }
                 }
                 accumulatedThinkingTextByRun[runId] = accText
                 let message = ChatMessage(
