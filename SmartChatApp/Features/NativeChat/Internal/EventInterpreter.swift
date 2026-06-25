@@ -383,25 +383,75 @@ final class EventInterpreter {
                 AppLogger.log("agent assistant delta - text len: \(text.count), runId: \(runId)", category: .nativeChat)
                 guard !text.isEmpty else { return }
                 let prev = accumulatedAssistantTextByRun[runId] ?? ""
+
+                // Seq guard: drop retransmits / out-of-order
+                // arrivals before any text comparison runs.
+                // payload.seq is monotonic per-run for the
+                // server versions we observe (forwarded into
+                // ChatMessage at line 403 below). Skipped when
+                // seq is nil so older servers without a seq field
+                // aren't blocked at the gate.
+                if let seq, let seen = lastSeenSeqByRun[runId], seq <= seen {
+                    AppLogger.log(
+                        "agent assistant delta - ignored (seq replay): runId: \(runId), seen: \(seen), deltaSeq: \(seq)",
+                        category: .nativeChat, level: .warning)
+                    return
+                }
+                if let seq { lastSeenSeqByRun[runId] = seq }
+
+                // Exact-duplicate short-circuit. If the new delta
+                // is byte-identical to the accumulator we already
+                // have, there's nothing to update. log only when
+                // seq is also identical (transport-level
+                // retransmit); a same-text different-seq arrival
+                // is a no-op and stays silent.
+                guard text != prev else {
+                    AppLogger.log(
+                        "agent assistant delta - ignored (identical text): runId: \(runId), text len: \(text.count)",
+                        category: .nativeChat, level: .debug)
+                    return
+                }
+
                 let accText: String
-                if !prev.isEmpty, text.hasPrefix(prev) {
-                    // Cumulative: the new delta includes everything
-                    // we already had plus more. Use it as-is so the
-                    // bubble grows monotonically along the
-                    // server's actual progression instead of
-                    // producing a concatenation of past deltas.
+                if prev.isEmpty || text.hasPrefix(prev) {
+                    // First delta, or cumulative shape: server is
+                    // sending the full-so-far text on every chunk.
+                    // Replace, don't append — using the new delta
+                    // as-is keeps the bubble growing monotonically
+                    // along the server's actual progression
+                    // instead of producing a concatenation of past
+                    // deltas.
                     accText = text
-                } else if !prev.isEmpty, prev.hasPrefix(text) {
+                } else if prev.hasPrefix(text) {
                     // Out-of-order / stale: the new delta is a
                     // state we already passed through. The
                     // accumulator is already ahead. Drop the
                     // delta so we don't regress the visible text.
-                    AppLogger.log("agent assistant delta - ignored (stale): prev len: \(prev.count), delta len: \(text.count)", category: .nativeChat, level: .warning)
+                    AppLogger.log(
+                        "agent assistant delta - ignored (stale): prev len: \(prev.count), delta len: \(text.count)",
+                        category: .nativeChat, level: .warning)
                     return
                 } else {
-                    // Incremental: delta is a fresh fragment that
-                    // doesn't overlap with what we have. Append.
-                    accText = prev + text
+                    // Partial overlap: neither is a full prefix of
+                    // the other, but they share a common prefix of
+                    // meaningful length. This is the
+                    // LLM-rewrites-earlier-tokens shape that the
+                    // old "Incremental: append" branch mishandled
+                    // (issue #21 real-world example: "this is **ok"
+                    // → "this is **flowed ok" produced
+                    // "this is **okthis is **flowed ok").
+                    let lcp = EventInterpreter.longestCommonPrefix(prev, text)
+                    if lcp >= StreamingDelta.partialOverlapMinLCP {
+                        AppLogger.log(
+                            "agent assistant delta - partial-overlap: lcp=\(lcp), prev len: \(prev.count), delta len: \(text.count)",
+                            category: .nativeChat)
+                        accText = String(prev.prefix(lcp)) + String(text.dropFirst(lcp))
+                    } else {
+                        // No meaningful overlap — plain concat is
+                        // the right answer (the two fragments
+                        // really are independent).
+                        accText = prev + text
+                    }
                 }
                 accumulatedAssistantTextByRun[runId] = accText
                 await MainActor.run {
