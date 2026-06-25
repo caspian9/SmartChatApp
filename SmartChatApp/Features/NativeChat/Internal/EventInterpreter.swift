@@ -1177,6 +1177,65 @@ final class EventInterpreter {
                 }
             }
 
+            // Recovery path: the server sends the authoritative
+            // full assistant text in the chat event's `text`
+            // content block when `state == "final"`. Use it to
+            // correct our accumulator if the run is still
+            // active. Skipped when:
+            //  - state != "final" (chat events during streaming
+            //    carry in-progress text, not authoritative)
+            //  - runId is nil (no stable namespace to match)
+            //  - accumulator is nil (lifecycle=end has already
+            //    cleared it — bubble is already final)
+            //  - chat event's text matches accumulator (no-op)
+            if chat.state == "final",
+               let runId = chat.runId,
+               accumulatedAssistantTextByRun[runId] != nil,
+               let unwrapped = chat.message?.value {
+                let dict = EventInterpreter.unwrapAnyCodable(unwrapped)
+                if let dict = dict as? [String: Any],
+                   dict["role"] as? String == "assistant",
+                   let content = dict["content"] as? [Any] {
+                    let serverText = content
+                        .compactMap { ($0 as? [String: Any])?["text"] as? String }
+                        .joined(separator: "")
+                    let prev = accumulatedAssistantTextByRun[runId] ?? ""
+                    if !serverText.isEmpty, serverText != prev {
+                        AppLogger.log(
+                            "chat event - assistant state=final recovery: runId: \(runId), prev len: \(prev.count), server len: \(serverText.count)",
+                            category: .nativeChat)
+                        accumulatedAssistantTextByRun[runId] = serverText
+                        // Do NOT clear the accumulator here —
+                        // let the subsequent lifecycle=end run
+                        // normally (it'll read the corrected
+                        // accumulator value when computing
+                        // effectiveFullText).
+                        let resolvedStartedAt = assistantStartedAtByRun[runId]
+                        let message = ChatMessage(
+                            id: runId,
+                            text: serverText,
+                            // Local received time for sort —
+                            // matches the lifecycle=start branch
+                            // convention; the server's
+                            // payload.ts could be in the past
+                            // due to gateway clock skew.
+                            timestamp: Date(),
+                            role: "assistant",
+                            state: "final",
+                            runId: runId,
+                            seq: nil,
+                            startedAt: resolvedStartedAt,
+                            endedAt: nil,
+                            livenessState: nil,
+                            toolCallId: nil, toolName: nil,
+                            stopReason: nil,
+                            isFresh: true
+                        )
+                        await viewModel?.receiveMessage(message)
+                    }
+                }
+            }
+
         case .sessionMessage(let sm):
             // History/event-stream messages are typed OpenClawChatMessage.
             var blockSummaries: [String] = []
