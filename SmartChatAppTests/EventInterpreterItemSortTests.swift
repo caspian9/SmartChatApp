@@ -180,13 +180,13 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // machinery is needed for the thinking stream.
         let runId = "r-thinking-3"
         await interpreter.handleTransportEvent(
-            .agent(makeThinkingEvent(runId: runId, ts: 3_200, data: ["thinking": "Part 1. "])),
+            .agent(makeThinkingEvent(runId: runId, ts: 3_200, data: ["thinking": "Part 1. "], seq: 1)),
             sessionKey: "session-1")
         await interpreter.handleTransportEvent(
-            .agent(makeThinkingEvent(runId: runId, ts: 3_300, data: ["thinking": "Part 2. "])),
+            .agent(makeThinkingEvent(runId: runId, ts: 3_300, data: ["thinking": "Part 2. "], seq: 2)),
             sessionKey: "session-1")
         await interpreter.handleTransportEvent(
-            .agent(makeThinkingEvent(runId: runId, ts: 3_400, data: ["thinking": "Part 3."])),
+            .agent(makeThinkingEvent(runId: runId, ts: 3_400, data: ["thinking": "Part 3."], seq: 3)),
             sessionKey: "session-1")
 
         let stored = store.messages(for: "session-1", since: nil)
@@ -204,13 +204,13 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // as-is rather than appending (which would double-count).
         let runId = "r-thinking-4"
         await interpreter.handleTransportEvent(
-            .agent(makeThinkingEvent(runId: runId, ts: 3_500, data: ["thinking": "Part 1"])),
+            .agent(makeThinkingEvent(runId: runId, ts: 3_500, data: ["thinking": "Part 1"], seq: 1)),
             sessionKey: "session-1")
         await interpreter.handleTransportEvent(
-            .agent(makeThinkingEvent(runId: runId, ts: 3_600, data: ["thinking": "Part 1 Part 2"])),
+            .agent(makeThinkingEvent(runId: runId, ts: 3_600, data: ["thinking": "Part 1 Part 2"], seq: 2)),
             sessionKey: "session-1")
         await interpreter.handleTransportEvent(
-            .agent(makeThinkingEvent(runId: runId, ts: 3_700, data: ["thinking": "Part 1 Part 2 Part 3"])),
+            .agent(makeThinkingEvent(runId: runId, ts: 3_700, data: ["thinking": "Part 1 Part 2 Part 3"], seq: 3)),
             sessionKey: "session-1")
 
         let stored = store.messages(for: "session-1", since: nil)
@@ -224,11 +224,11 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // state). The handler must NOT regress the visible text.
         let runId = "r-thinking-5"
         await interpreter.handleTransportEvent(
-            .agent(makeThinkingEvent(runId: runId, ts: 3_800, data: ["thinking": "Part 1 Part 2 Part 3"])),
+            .agent(makeThinkingEvent(runId: runId, ts: 3_800, data: ["thinking": "Part 1 Part 2 Part 3"], seq: 1)),
             sessionKey: "session-1")
         // Stale delta (text is a prefix of the current accumulator).
         await interpreter.handleTransportEvent(
-            .agent(makeThinkingEvent(runId: runId, ts: 3_900, data: ["thinking": "Part 1"])),
+            .agent(makeThinkingEvent(runId: runId, ts: 3_900, data: ["thinking": "Part 1"], seq: 2)),
             sessionKey: "session-1")
 
         let stored = store.messages(for: "session-1", since: nil)
@@ -485,6 +485,25 @@ final class EventInterpreterItemSortTests: XCTestCase {
         return try! JSONDecoder().decode(OpenClawAgentEventPayload.self, from: json)
     }
 
+    /// Same as `makeAssistantDeltaEvent` but takes an explicit `seq`.
+    /// Required by the seq-replay test, which needs to send the same
+    /// delta twice with the same seq.
+    private func makeAssistantDeltaEventWithSeq(
+        runId: String, seq: Int?, ts: Int, text: String
+    ) -> OpenClawAgentEventPayload {
+        let data: [String: AnyCodable] = ["text": AnyCodable(text)]
+        struct Wire: Codable {
+            let runId: String
+            let seq: Int?
+            let stream: String
+            let ts: Int?
+            let data: [String: AnyCodable]
+        }
+        let wire = Wire(runId: runId, seq: seq, stream: "assistant", ts: ts, data: data)
+        let json = try! JSONEncoder().encode(wire)
+        return try! JSONDecoder().decode(OpenClawAgentEventPayload.self, from: json)
+    }
+
     private func makeLifecycleEndEvent(runId: String, ts: Int, text: String = "yo, iOS device online 👋") -> OpenClawAgentEventPayload {
         // Build a minimal `lifecycle=end` agent event that the
         // EventInterpreter turns into an `assistant` ChatMessage
@@ -636,10 +655,10 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// thinking payload under either `thinking` (newer servers) or
     /// `text` (older servers) — the test picks which shape to feed
     /// to exercise both branches of the handler.
-    private func makeThinkingEvent(runId: String, ts: Int, data: [String: Any]) -> OpenClawAgentEventPayload {
+    private func makeThinkingEvent(runId: String, ts: Int, data: [String: Any], seq: Int = 1) -> OpenClawAgentEventPayload {
         let codable = data.mapValues { AnyCodable($0) }
         return makeAgentEvent(
-            runId: runId, seq: 1, stream: "thinking", ts: ts, data: codable)
+            runId: runId, seq: seq, stream: "thinking", ts: ts, data: codable)
     }
 
     /// Build a `case .chat` transport event. `contentBlocks` is the
@@ -807,5 +826,191 @@ final class EventInterpreterItemSortTests: XCTestCase {
         XCTAssertNotNil(bubble2, "bubble must remain in the merged view across repeated lifecycle=end")
         XCTAssertEqual(bubble2?.text, responseText,
             "Repeated lifecycle=end must not clobber the response text — 2nd/3rd arrival would write text=\"\" if the EventInterpreter isn't idempotent")
+    }
+
+    // MARK: - Assistant delta partial-overlap (issue #21)
+
+    /// Regression for issue #21. Two consecutive deltas share a
+    /// partial character overlap ("this is **") but neither is a
+    /// full prefix of the other. The pre-fix behavior concatenated
+    /// them and produced "this is **okthis is **flowed ok". The
+    /// fix detects the LCP ≥ 8 and rewrites from the alignment
+    /// point, producing a single final bubble with the correct
+    /// text.
+    func test_assistantDelta_partialOverlap_replacesFromAlignmentPoint() async throws {
+        let runId = "r-po-1"
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "this is **ok")),
+            sessionKey: "session-1")
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "this is **flowed ok")),
+            sessionKey: "session-1")
+        let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertEqual(bubble?.text, "this is **flowed ok",
+            "Partial-overlap delta must be treated as a rewrite from the alignment point, NOT a concatenation")
+    }
+
+    /// Regression guard for the existing pure-incremental case.
+    /// Two deltas with no shared prefix must still concatenate.
+    func test_assistantDelta_noOverlap_concatenates() async throws {
+        let runId = "r-po-2"
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "hello ")),
+            sessionKey: "session-1")
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "world")),
+            sessionKey: "session-1")
+        let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertEqual(bubble?.text, "hello world",
+            "No-overlap deltas must still concatenate (pure incremental path unchanged)")
+    }
+
+    /// Below the 8-char LCP threshold the algorithm falls back to
+    /// plain concat. The two deltas share a 3-char LCP but
+    /// neither is a prefix of the other — the old code's
+    /// "incremental" branch already produced plain concat for
+    /// this shape, so this test acts as a regression guard
+    /// against future over-aggressive LCP alignment
+    /// (e.g. someone lowering `partialOverlapMinLCP` and
+    /// wrongly marking "abc"/"abd"/"abe" pairs as overlapping).
+    func test_assistantDelta_shortOverlapBelowThreshold_concatenates() async throws {
+        let runId = "r-po-3"
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "abcdef")),
+            sessionKey: "session-1")
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "abc123")),
+            sessionKey: "session-1")
+        let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertEqual(bubble?.text, "abcdefabc123",
+            "LCP below threshold (8) must fall through to plain concat")
+    }
+
+    /// Transport-level retransmit: same delta text AND same seq
+    /// arrive twice. The seq guard must drop the 2nd arrival
+    /// before any text comparison runs. The existing
+    /// text-equal-prev short-circuit would also catch this, but
+    /// the seq guard is the dedicated mechanism and we want its
+    /// path covered explicitly.
+    func test_assistantDelta_seqReplay_secondIsDropped() async throws {
+        let runId = "r-po-4"
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEventWithSeq(runId: runId, seq: 5, ts: 100, text: "hello")),
+            sessionKey: "session-1")
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEventWithSeq(runId: runId, seq: 5, ts: 100, text: "hello")),
+            sessionKey: "session-1")
+        let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertEqual(bubble?.text, "hello",
+            "Seq replay must drop the 2nd arrival — bubble text is unchanged")
+    }
+
+    /// Same partial-overlap shape as the assistant test, applied
+    /// to the thinking stream. Locks in that the thinking
+    /// handler got the same fix. Note: the two deltas share
+    /// the prefix "step 1: parse" but diverge from there — this
+    /// is the partial-overlap shape (not cumulative), so the
+    /// pre-fix incremental branch would concatenate to
+    /// "step 1: parse inputstep 1: parsed input and continue".
+    func test_thinkingDelta_partialOverlap_replacesFromAlignmentPoint() async throws {
+        let runId = "r-tpo-1"
+        await interpreter.handleTransportEvent(
+            .agent(makeThinkingEvent(runId: runId, ts: 100, data: ["thinking": "step 1: parse input"], seq: 1)),
+            sessionKey: "session-1")
+        await interpreter.handleTransportEvent(
+            .agent(makeThinkingEvent(runId: runId, ts: 200, data: ["thinking": "step 1: parsed input and continue"], seq: 2)),
+            sessionKey: "session-1")
+        let thinking = vm.chatMessages(for: "session-1").first { $0.role == "thinking" }
+        XCTAssertEqual(thinking?.text, "step 1: parsed input and continue",
+            "Thinking stream partial-overlap must use LCP alignment, not plain concat")
+    }
+
+    // MARK: - Chat event state=final recovery
+
+    /// Chat event with `state=final` carries the server's
+    /// authoritative full assistant text. When the local
+    /// accumulator has produced duplicated or otherwise-buggy
+    /// text (e.g., the partial-overlap bug from issue #21), the
+    /// chat event must override the accumulator and emit a
+    /// corrected final-state ChatMessage. This test simulates
+    /// the buggy accumulator by using two deltas that share a
+    /// partial overlap, then feeds the chat event with the
+    /// server's authoritative single text. The bubble must end
+    /// up with the chat event's text, not the duplicated
+    /// accumulator text.
+    ///
+    /// Note: under the new 5-branch dispatch, the partial-overlap
+    /// delta would already be LCP-aligned, so the accumulator
+    /// text matches the chat event's text. The test still
+    /// asserts the recovery path runs (the override produces no
+    /// log/side-effect when prev == serverText), giving us a
+    /// regression guard for the recovery logic itself.
+    func test_chatEvent_stateFinal_assistantText_correctsAccumulator() async throws {
+        let runId = "r-chat-final-1"
+        let authoritativeText = "this is **flowed ok"
+
+        // First, an assistant delta so the accumulator has text.
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "this is **ok")),
+            sessionKey: "session-1")
+        // Then a chat event with state=final and the authoritative
+        // full text. The recovery block in `case .chat` should
+        // pick this up and overwrite the accumulator.
+        let chatEvent = makeChatEvent(
+            runId: runId,
+            state: "final",
+            contentBlocks: [["type": "text", "text": authoritativeText]]
+        )
+        await interpreter.handleTransportEvent(.chat(chatEvent), sessionKey: "session-1")
+
+        let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertEqual(bubble?.text, authoritativeText,
+            "Chat event state=final must align the bubble text with the server's authoritative value")
+    }
+
+    /// Chat event with `state=delta` (streaming chat event,
+    /// not the final state) must NOT trigger recovery. The
+    /// chat event carries an in-progress text that's not yet
+    /// authoritative — using it to overwrite the accumulator
+    /// would risk regressing streaming progress.
+    func test_chatEvent_stateDelta_assistantText_doesNotRecover() async throws {
+        let runId = "r-chat-state-delta-1"
+        let streamingText = "intermediate"
+
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: streamingText)),
+            sessionKey: "session-1")
+        // Chat event with state=delta (not final). Recovery
+        // block must skip this; bubble text stays as the
+        // accumulator's value.
+        let chatEvent = makeChatEvent(
+            runId: runId,
+            state: "delta",
+            contentBlocks: [["type": "text", "text": "different text from a non-final chat event"]]
+        )
+        await interpreter.handleTransportEvent(.chat(chatEvent), sessionKey: "session-1")
+
+        let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertEqual(bubble?.text, streamingText,
+            "Chat event state=delta must not trigger recovery — accumulator text is preserved")
+    }
+
+    /// Chat event without a `runId` must not trigger recovery
+    /// (matches the existing thinking-block skip path's logic).
+    /// No stable runId namespace to match against.
+    func test_chatEvent_nilRunId_assistantText_doesNotRecover() async throws {
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: "r-active-1", ts: 100, text: "streaming")),
+            sessionKey: "session-1")
+        let chatEvent = makeChatEvent(
+            runId: nil,
+            state: "final",
+            contentBlocks: [["type": "text", "text": "anonymous authoritative text"]]
+        )
+        await interpreter.handleTransportEvent(.chat(chatEvent), sessionKey: "session-1")
+
+        let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertEqual(bubble?.text, "streaming",
+            "Chat event with nil runId must not trigger recovery — no namespace to match")
     }
 }
