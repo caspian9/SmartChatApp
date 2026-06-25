@@ -2,6 +2,20 @@ import SwiftUI
 import OpenClawChatUI
 import OpenClawKit
 
+/// Tunables for the streaming-delta accumulator. Centralized so
+/// the threshold is greppable from the test target and so a
+/// future revision can lift these to `ConfigurationManager` if
+/// per-profile tuning becomes useful.
+private enum StreamingDelta {
+    /// Minimum longest-common-prefix length to trust a
+    /// partial-overlap rewrite instead of falling back to plain
+    /// concatenation. Below this, plain concat is the safer
+    /// default — short common prefixes like "the " or " a "
+    /// would otherwise wrongly mark unrelated fragments as
+    /// overlapping.
+    static let partialOverlapMinLCP = 8
+}
+
 @MainActor
 final class EventInterpreter {
     weak var viewModel: NativeChatViewModel?
@@ -1155,6 +1169,28 @@ final class EventInterpreter {
     }
 
     // MARK: - Static helpers (kept here because they're only used in `.log(...)` paths)
+
+    /// Length of the longest common prefix of two strings, in
+    /// Unicode scalars (NOT grapheme clusters — emoji ZWJ
+    /// sequences span multiple scalars and should not split
+    /// mid-codepoint; using `Characters` would combine the ZWJ
+    /// into a single grapheme and miss mid-sequence divergence).
+    /// O(min(len(a), len(b))); for typical delta sizes (a few
+    /// hundred to a few thousand chars) this is sub-millisecond
+    /// on modern iPhones.
+    private static func longestCommonPrefix(_ a: String, _ b: String) -> Int {
+        let aChars = a.unicodeScalars
+        let bChars = b.unicodeScalars
+        let n = min(aChars.count, bChars.count)
+        var i = 0
+        while i < n {
+            let aIdx = aChars.index(aChars.startIndex, offsetBy: i)
+            let bIdx = bChars.index(bChars.startIndex, offsetBy: i)
+            if aChars[aIdx] != bChars[bIdx] { break }
+            i += 1
+        }
+        return i
+    }
 
     /// Full JSON dump of a payload value for log diagnostics.
     /// Preserves the complete nested structure so a user can grep
