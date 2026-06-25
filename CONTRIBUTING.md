@@ -2,9 +2,8 @@
 
 Thanks for considering a contribution. This guide is short on
 purpose — the rest of the project docs (especially
-[CLAUDE.md](.claude/CLAUDE.md) — the AI-assistant notes
-maintainers use, kept under `.claude/` because it is internal
-prompt material) explain the architecture in depth.
+[CLAUDE.md](CLAUDE.md), the AI-assistant project notes kept at
+the repo root) explain the architecture in depth.
 
 ## Before you start
 
@@ -22,7 +21,7 @@ workspace/
 CI clones `caspian9/openclaw` automatically into `../openclaw`
 before `xcodegen generate`; locally, clone (or symlink) the
 fork into the sibling position before running `make build`. See
-[README.md → Sourcing OpenClawKit](README.md#sourcing-openclawkit)
+[README.md → Quick Start → 1. Get the code](README.md#get-the-code)
 for details.
 
 ## Local setup
@@ -95,7 +94,7 @@ open an issue describing your approach, and link the PR to it.
    Without the key, iOS silently ignores the permission
    request and no prompt appears — easy to miss in testing.
    The current list lives in
-   [CLAUDE.md → Privacy Usage Descriptions](.claude/CLAUDE.md).
+   [CLAUDE.md → Privacy Usage Descriptions](CLAUDE.md#privacy-usage-descriptions).
 
 5. **Update CHANGELOG.md** under the next-version heading
    (or `[Unreleased]` if no version bump is planned). One
