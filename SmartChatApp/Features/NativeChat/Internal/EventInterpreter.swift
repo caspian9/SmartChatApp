@@ -392,11 +392,11 @@ final class EventInterpreter {
                 // seq of 2 and thinking seq of 1 for the same
                 // run are unrelated). The `payload.stream` value
                 // is included in the watermark key so the two
-                // streams don't share a counter — the seq guard
-                // is forwarded into ChatMessage at line 403
-                // below. Skipped when seq is nil so older
-                // servers without a seq field aren't blocked at
-                // the gate.
+                // streams don't share a counter — see the
+                // matching comment on `lastSeenSeqByRun` above
+                // for the per-stream keying rationale. Skipped
+                // when seq is nil so older servers without a seq
+                // field aren't blocked at the gate.
                 if let seq, let seen = lastSeenSeqByRun[runId]?[payload.stream], seq <= seen {
                     AppLogger.log(
                         "agent assistant delta - ignored (seq replay): runId: \(runId), stream: \(payload.stream), seen: \(seen), deltaSeq: \(seq)",
@@ -555,9 +555,7 @@ final class EventInterpreter {
                 let prev = accumulatedThinkingTextByRun[runId] ?? ""
 
                 // Seq guard: drop retransmits / out-of-order
-                // arrivals for the thinking stream too. The
-                // thinking event's payload.seq is forwarded into
-                // ChatMessage at line 507 below. Per-stream
+                // arrivals for the thinking stream too. Per-stream
                 // watermark — see the matching comment in
                 // `case "assistant"` for why we key on
                 // `(runId, stream)` rather than just `runId`.
