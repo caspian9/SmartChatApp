@@ -310,6 +310,21 @@ actor ConnectionCoordinator {
         transports[sessionKey] = nil
     }
 
+    /// Generic RPC forwarder. Exposes the underlying
+    /// `operatorTransport.request(...)` so callers outside this
+    /// actor (e.g. `ServerCommandSource` for `commands.list`)
+    /// can fire arbitrary RPCs through the established
+    /// operator connection.
+    func request(method: String,
+                 paramsJSON: String?,
+                 timeoutSeconds: Int) async throws -> Data {
+        try await operatorTransport.request(
+            method: method,
+            paramsJSON: paramsJSON,
+            timeoutSeconds: timeoutSeconds
+        )
+    }
+
     /// Handle an SDK `onDisconnected` callback. The SDK fires this
     /// callback when the WebSocket closes — INCLUDING for a
     /// user-initiated close via `disconnect()`. Two cases must be

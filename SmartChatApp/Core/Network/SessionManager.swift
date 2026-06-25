@@ -211,6 +211,22 @@ actor SessionManager {
         return try await transport.requestHistory(sessionKey: sessionKey)
     }
 
+    // MARK: - Generic RPC forwarder
+
+    /// Fire an arbitrary RPC through the established operator
+    /// connection. Used by `ServerCommandSource` (Task 11) to
+    /// call `commands.list`; could also be used by future
+    /// features that need a generic RPC seam.
+    func request(method: String,
+                 paramsJSON: String?,
+                 timeoutSeconds: Int) async throws -> Data {
+        try await coordinator.request(
+            method: method,
+            paramsJSON: paramsJSON,
+            timeoutSeconds: timeoutSeconds
+        )
+    }
+
     // MARK: - Reconnect-on-launch flag (preserved for `App.swift`)
 
     func setReconnectOnLaunch(_ value: Bool) { reconnectOnLaunch = value }

@@ -697,11 +697,21 @@ struct NativeChatView: View {
                 }
             ),
             isSending: viewModel.isSending,
+            isInputFocused: isInputFocused,
             onSend: {
                 isInputFocused = false
-                viewModel.sendMessage()
+                Task { await viewModel.sendMessage() }
+            },
+            autocompleteCandidates: viewModel.autocompleteCandidates,
+            onSelectCandidate: { cmd in
+                viewModel.inputText = cmd.id
+                // Cursor is placed at end via the binding reset; SwiftUI TextField
+                // re-positions the cursor after the binding change.
             }
         )
         .focused($isInputFocused)
+        .onChange(of: viewModel.inputText) { _, newValue in
+            viewModel.updateAutocomplete(newValue)
+        }
     }
 }

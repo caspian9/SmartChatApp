@@ -167,7 +167,14 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var bubbleContent: some View {
-        if message.text.isEmpty {
+        // System bubbles render their own chrome (muted
+        // card + 3pt left bar) inside the `system` role branch of
+        // `messageText`. Skip the standard bubble padding/background/
+        // cornerRadius here so the system bubble doesn't get
+        // double-wrapped.
+        if message.role == "system" {
+            messageText
+        } else if message.text.isEmpty {
             // Show 3 dots while waiting for the first streaming delta. Once
             // `message.text` becomes non-empty, the outer `if` falls through
             // to the text branch and this indicator is no longer rendered,
@@ -281,12 +288,40 @@ struct MessageBubbleView: View {
                 // necessary (real layout cap) and sufficient
                 // (no second-layer hosting-controller drift on
                 // top of it).
-                if shouldCollapse && !isExpanded && message.state != "streaming" {
+                if shouldCollapse && !isExpanded && message.state != "streaming"
+                    && message.role != "system" {
+                    // Collapse check fires FIRST for non-system roles
+                    // so long text→raw text + lineLimit (per the
+                    // Build 7525 root-cause fix). The `role != "system"`
+                    // carve-out keeps system messages on the dedicated
+                    // system-card branch below: a 65-line `/help` reply
+                    // has its own bordered card (left bar + 1pt hairline
+                    // + monospaced text), not the unstyled truncated
+                    // text view the collapse path produces. The system
+                    // card is content-shaped (column-aligned command
+                    // names); truncating it mid-list would be worse than
+                    // letting it grow, so we skip collapse for this
+                    // role entirely. User can still scroll past a tall
+                    // system bubble like any other chat content.
                     Text(plainTextForCollapse)
                         .font(roleTextFont)
                         .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
                         .lineLimit(collapseLineLimit)
-                } else if shouldMd {
+                } else if shouldMd && message.role != "system" {
+                    // Same role carve-out as the collapse branch:
+                    // system role ALWAYS uses the dedicated system
+                    // card (left bar + 1pt hairline + monospaced
+                    // text), even when the text happens to match a
+                    // markdown pattern. The /profiles reply's
+                    // `* name\n  name` lines, for example, trip the
+                    // list-item regex (`^[\-\*]\s`) and would
+                    // otherwise route to `MarkdownCardView`, which
+                    // doesn't apply the system chrome. The system
+                    // card is the canonical render for the role; the
+                    // formatter is the source of truth for layout
+                    // (column-aligned monospaced text), so handing
+                    // the same text to a markdown parser would
+                    // mangle the alignment.
                     MarkdownCardView(content: message.text)
                 } else if message.role == "thinking" {
                     ThinkingCardView(content: message.text)
@@ -301,6 +336,50 @@ struct MessageBubbleView: View {
                         .font(.system(.caption, design: .monospaced))
                         .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
                         .lineLimit(collapseLineLimit)
+                } else if message.role == "system" {
+                    HStack(alignment: .top, spacing: 0) {
+                        Rectangle()
+                            .fill(theme.primary)
+                            .frame(width: 3)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(message.text)
+                                // Monospaced so the column alignment that
+                                // `LocalCommandRegistry.formatHelpList`
+                                // builds via space-padding survives into
+                                // rendering. Without `.monospaced`, each
+                                // character gets a different width and the
+                                // command-name column drifts to the right
+                                // for shorter ids (`/acp [action]` ends up
+                                // visually offset from `/clear           `).
+                                // The `.secondary` color + 14pt size keeps
+                                // the visual weight consistent with other
+                                // system messages (e.g. "/clear" →
+                                // "Chat cleared") that don't have alignment
+                                // — the monospace glyphs read as "tabular
+                                // info" without feeling like a code block.
+                                .font(.system(size: 14, design: .monospaced))
+                                .foregroundColor(theme.textPrimary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    }
+                    // Full-opacity card on the theme's `cardBackground`
+                    // (white in light mode, near-black in dark) so the
+                    // system bubble reads as a distinct panel against
+                    // the chat's `background` (light gray / pure black).
+                    // The earlier `.opacity(0.6)` made the card
+                    // effectively invisible on light backgrounds
+                    // because the 60% white blended into the 96% white
+                    // parent. A 1pt hairline border + corner radius
+                    // preserve the card shape even when the card and
+                    // chat background land on similar shades.
+                    .background(theme.cardBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(theme.textSecondary.opacity(0.2),
+                                    lineWidth: 0.5)
+                    )
+                    .cornerRadius(8)
                 } else {
                     Text(message.text)
                         .font(.body)
@@ -309,7 +388,15 @@ struct MessageBubbleView: View {
                 }
             }
 
-            if shouldCollapse && !isExpanded && message.state != "streaming" {
+            if shouldCollapse && !isExpanded && message.state != "streaming"
+                    && message.role != "system" {
+                // Same carve-out as the collapse branch in
+                // `messageText`: system messages don't get the
+                // "Show more..." button because they always render
+                // their full content in the system card (see the
+                // matching comment in `messageText` for why
+                // truncating a column-aligned command list is
+                // worse than letting it grow).
                 Button {
                     // Hand off to the parent so it can do
                     // `viewModel.messages[i] = updated` (which fires
