@@ -87,6 +87,16 @@ final class EventInterpreter {
     ///   2nd/3rd arrival keeps the bubble intact.
     @ObservationIgnored
     private var processedLifecycleEndByRun: Set<String> = []
+    /// Per-run `seq` watermark. The server's `payload.seq` is
+    /// monotonic per-run (verified for both assistant and thinking
+    /// streams — `EventInterpreter.swift:403, 507` already forward
+    /// `seq` into `ChatMessage`). Rejecting a delta with
+    /// `seq <= lastSeen` drops transport-level retransmits and
+    /// out-of-order arrivals at the gate, before any text
+    /// comparison runs. Cleared on `lifecycle=end` alongside the
+    /// other per-run accumulators.
+    @ObservationIgnored
+    private var lastSeenSeqByRun: [String: Int] = [:]
 
     func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String) async {
         switch event {
@@ -296,6 +306,7 @@ final class EventInterpreter {
                     accumulatedAssistantTextByRun.removeValue(forKey: runId)
                     assistantStartedAtByRun.removeValue(forKey: runId)
                     accumulatedThinkingTextByRun.removeValue(forKey: runId)
+                    lastSeenSeqByRun.removeValue(forKey: runId)
                     // Mark the runId as processed BEFORE returning so any
                     // racing re-delivery of the same `lifecycle=end` event
                     // short-circuits at the top of this branch. Inserting
