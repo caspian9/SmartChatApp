@@ -467,7 +467,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
             "agent-event thinking (seq ≤ 3) must render BEFORE the lifecycle=end response (seq = 4) — seq-driven per-run sort")
     }
 
-    private func makeAssistantDeltaEvent(runId: String, ts: Int, text: String) -> OpenClawAgentEventPayload {
+    private func makeAssistantDeltaEvent(runId: String, ts: Int, text: String, seq: Int = 2) -> OpenClawAgentEventPayload {
         let data: [String: AnyCodable] = [
             "text": AnyCodable(text),
         ]
@@ -478,9 +478,14 @@ final class EventInterpreterItemSortTests: XCTestCase {
             let ts: Int?
             let data: [String: AnyCodable]
         }
-        // Use a different seq from the thinking event (which
-        // uses seq=1) so the per-run seq sort distinguishes them.
-        let wire = Wire(runId: runId, seq: 2, stream: "assistant", ts: ts, data: data)
+        // Default `seq: 2` is intentionally different from the
+        // thinking event helper (which uses seq=1) so per-run
+        // seq sort distinguishes assistant from thinking.
+        // Tests that send multiple deltas for the same runId
+        // must pass distinct seqs explicitly — otherwise the
+        // EventInterpreter's seq-replay guard drops the 2nd
+        // arrival before any text comparison runs.
+        let wire = Wire(runId: runId, seq: seq, stream: "assistant", ts: ts, data: data)
         let json = try! JSONEncoder().encode(wire)
         return try! JSONDecoder().decode(OpenClawAgentEventPayload.self, from: json)
     }
@@ -840,10 +845,10 @@ final class EventInterpreterItemSortTests: XCTestCase {
     func test_assistantDelta_partialOverlap_replacesFromAlignmentPoint() async throws {
         let runId = "r-po-1"
         await interpreter.handleTransportEvent(
-            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "this is **ok")),
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "this is **ok", seq: 1)),
             sessionKey: "session-1")
         await interpreter.handleTransportEvent(
-            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "this is **flowed ok")),
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "this is **flowed ok", seq: 2)),
             sessionKey: "session-1")
         let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
         XCTAssertEqual(bubble?.text, "this is **flowed ok",
@@ -855,10 +860,10 @@ final class EventInterpreterItemSortTests: XCTestCase {
     func test_assistantDelta_noOverlap_concatenates() async throws {
         let runId = "r-po-2"
         await interpreter.handleTransportEvent(
-            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "hello ")),
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "hello ", seq: 1)),
             sessionKey: "session-1")
         await interpreter.handleTransportEvent(
-            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "world")),
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "world", seq: 2)),
             sessionKey: "session-1")
         let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
         XCTAssertEqual(bubble?.text, "hello world",
@@ -876,10 +881,10 @@ final class EventInterpreterItemSortTests: XCTestCase {
     func test_assistantDelta_shortOverlapBelowThreshold_concatenates() async throws {
         let runId = "r-po-3"
         await interpreter.handleTransportEvent(
-            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "abcdef")),
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "abcdef", seq: 1)),
             sessionKey: "session-1")
         await interpreter.handleTransportEvent(
-            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "abc123")),
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "abc123", seq: 2)),
             sessionKey: "session-1")
         let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
         XCTAssertEqual(bubble?.text, "abcdefabc123",
