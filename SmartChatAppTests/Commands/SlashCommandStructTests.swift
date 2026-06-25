@@ -100,4 +100,64 @@ final class SlashCommandStructTests: XCTestCase {
         let cmd = SlashCommand.fromCommandEntry(entry)
         XCTAssertEqual(Set(cmd.aliases), Set(["/h", "/?"]))
     }
+
+    /// Gateway `commands.list` is inconsistent about whether `name`
+    /// carries the leading slash. We always want the canonical
+    /// `/`-prefixed form so the autocomplete popup renders
+    /// "/commands" (not "commands") and the user's `/com` query
+    /// matches `/commands`.
+    func test_fromCommandEntry_normalizesIdPrefix_whenMissing() {
+        let entry = CommandEntry(
+            name: "commands", nativename: nil, textaliases: nil,
+            description: "List commands", category: nil,
+            source: .init("native"), scope: .init("text"),
+            acceptsargs: false, args: nil
+        )
+        let cmd = SlashCommand.fromCommandEntry(entry)
+        XCTAssertEqual(cmd.id, "/commands",
+            "Server command names without leading / must be normalized")
+    }
+
+    func test_fromCommandEntry_idempotent_whenPrefixAlreadyPresent() {
+        let entry = CommandEntry(
+            name: "/help", nativename: nil, textaliases: nil,
+            description: "Help", category: nil,
+            source: .init("native"), scope: .init("text"),
+            acceptsargs: false, args: nil
+        )
+        let cmd = SlashCommand.fromCommandEntry(entry)
+        XCTAssertEqual(cmd.id, "/help",
+            "Already-prefixed names must not get a second /")
+    }
+
+    func test_fromCommandEntry_normalizesAliasesPrefix_whenMissing() {
+        let entry = CommandEntry(
+            name: "help", nativename: nil,
+            textaliases: ["h", "?"],
+            description: "Help", category: nil,
+            source: .init("native"), scope: .init("text"),
+            acceptsargs: false, args: nil
+        )
+        let cmd = SlashCommand.fromCommandEntry(entry)
+        XCTAssertEqual(Set(cmd.aliases), Set(["/h", "/?"]),
+            "Aliases without leading / must also be normalized")
+    }
+
+    func test_fromCommandEntry_dropsAliasEqualToName_afterNormalization() {
+        // If gateway sends name="help" + textaliases=["help"],
+        // the dedup-by-name filter must still drop the alias after
+        // normalization (name normalizes to "/help", alias normalizes
+        // to "/help" too — still equal, still dropped).
+        let entry = CommandEntry(
+            name: "help", nativename: nil,
+            textaliases: ["help"],
+            description: "Help", category: nil,
+            source: .init("native"), scope: .init("text"),
+            acceptsargs: false, args: nil
+        )
+        let cmd = SlashCommand.fromCommandEntry(entry)
+        XCTAssertEqual(cmd.id, "/help")
+        XCTAssertEqual(cmd.aliases, [],
+            "Alias equal to normalized id must be dropped")
+    }
 }

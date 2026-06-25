@@ -53,17 +53,41 @@ public struct SlashCommand: Identifiable, Hashable, Sendable {
 extension SlashCommand {
     /// Wrap an upstream `CommandEntry` (from OpenClawProtocol) as
     /// a `.server` `SlashCommand` for unified display and filtering.
+    /// Normalizes the id and aliases to start with `/` — the
+    /// gateway's `commands.list` response is inconsistent about
+    /// whether `name` includes the leading slash (some entries
+    /// arrive as `commands`, others as `/commands`), and the
+    /// autocomplete popup / `filter(_:)` / `parse(_:)` all assume
+    /// the canonical `/`-prefixed form. Without normalization,
+    /// typing `/com` wouldn't surface a server entry whose name is
+    /// `commands`, and the popup would render "commands" instead
+    /// of "/commands".
     public static func fromCommandEntry(_ entry: CommandEntry) -> SlashCommand {
         let syntax = synthesizeArgumentSyntax(from: entry.args)
-        let aliases = (entry.textaliases ?? []).filter { $0 != entry.name }
+        let normalizedId = Self.normalizeSlash(entry.name)
+        // Normalize first, then dedup against the normalized id.
+        // The raw `name` may differ from a raw alias only by the
+        // missing leading `/` (e.g. name="help", alias="/help" — the
+        // server's two duplicate entries would survive a naive
+        // `$0 != entry.name` filter and end up as duplicate
+        // normalized aliases on the SlashCommand).
+        let normalizedAliases = (entry.textaliases ?? [])
+            .map(Self.normalizeSlash)
+            .filter { $0 != normalizedId }
         return SlashCommand(
-            id: entry.name,
+            id: normalizedId,
             description: entry.description,
             argumentSyntax: syntax,
-            aliases: aliases,
+            aliases: normalizedAliases,
             source: .server,
             executor: nil
         )
+    }
+
+    /// Prepend `/` if not already present. Idempotent on already-
+    /// normalized inputs (`/help` → `/help`).
+    private static func normalizeSlash(_ s: String) -> String {
+        s.hasPrefix("/") ? s : "/" + s
     }
 
     private static func synthesizeArgumentSyntax(

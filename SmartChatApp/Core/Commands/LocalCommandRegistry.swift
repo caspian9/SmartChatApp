@@ -106,17 +106,37 @@ public class LocalCommandRegistry {
         Array(commands.values).sorted { $0.id < $1.id }
     }
 
+    /// Public test seam for the `/help` formatter. The runtime path
+    /// (the `/help` executor closure) invokes `formatHelpList` with
+    /// the context's `mergedCommands` and wraps the result in a
+    /// `.bubble(text)` `SlashCommandResult`. Tests need to call the
+    /// formatter directly to assert on its column alignment without
+    /// standing up a full VM context, so we re-export it here. Marked
+    /// `open` (not `public`) so subclasses can still override the
+    /// formatting if they want a different layout.
+    open func helpText(for commands: [SlashCommand]) -> String {
+        formatHelpList(commands)
+    }
+
     private nonisolated func formatHelpList(_ list: [SlashCommand]) -> String {
         let local = list.filter { $0.source == .local }
         let server = list.filter { $0.source == .server }
+        // Compute the longest `id + " " + syntax` once per group so the
+        // description column starts at the same x-offset for every row
+        // (the previous `formatLine` padded only the syntax to a fixed
+        // 14 chars, which drifted when the id was shorter or longer than
+        // the syntax — `/acp [action]` and `/activation [mode]` ended
+        // up with their descriptions offset by 6 chars under monospaced
+        // rendering). The whole-table max keeps the layout tight
+        // without over-padding the longest row.
         var out = "Available commands:\n"
         if !local.isEmpty {
             out += "\n── Local (\(local.count)) ──\n"
-            out += local.map(formatLine).joined(separator: "\n")
+            out += formatGroup(local)
         }
         if !server.isEmpty {
             out += "\n\n── Server (\(server.count)) ──\n"
-            out += server.map(formatLine).joined(separator: "\n")
+            out += formatGroup(server)
         } else {
             out += "\n\n── Server (unavailable) ──\n"
             out += "Server command list could not be\n"
@@ -126,8 +146,26 @@ public class LocalCommandRegistry {
         return out
     }
 
-    private nonisolated func formatLine(_ cmd: SlashCommand) -> String {
-        let syntax = cmd.argumentSyntax.map { " \($0)" } ?? ""
-        return "  \(cmd.id)\(syntax.padding(toLength: 14, withPad: " ", startingAt: 0))\(cmd.description)"
+    private nonisolated func formatGroup(_ cmds: [SlashCommand]) -> String {
+        let widths = cmds.map { cmd -> Int in
+            let syntax = cmd.argumentSyntax.map { " \($0)" } ?? ""
+            return cmd.id.count + syntax.count
+        }
+        let colWidth = (widths.max() ?? 0) + 2  // +2 = at least 2 spaces of gap
+        return cmds.map { cmd in
+            let syntax = cmd.argumentSyntax.map { " \($0)" } ?? ""
+            let idSyntax = "\(cmd.id)\(syntax)"
+            // Pad right of `idSyntax` with literal spaces so the
+            // description column starts at the same x-offset
+            // across all rows in the group. The `String.padding`
+            // API family is fiddly here — its `startingAt:` variant
+            // inserts at the given index (not appends), and
+            // Foundation's `stringByPaddingToLength` throws
+            // NSException when `startingAt` is at-or-past
+            // `endIndex` — so build the gap directly.
+            let padCount = max(0, colWidth - idSyntax.count)
+            let gap = String(repeating: " ", count: padCount)
+            return "  " + idSyntax + gap + cmd.description
+        }.joined(separator: "\n")
     }
 }
