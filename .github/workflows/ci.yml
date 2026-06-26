@@ -8,42 +8,28 @@ permissions:
   contents: read
 
 on:
-  # workflow_dispatch lets a maintainer manually fire this
-  # workflow from the Actions tab or via `gh workflow run`,
-  # which is the only way to satisfy the branch-protection
-  # required checks on PRs that don't touch any path in the
-  # pull_request paths: filter (e.g. docs-only PRs touching
-  # CLAUDE.md or docs/**). The dispatch bypasses the
-  # pull_request trigger's paths filter — the workflow body
-  # itself is unchanged.
+  # pull_request has NO paths filter — the trigger fires for every
+  # PR, including docs-only ones. The detect-changes job (below)
+  # checks whether the PR touched any code/build-config file and
+  # gates the macos-15 build matrix on that signal. docs-only
+  # PRs get green "skipped" check-runs (branch protection treats
+  # skipped as passing) without spending the 30-minute macos-15
+  # build.
+  #
+  # The previous design used a paths: filter on pull_request and
+  # a manual workflow_dispatch workaround for docs-only PRs.
+  # That was broken: dispatched check-runs are not PR-associated,
+  # so branch protection's required-check UI showed "Expected —
+  # Waiting for status to be reported" even when the checks had
+  # actually succeeded (observed on PR #24, 2026-06-25). Keeping
+  # the workflow_dispatch trigger as an emergency manual re-run
+  # path — it always runs the full build via the OR clause in
+  # `build.if` below.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
-    # Paths filter: a PR only triggers the build matrix if it
-    # touches code, tests, build config, or CI. Pure-doc or
-    # comment-only PRs (e.g. README polish, CLAUDE.md typo
-    # fixes) skip the 30-min macos-15 build entirely. The
-    # filter is intentionally inclusive — anything that
-    # could plausibly affect a Swift build or test is in
-    # the include list, and `main` pushes always run (no
-    # paths filter on `push:`).
-    #
-    # Maintenance tip: when adding a new top-level source dir,
-    # add it to this list. Until then, PRs that ONLY touch
-    # files in the new dir will silently skip CI — easy to
-    # miss in code review. The current paths match the
-    # directory layout documented in CLAUDE.md.
-    paths:
-      - 'SmartChatApp/**'
-      - 'SmartChatAppTests/**'
-      - 'project.yml'
-      - 'Package.resolved'
-      - 'Makefile'
-      - 'config/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
 
 # Note: concurrency moved to job level (see `build.concurrency` below).
 # Workflow-level concurrency can't see the matrix dimension, so
@@ -52,8 +38,64 @@ on:
 # in scope.
 
 jobs:
+  # Path-detection gate. Runs on ubuntu (cheap, ~10-20s) and
+  # produces a single output `code` = 'true' if the PR changed
+  # any code/build-config file, 'false' otherwise. The macos-15
+  # build job below uses this to decide whether to run.
+  #
+  # Skip for non-PR events (push to main, workflow_dispatch):
+  # those should always run the full build, and the OR clause
+  # in `build.if` short-circuits to true for them.
+  #
+  # Maintenance tip: when adding a new top-level source dir,
+  # add it to the `code` filter below. Until then, PRs that
+  # ONLY touch files in the new dir will not trigger the
+  # macos-15 build. (The pull_request trigger itself no longer
+  # has a paths: filter — every PR fires this workflow.)
+  # The current paths match the directory layout documented in
+  # CLAUDE.md.
+  detect-changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0  # paths-filter needs git history to diff against base
+
+      - id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          filters: |
+            code:
+              - 'SmartChatApp/**'
+              - 'SmartChatAppTests/**'
+              - 'project.yml'
+              - 'Package.resolved'
+              - 'Makefile'
+              - 'config/**'
+              - 'scripts/**'
+              - '.github/workflows/**'
+
   build:
     name: Build & Test (${{ matrix.destination.label }})
+    needs: detect-changes
+    # For pull_request: run the macos-15 build only if the PR
+    # changed any code/build-config file (detect-changes output
+    # `code == 'true'`). For push to main and workflow_dispatch:
+    # always run (the event_name check wins via the OR clause).
+    #
+    # A skipped job reports its check-run with conclusion
+    # "skipped", which GitHub treats as passing for branch
+    # protection. That's the whole point of this design:
+    # docs-only PRs satisfy the required checks without burning
+    # the 30-minute macos-15 build.
+    if: |
+      github.event_name != 'pull_request' ||
+      needs.detect-changes.outputs.code == 'true'
     runs-on: macos-15
     timeout-minutes: 30  # bumped from 25 to absorb the matrix
     # Job-level concurrency has the matrix dimension in scope, so
