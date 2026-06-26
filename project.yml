@@ -28,6 +28,13 @@ packages:
   MarkdownDisplayView:
     url: https://github.com/zjc19891106/MarkdownDisplayView.git
     from: "1.7.8"
+  # Pinned to the same version XcodeGen resolves for
+  # `MarkdownDisplayView`'s transitive closure (0.8.0). Declared
+  # explicitly here so `SmartChatAppTests` can import it for the
+  # preprocessor integration test (issue #23).
+  swift-markdown:
+    url: https://github.com/swiftlang/swift-markdown.git
+    from: "0.8.0"
 
 targets:
   SmartChatApp:
@@ -99,6 +106,16 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: SmartChatApp
+      # Direct dep on swift-markdown so the integration test in
+      # `MarkdownTextPreprocessorIntegrationTests` can parse the
+      # preprocessed text and assert the CommonMark hard-break
+      # AST node is emitted. swift-markdown is also a transitive
+      # dep of `MarkdownDisplayView`, but SwiftPM does not let a
+      # target link a transitive product directly — declaring it
+      # here pins the same version XcodeGen resolves for the
+      # main target's transitive closure.
+      - package: swift-markdown
+        product: Markdown
 
 schemes:
   SmartChatApp:
