@@ -276,3 +276,46 @@ jobs:
           path: build/Logs/Test/*.xcresult
           if-no-files-found: warn
           retention-days: 30
+
+  # When the `build` matrix above is skipped (docs-only PR),
+  # its check-run is reported under the matrix TEMPLATE name
+  # (`Build & Test (${{ matrix.destination.label }})`), not the
+  # two matrix-EXPANDED names that branch protection requires
+  # (`Build & Test (iOS 18 (latest))` and `Build & Test (iOS 18
+  # (penultimate))`). The template name doesn't match either
+  # required check, so the PR is BLOCKED even though the build
+  # was correctly skipped.
+  #
+  # This job fixes that by explicitly emitting check-runs with
+  # the matrix-expanded names for docs-only PRs. It runs on
+  # ubuntu (cheap, ~5s per matrix slot) and uses the SAME
+  # `name:` template + SAME matrix labels as `build`, so each
+  # child creates a check-run with exactly the name branch
+  # protection requires. The status is `success` (no-op step),
+  # which satisfies the required check.
+  #
+  # Skipped for non-PR events (push to main, workflow_dispatch)
+  # because `detect-changes` is skipped for those and
+  # `outputs.code` is empty — the condition would erroneously
+  # treat that as "docs-only". For non-PR events the regular
+  # `build` matrix handles everything.
+  docs-check-status:
+    name: Build & Test (${{ matrix.destination.label }})
+    needs: detect-changes
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.detect-changes.outputs.code == 'false'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        destination:
+          - name: "iPhone 17 Pro"
+            label: "iOS 18 (latest)"
+          - name: "iPhone 17"
+            label: "iOS 18 (penultimate)"
+    steps:
+      - name: No-op (docs-only PR)
+        run: |
+          echo "Docs-only PR — matrix `build` was skipped."
+          echo "Emitting matrix-expanded check-run with SUCCESS status"
+          echo "to satisfy branch protection's required check names."
