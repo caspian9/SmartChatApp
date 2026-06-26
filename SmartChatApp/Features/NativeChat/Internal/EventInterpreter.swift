@@ -1115,63 +1115,87 @@ final class EventInterpreter {
             // thinking branch — no stable id namespace, would
             // create an unkeyed bubble that can't dedup).
             if let runId = chat.runId, !textBlocks.isEmpty {
-                let now = Date()
-                // Use `chat.state` if the server supplies one
-                // (typically "final" for slash-command responses);
-                // default to "final" so the bubble renders its
-                // complete content rather than the
-                // typing-indicator shell.
-                let resolvedState = chat.state ?? "final"
-                // Prefer the chat event's role when it's set;
-                // default to "assistant" so non-streaming slash-
-                // command replies render in the same visual lane
-                // as the agent's assistant deltas.
-                let resolvedRole = role == "?" ? "assistant" : role
-                // Concatenate text blocks in order. A single chat
-                // event can carry multiple text blocks (rare but
-                // possible — the SDK sometimes splits paragraphs).
-                // Use "\n\n" as the separator so the bubble's
-                // markdown renderer treats them as separate
-                // paragraphs rather than smushing them onto one
-                // line.
-                let combinedText = textBlocks
-                    .sorted { $0.blockIndex < $1.blockIndex }
-                    .map(\.text)
-                    .joined(separator: "\n\n")
-                let message = ChatMessage(
-                    id: runId,
-                    text: combinedText,
-                    timestamp: now,
-                    role: resolvedRole,
-                    state: resolvedState,
-                    runId: runId,
-                    seq: nil,
-                    startedAt: nil,
-                    endedAt: nil,
-                    livenessState: nil,
-                    toolCallId: nil,
-                    toolName: nil,
-                    stopReason: nil,
-                    isFresh: true
-                )
-                await viewModel?.receiveMessage(message)
-                // Slash-command responses are delivered via the
-                // chat-event stream (no agent-event lifecycle=end
-                // accompanies them), so the watchdog-armed
-                // `isSending = true` from `sendAsMessage` would
-                // stay stuck forever — the input box / send
-                // button would refuse touches until the 90s
-                // watchdog finally fires. Reset it here on the
-                // terminal chat event so the user can send the
-                // next message immediately.
+                // Skip when the agent-event path is (or has been)
+                // active for this runId. The agent-event path
+                // writes a ChatMessage with proper startedAt /
+                // endedAt from lifecycle=start / lifecycle=end.
+                // The chat event's text blocks carry no timing
+                // info, so upserting with startedAt: nil,
+                // endedAt: nil here would wipe the time footer
+                // the agent path set on the same id (runId).
                 //
-                // Skip on non-terminal states (a server that
-                // streams the slash-command reply across multiple
-                // chat events would deliver intermediate states
-                // here; resetting on each would prematurely drop
-                // `isSending` while text is still arriving).
-                if resolvedState == "final" {
-                    viewModel?.resetSendState()
+                // Keep this routing path for true
+                // server-text-only flows — slash-command replies,
+                // any other server reply that the agent-event
+                // stream doesn't accompany — where the
+                // agent-event path doesn't fire and this is the
+                // only chance to display the response.
+                let agentPathActiveOrDone =
+                    accumulatedAssistantTextByRun[runId] != nil
+                    || processedLifecycleEndByRun.contains(runId)
+                if agentPathActiveOrDone {
+                    AppLogger.log(
+                        "chat event text - skipping routing (agent-event path active or completed for runId: \(runId))",
+                        category: .nativeChat, level: .debug)
+                } else {
+                    let now = Date()
+                    // Use `chat.state` if the server supplies one
+                    // (typically "final" for slash-command responses);
+                    // default to "final" so the bubble renders its
+                    // complete content rather than the
+                    // typing-indicator shell.
+                    let resolvedState = chat.state ?? "final"
+                    // Prefer the chat event's role when it's set;
+                    // default to "assistant" so non-streaming slash-
+                    // command replies render in the same visual lane
+                    // as the agent's assistant deltas.
+                    let resolvedRole = role == "?" ? "assistant" : role
+                    // Concatenate text blocks in order. A single chat
+                    // event can carry multiple text blocks (rare but
+                    // possible — the SDK sometimes splits paragraphs).
+                    // Use "\n\n" as the separator so the bubble's
+                    // markdown renderer treats them as separate
+                    // paragraphs rather than smushing them onto one
+                    // line.
+                    let combinedText = textBlocks
+                        .sorted { $0.blockIndex < $1.blockIndex }
+                        .map(\.text)
+                        .joined(separator: "\n\n")
+                    let message = ChatMessage(
+                        id: runId,
+                        text: combinedText,
+                        timestamp: now,
+                        role: resolvedRole,
+                        state: resolvedState,
+                        runId: runId,
+                        seq: nil,
+                        startedAt: nil,
+                        endedAt: nil,
+                        livenessState: nil,
+                        toolCallId: nil,
+                        toolName: nil,
+                        stopReason: nil,
+                        isFresh: true
+                    )
+                    await viewModel?.receiveMessage(message)
+                    // Slash-command responses are delivered via the
+                    // chat-event stream (no agent-event lifecycle=end
+                    // accompanies them), so the watchdog-armed
+                    // `isSending = true` from `sendAsMessage` would
+                    // stay stuck forever — the input box / send
+                    // button would refuse touches until the 90s
+                    // watchdog finally fires. Reset it here on the
+                    // terminal chat event so the user can send the
+                    // next message immediately.
+                    //
+                    // Skip on non-terminal states (a server that
+                    // streams the slash-command reply across multiple
+                    // chat events would deliver intermediate states
+                    // here; resetting on each would prematurely drop
+                    // `isSending` while text is still arriving).
+                    if resolvedState == "final" {
+                        viewModel?.resetSendState()
+                    }
                 }
             }
 
