@@ -44,13 +44,23 @@ struct MarkdownCardView: View {
     var body: some View {
         let contentWidth = UIScreen.main.bounds.width - Self.bubbleChromeWidth
         if #available(iOS 15.0, *) {
+            // Preprocess before handing to `MarkdownViewTextKit` (a
+            // CommonMark renderer from `MarkdownDisplayView`): it
+            // collapses single newlines to spaces per the CommonMark
+            // spec, but the server uses single newlines for visual
+            // line breaks. Convert them to hard breaks so the bubble
+            // renders one line per row. The conversion lives in
+            // `MarkdownTextPreprocessor` (issue #23); tests in
+            // `SmartChatAppTests/MarkdownTextPreprocessorTests.swift`.
             MarkdownViewRepresentable(
-                markdown: content,
+                markdown: MarkdownTextPreprocessor.preservingSingleNewlines(content),
                 height: $height,
                 onLinkTap: openURL
             )
             .frame(width: contentWidth, height: max(height, 1), alignment: .topLeading)
         } else {
+            // iOS < 15 fallback uses SwiftUI `Text`, which preserves
+            // newlines by default — no preprocessing needed.
             Text(content)
                 .font(.body)
                 .frame(width: contentWidth, height: max(height, 1), alignment: .topLeading)

@@ -51,6 +51,16 @@ only when the corresponding `vX.Y.Z` tag is cut.
   (squash / rebase only).
 
 ### Fixed
+- `MarkdownCardView`: server single-newline line breaks
+  preserved as visible line breaks instead of being
+  collapsed to spaces by the underlying CommonMark
+  renderer (issue #23). New helper
+  `MarkdownTextPreprocessor.preservingSingleNewlines`
+  converts lone `\n` to CommonMark hard breaks
+  (`<br>\n`); paragraph breaks (`\n\n`) are untouched.
+  Streaming bubbles were already correct (they use
+  SwiftUI `Text(...)`, which preserves `\n`); only the
+  post-`lifecycle=end` final-bubble render was affected.
 - CONTRIBUTING.md: fixed two broken cross-links. The
   `CLAUDE.md` link pointed at `.claude/CLAUDE.md` (a
   gitignored path; the committed file is at the repo
