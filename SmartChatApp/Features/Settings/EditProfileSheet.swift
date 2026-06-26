@@ -20,6 +20,15 @@ struct EditProfileSheet: View {
     @State private var editEnabledCaps: Set<String> = []
     @State private var isFailedFlashActive = false
     @State private var flashTask: Task<Void, Never>?
+    /// Snapshot of the form fields as they were when the sheet
+    /// opened (issue #29). For existing profiles this is the
+    /// loaded `GatewayProfile`'s fields; for new profiles it's
+    /// `nil` and we fall through to `ProfileFormSnapshot.empty`
+    /// so the alert only fires on real edits.
+    @State private var originalSnapshot: ProfileFormSnapshot?
+    /// Drives the Save / Don't Save / Cancel alert when the user
+    /// taps Cancel on a dirty form.
+    @State private var showUnsavedChangesAlert: Bool = false
     @Bindable private var connectionState = ConnectionState.shared
 
     /// Caps exposed in the picker. `device` is intentionally omitted — it's
@@ -102,6 +111,34 @@ struct EditProfileSheet: View {
         return Self.matchesHost(cleanHost)
     }
 
+    /// Build a snapshot of the live form state. Reconstructed on
+    /// every body re-eval (cheap — eight value copies), so the
+    /// comparison against `originalSnapshot` always reflects the
+    /// current edit buffer. Used by `hasUnsavedChanges` to drive
+    /// the Save / Don't Save / Cancel alert (issue #29).
+    private var currentSnapshot: ProfileFormSnapshot {
+        ProfileFormSnapshot(
+            name: editName,
+            colorTag: editColorTag,
+            host: editHost,
+            port: Int(editPort) ?? 443,
+            token: editToken,
+            tlsEnabled: editTlsEnabled,
+            role: editRole,
+            enabledCaps: editEnabledCaps
+        )
+    }
+
+    /// One-line forwarder to `ProfileFormSnapshot.hasUnsavedChanges`.
+    /// `nil` original → new profile (baseline = `.empty`).
+    /// `non-nil` original → existing profile (baseline = loaded snapshot).
+    private var hasUnsavedChanges: Bool {
+        ProfileFormSnapshot.hasUnsavedChanges(
+            original: originalSnapshot,
+            current: currentSnapshot
+        )
+    }
+
     /// Internal so `EditProfileSheetTests` can assert on the regex
     /// without spinning up a SwiftUI view. Kept fileprivate to the
     /// same module — the view is the only consumer in production.
@@ -161,6 +198,14 @@ struct EditProfileSheet: View {
             _editRole = State(initialValue: profile.role)
             _editEnabledCaps = State(initialValue: profile.enabledCaps)
         }
+        // Capture the snapshot used by the unsaved-changes diff
+        // (issue #29). For new profiles this stays `nil` and
+        // `ProfileFormSnapshot.hasUnsavedChanges` falls through
+        // to `.empty` — any user input on a new profile counts
+        // as an edit.
+        _originalSnapshot = State(
+            initialValue: profile.map(ProfileFormSnapshot.init(from:))
+        )
     }
 
     private func testConnection() {
@@ -221,6 +266,38 @@ struct EditProfileSheet: View {
         Task {
             await SessionManager.shared.disconnect()
         }
+    }
+
+    /// Called from the Cancel toolbar button (issue #29). If the
+    /// form is clean, dismiss immediately. If dirty, present the
+    /// Save / Don't Save / Cancel alert so the user can't lose
+    /// edits by accident. The swipe-down / outside-tap paths are
+    /// handled separately by `.interactiveDismissDisabled`
+    /// below — they're silently blocked when dirty, so the user
+    /// is forced through the alert (the standard iOS pattern for
+    /// dirty-form sheets).
+    private func requestDismiss() {
+        if hasUnsavedChanges {
+            showUnsavedChangesAlert = true
+        } else {
+            onCancel?()
+            dismiss()
+        }
+    }
+
+    /// Commit + dismiss. Used by both the toolbar Save button and
+    /// the alert's Save option (so the user can commit from either
+    /// path). The view-side cleanups (parent state reset via
+    /// `onCancel`) are NOT called here — `onSave` is the parent's
+    /// success path and resets its own state.
+    private func saveAndDismiss() {
+        let port = Int(editPort) ?? 443
+        let cleanHost = Self.cleanHost(editHost)
+        onSave(
+            editName, editColorTag, cleanHost, port, editToken,
+            editTlsEnabled, editRole, editEnabledCaps
+        )
+        dismiss()
     }
 
     /// Connect / Disconnect button for the sheet when it's editing the
@@ -398,6 +475,21 @@ struct EditProfileSheet: View {
             }
             .navigationTitle(isNewProfile ? "New Profile" : "Edit Profile")
             .navigationBarTitleDisplayMode(.inline)
+            // Block the swipe-down / outside-tap dismiss paths when
+            // the form is dirty (issue #29). The user must go
+            // through the Cancel button → alert (or Save), so we
+            // never silently lose edits.
+            .interactiveDismissDisabled(hasUnsavedChanges)
+            .alert("Unsaved Changes", isPresented: $showUnsavedChangesAlert) {
+                Button("Save") { saveAndDismiss() }
+                Button("Don't Save", role: .destructive) {
+                    onCancel?()
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("You have unsaved changes. Save them, discard them, or keep editing.")
+            }
             .onChange(of: connectionState.lastError) { _, newError in
                 guard isEditingActiveProfile else { return }
                 flashTask?.cancel()
@@ -412,19 +504,18 @@ struct EditProfileSheet: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        onCancel?()
-                        dismiss()
-                    }
+                    // Routed through `requestDismiss` so the
+                    // unsaved-changes alert fires on a dirty
+                    // form (issue #29). Clean forms dismiss
+                    // immediately, as before.
+                    Button("Cancel", action: requestDismiss)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Save") {
-                        let port = Int(editPort) ?? 443
-                        let cleanHost = Self.cleanHost(editHost)
-                        onSave(editName, editColorTag, cleanHost, port, editToken, editTlsEnabled, editRole, editEnabledCaps)
-                        dismiss()
-                    }
-                    .disabled(editName.isEmpty)
+                    // Routed through `saveAndDismiss` so the
+                    // alert's Save button and the toolbar Save
+                    // button share one commit+dismiss path.
+                    Button("Save", action: saveAndDismiss)
+                        .disabled(editName.isEmpty)
                 }
             }
         }
