@@ -901,10 +901,6 @@ final class EventInterpreter {
                     isFresh: true
                 )
                 await viewModel?.receiveMessage(message)
-                if itemPhase == "end" {
-                    toolStartedAtByCall.removeValue(forKey: toolKey)
-                    toolReceivedAtByCall.removeValue(forKey: toolKey)
-                }
             case "command_output":
                 // Per-item command output stream. For exec/bash tools the
                 // result body arrives here in `output` (incremental on
@@ -966,6 +962,21 @@ final class EventInterpreter {
                     isFresh: true
                 )
                 await viewModel?.receiveMessage(message)
+                // Cleanup moved here from the `item phase=end` branch:
+                // that branch fires before `command_output` arrives, so
+                // removing `toolStartedAtByCall[toolKey]` there would let
+                // this `command_output phase=end` write a toolResult
+                // bubble with `startedAt: nil` (clobbering the valid
+                // start time the `item phase=start` recorded). Only
+                // release the per-tool state once the terminal
+                // command_output has actually landed. Dict is bounded
+                // by the number of tool calls in a single run, so a
+                // missed cleanup (no command_output ever arrives) is
+                // harmless.
+                if outputPhase == "end" {
+                    toolStartedAtByCall.removeValue(forKey: toolKey)
+                    toolReceivedAtByCall.removeValue(forKey: toolKey)
+                }
             default:
                 // plan, approval, patch, compaction, error — not yet surfaced.
                 AppLogger.log("agent UNHANDLED stream=\(payload.stream) runId=\(payload.runId) seq=\(payload.seq ?? -1) data=\(EventInterpreter.serializeDataForLog(data))", category: .nativeChat)
@@ -1120,9 +1131,9 @@ final class EventInterpreter {
                 // writes a ChatMessage with proper startedAt /
                 // endedAt from lifecycle=start / lifecycle=end.
                 // The chat event's text blocks carry no timing
-                // info, so upserting with startedAt: nil,
-                // endedAt: nil here would wipe the time footer
-                // the agent path set on the same id (runId).
+                // info, so upserting with `startedAt: nil,
+                // endedAt: nil` here would wipe the time footer
+                // the agent path set on the same id (`runId`).
                 //
                 // Keep this routing path for true
                 // server-text-only flows — slash-command replies,
