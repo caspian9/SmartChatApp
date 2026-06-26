@@ -72,13 +72,14 @@ struct ProfileListView: View {
         // Spinner should only appear on the active profile's row — non-active
         // rows must remain clickable so the user can click "Switch" to
         // cancel the in-flight attempt and switch to a different profile.
-        guard profileManager.activeProfile?.id == profile.id else { return false }
-        switch (connectionState.phase, profile.role) {
-        case (.connecting(let role), .operatorOnly): return role == .`operator`
-        case (.connecting(let role), .nodeOnly): return role == .node
-        case (.connecting(let role), .operatorAndNode): return role == .`operator` || role == .node
-        default: return false
-        }
+        // Pure decision extracted to `ProfileConnectionState` for testability
+        // (issue #35).
+        return ProfileConnectionState.isProfileConnecting(
+            activeProfileId: profileManager.activeProfile?.id,
+            profileId: profile.id,
+            profileRole: profile.role,
+            phase: connectionState.phase
+        )
     }
 
     private func isButtonDisabled(for profile: GatewayProfile) -> Bool {
@@ -157,10 +158,15 @@ private struct ProfileRow: View {
                 Task { await onButtonTap() }
             } label: {
                 ZStack {
-                    if isConnecting {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
-                    }
+                    // `.id(isConnecting)` forces SwiftUI to mount a
+                    // fresh `SpinnerSlot` subview on every
+                    // false→true→false→true transition. Without this,
+                    // the row's `ProgressView` instance can be reused
+                    // across scrolls/refreshes and its internal
+                    // animation timer can pause, making the spinner
+                    // appear frozen (issue #35).
+                    SpinnerSlot(isConnecting: isConnecting)
+                        .id(isConnecting)
                     if isFailedFlashActive {
                         Text("Failed")
                             .foregroundColor(.red)
@@ -217,6 +223,23 @@ private struct ProfileRow: View {
                 onRequestDelete()
             } label: {
                 Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+}
+
+/// Wraps the connecting spinner so the parent ZStack can apply
+/// `.id(isConnecting)` and force a fresh subview on each connect
+/// attempt (issue #35). When the inner `if isConnecting` flips
+/// without the `.id`, SwiftUI may reuse the existing `ProgressView`
+/// across scrolls/refreshes, pausing its internal animation timer.
+private struct SpinnerSlot: View {
+    let isConnecting: Bool
+    var body: some View {
+        Group {
+            if isConnecting {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
             }
         }
     }
