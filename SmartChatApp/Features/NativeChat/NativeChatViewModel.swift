@@ -385,10 +385,14 @@ final class NativeChatViewModel {
         // EventInterpreter to disambiguate "upsert was dropped"
         // (in-store bubble exists but view doesn't show it) from
         // "upsert was lost" (in-store bubble doesn't exist).
-        // Gated on the user's `logsNativeChat` Settings toggle
-        // (default ON in debug, OFF in release) so production
-        // log volume is unaffected.
-        if ConfigurationManager.shared.logsNativeChat {
+        // Gated on `logsNativeChat` AND `logsChatMessagesRenderDump`
+        // (same toggle as the post-converter dump at line 264 — both
+        // are view-side renders of the converted [ChatMessage]
+        // array; this one fires after `applyStreamingMetadata` +
+        // `sortForDisplay` and prints the top-3 of what the view
+        // is about to render).
+        if ConfigurationManager.shared.logsNativeChat,
+           ConfigurationManager.shared.logsChatMessagesRenderDump {
             for msg in sorted.prefix(3) {
                 AppLogger.log(
                     "[chatMessages VIEW-DIAG] session=\(String(sessionKey.prefix(8))) id=\(String(msg.id.prefix(12))) role=\(msg.role) state=\(msg.state ?? "nil") textLen=\(msg.text.count) seq=\(msg.seq ?? -1) startedAt=\(msg.startedAt != nil) endedAt=\(msg.endedAt != nil) textPreview=\"\(String(msg.text.prefix(40)))\(msg.text.count > 40 ? "…(\(msg.text.count))" : "")\"",
