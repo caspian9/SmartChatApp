@@ -63,33 +63,14 @@ struct MessageBubbleView: View {
                             .foregroundColor(theme.textSecondary)
                     }
 
-                    if message.role == "toolResult" {
-                        Text("ToolResult")
+                    let badge = MessageBubbleBadgeResolver.badge(for: message)
+                    if badge != .none {
+                        Text(badge.label)
                             .font(.caption2)
                             .foregroundColor(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.purple)
-                            .cornerRadius(4)
-                    }
-
-                    if message.role == "thinking" {
-                        Text("Thinking")
-                            .font(.caption2)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.blue)
-                            .cornerRadius(4)
-                    }
-
-                    if message.role == "toolCall" {
-                        Text("ToolCall")
-                            .font(.caption2)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.orange)
+                            .background(badge.backgroundColor(theme: theme))
                             .cornerRadius(4)
                     }
 
