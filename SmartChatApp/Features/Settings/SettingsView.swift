@@ -16,6 +16,7 @@ struct SettingsView: View {
     /// Set by each destructive button; cleared by Cancel / after
     /// the destructive button completes.
     @State private var pendingClear: PendingClearAction?
+    @State private var chatDiagExpanded: Bool = false
 
     /// App version + build display, read from the installed bundle.
     ///
@@ -199,6 +200,10 @@ struct SettingsView: View {
                 Toggle("Network Logs", isOn: $config.logsNetwork)
                 Toggle("Cache Logs", isOn: $config.logsCache)
                 Toggle("NativeChat Logs", isOn: $config.logsNativeChat)
+                DisclosureGroup("DIAG Dumps", isExpanded: $chatDiagExpanded) {
+                    Toggle("Raw Cache Dump", isOn: $config.logsChatMessagesCacheDump)
+                    Toggle("View Render Dump", isOn: $config.logsChatMessagesRenderDump)
+                }
                 Toggle("Markdown Logs", isOn: $config.logsMarkdown)
 
                 NavigationLink("Debug Logs Viewer") {
