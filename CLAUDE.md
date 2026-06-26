@@ -145,9 +145,14 @@ Settings → Gateway → Advanced) are separate and control
   handler exists** — the privacy key table above is the source of
   truth for what the app actually invokes.
 - **Don't add new top-level source directories without updating the
-  `paths:` filter in `.github/workflows/ci.yml`** — pure-doc PRs are
-  intended to skip the macos-15 build, but a new code dir not in
-  the filter will silently skip CI on PRs that only touch that dir.
+  `code` filter in the `detect-changes` job in
+  `.github/workflows/ci.yml`** — pure-doc PRs are intended to skip
+  the macos-15 build via `detect-changes` returning `code='false'`,
+  but a new code dir not in the filter will silently skip CI on PRs
+  that only touch that dir. (The `pull_request` trigger itself no
+  longer has a paths filter; every PR fires the workflow and the
+  per-job `if:` gates the macos-15 build on whether the filter
+  matched.)
 
 ## Gateway Profile
 
