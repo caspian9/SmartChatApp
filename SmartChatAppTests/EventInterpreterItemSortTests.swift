@@ -154,7 +154,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1, "thinking event must produce exactly one bubble")
         XCTAssertEqual(stored.first?.role, "thinking")
-        XCTAssertEqual(stored.first?.content.first?.text, thinkingText)
+        XCTAssertEqual(stored.first?.content.first?.thinking, thinkingText)
     }
 
     func test_thinkingDelta_dataWithTextKey_stillWorksAsFallback() async throws {
@@ -169,7 +169,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1)
-        XCTAssertEqual(stored.first?.content.first?.text, text)
+        XCTAssertEqual(stored.first?.content.first?.thinking, text)
     }
 
     func test_thinkingDelta_incrementalDeltas_accumulateFullText() async throws {
@@ -192,7 +192,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1, "All deltas collapse to one entry via upsert")
         XCTAssertEqual(
-            stored.first?.content.first?.text, "Part 1. Part 2. Part 3.",
+            stored.first?.content.first?.thinking, "Part 1. Part 2. Part 3.",
             "Incremental deltas must accumulate (final text = concatenation), not overwrite (which would leave only 'Part 3.')")
     }
 
@@ -215,7 +215,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
 
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1)
-        XCTAssertEqual(stored.first?.content.first?.text, "Part 1 Part 2 Part 3")
+        XCTAssertEqual(stored.first?.content.first?.thinking, "Part 1 Part 2 Part 3")
     }
 
     func test_thinkingDelta_staleDelta_isIgnored() async throws {
@@ -234,7 +234,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
         let stored = store.messages(for: "session-1", since: nil)
         XCTAssertEqual(stored.count, 1)
         XCTAssertEqual(
-            stored.first?.content.first?.text, "Part 1 Part 2 Part 3",
+            stored.first?.content.first?.thinking, "Part 1 Part 2 Part 3",
             "Stale delta must not regress the visible text")
     }
 
@@ -273,7 +273,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // only path where chat events are the primary carrier.
         let thinking = stored.filter { $0.role == "thinking" }
         XCTAssertEqual(thinking.count, 1, "chat event with thinking block must produce exactly one thinking bubble")
-        XCTAssertEqual(thinking.first?.content.first?.text, thinkingText)
+        XCTAssertEqual(thinking.first?.content.first?.thinking, thinkingText)
     }
 
     func test_chatEvent_thinkingBlock_dedupsWithAgentEventThinking() async throws {
@@ -301,7 +301,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
         let thinking = stored.filter { $0.role == "thinking" }
         XCTAssertEqual(thinking.count, 1, "agent-event thinking and chat-event thinking for the same run must collapse to one bubble")
         XCTAssertEqual(
-            thinking.first?.content.first?.text, chatText,
+            thinking.first?.content.first?.thinking, chatText,
             "Latest arrival wins (chat event arrived after the agent event, so the chat text is the final state)")
     }
 
@@ -358,7 +358,7 @@ final class EventInterpreterItemSortTests: XCTestCase {
         let stored = store.messages(for: "session-1", since: nil)
         let thinking = stored.filter { $0.role == "thinking" }
         XCTAssertEqual(thinking.count, 1, "sessionMessage with a thinking content block must produce exactly one thinking bubble")
-        XCTAssertEqual(thinking.first?.content.first?.text, thinkingText)
+        XCTAssertEqual(thinking.first?.content.first?.thinking, thinkingText)
     }
 
     // MARK: - Within-run display order (thinking before response)
