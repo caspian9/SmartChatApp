@@ -11,6 +11,11 @@ struct SettingsView: View {
     @State private var sessionCacheCount: Int = 0
     @State private var messageCacheStats: (sessionCount: Int, messageCount: Int) = (0, 0)
     @State private var profileListRefresh: Bool = false
+    /// Drives the destructive-action confirmation alert (issue #30).
+    /// `nil` = no alert shown; non-nil = alert for that case.
+    /// Set by each destructive button; cleared by Cancel / after
+    /// the destructive button completes.
+    @State private var pendingClear: PendingClearAction?
 
     /// App version + build display, read from the installed bundle.
     ///
@@ -159,46 +164,17 @@ struct SettingsView: View {
                 }
 
                 Button("Clear Session Cache") {
-                    SessionCache.clearAll()
-                    sessionCacheCount = 0
+                    pendingClear = .sessionCache
                 }
                 .foregroundColor(.red)
 
                 Button("Clear Message Cache") {
-                    Task {
-                        await MessageCacheStore.shared.clearAll()
-                        // BUG FIX: the previous version fired `clearAll`
-                        // in a Task and returned immediately, so the
-                        // on-screen "X messages (Y sessions)" row kept
-                        // showing the pre-clear count. The user
-                        // reported "the Clear Message Cache button
-                        // doesn't work" because the count never went
-                        // to 0. Re-read stats after the clear
-                        // completes so the UI reflects the new
-                        // (empty) state.
-                        let stats = await MessageCacheStore.shared.stats()
-                        await MainActor.run {
-                            messageCacheStats = stats
-                        }
-                    }
+                    pendingClear = .messageCache
                 }
                 .foregroundColor(.red)
 
                 Button("Clear All Caches") {
-                    SessionCache.clearAll()
-                    sessionCacheCount = 0
-                    Task {
-                        await MessageCacheStore.shared.clearAll()
-                        // See the comment on the "Clear Message Cache"
-                        // button above: clearAll() is async (it
-                        // hits the disk through the storage actor), so
-                        // we have to await and re-read stats to
-                        // refresh the message count row.
-                        let stats = await MessageCacheStore.shared.stats()
-                        await MainActor.run {
-                            messageCacheStats = stats
-                        }
-                    }
+                    pendingClear = .allCaches
                 }
                 .foregroundColor(.red)
             }
@@ -230,7 +206,7 @@ struct SettingsView: View {
                 }
 
                 Button("Clear Logs") {
-                    AppLogger.shared.clear()
+                    pendingClear = .logs
                 }
                 .foregroundColor(.red)
             }
@@ -284,6 +260,57 @@ struct SettingsView: View {
         // reflects the current on-disk state.
         .onAppear {
             Task { await loadCacheStats() }
+        }
+        // Destructive-action confirmation (issue #30). One alert
+        // handles all four destructive buttons; the `item:` binding
+        // drives presentation off `pendingClear?.id` (Identifiable
+        // conformance from `PendingClearAction`). The `Bool`-bound
+        // `.alert` form would need a manual isPresented/presenting
+        // pair; `alert(item:)` is the cleaner choice when one
+        // alert covers multiple triggers.
+        .alert(item: $pendingClear) { action in
+            Alert(
+                title: Text(action.title),
+                message: Text(action.message),
+                primaryButton: .destructive(Text("Clear")) {
+                    performClear(action)
+                },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
+    /// Executes the destructive action the user just confirmed.
+    /// Mirrors the inline logic the buttons had before the
+    /// confirmation flow was added (issue #30). The async re-read
+    /// of `messageCacheStats` is required because
+    /// `MessageCacheStore.clearAll()` is async on the storage
+    /// actor — see the BUG FIX comment at the original button.
+    private func performClear(_ action: PendingClearAction) {
+        switch action {
+        case .sessionCache:
+            SessionCache.clearAll()
+            sessionCacheCount = 0
+        case .messageCache:
+            Task {
+                await MessageCacheStore.shared.clearAll()
+                let stats = await MessageCacheStore.shared.stats()
+                await MainActor.run {
+                    messageCacheStats = stats
+                }
+            }
+        case .allCaches:
+            SessionCache.clearAll()
+            sessionCacheCount = 0
+            Task {
+                await MessageCacheStore.shared.clearAll()
+                let stats = await MessageCacheStore.shared.stats()
+                await MainActor.run {
+                    messageCacheStats = stats
+                }
+            }
+        case .logs:
+            AppLogger.shared.clear()
         }
     }
 
