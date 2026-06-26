@@ -4,11 +4,16 @@ One- or two-sentence description of what this PR changes.
 
 ## Type of change
 
-- [ ] Bug fix (non-breaking change that fixes an issue)
-- [ ] New feature (non-breaking change that adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to change)
-- [ ] Documentation update
-- [ ] Refactor (no functional change)
+(Bold the applicable type and delete the rest. This is
+metadata, not a checklist item — it's intentionally not
+a `- [ ]` list because the five options are mutually
+exclusive and only one applies per PR.)
+
+- **Bug fix** (non-breaking change that fixes an issue)
+- **New feature** (non-breaking change that adds functionality)
+- **Breaking change** (fix or feature that would cause existing functionality to change)
+- **Documentation update**
+- **Refactor** (no functional change)
 
 ## What changed
 
@@ -26,7 +31,7 @@ Steps for a reviewer to verify this works:
 ## Prerequisites
 
 - [ ] The `../openclaw` sibling is present at the expected path
-      (see README → Sourcing OpenClawKit). CI clones it automatically
+      (see README → Quick Start → 1. Get the code). CI clones it automatically
       from `caspian9/openclaw`; local builds need it on disk.
 - [ ] `make configure-signing` succeeded (or `IOS_DEVELOPMENT_TEAM`
       is set in the environment).
