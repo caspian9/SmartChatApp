@@ -36,6 +36,7 @@ final class ConfigurationManager: ObservableObject {
         static let logsMarkdown = "openclaw_logs_markdown"
         static let logsChatMessagesCacheDump = "openclaw_logs_chat_messages_cache_dump"
         static let logsChatMessagesRenderDump = "openclaw_logs_chat_messages_render_dump"
+        static let logsNativeChatHistory = "openclaw_logs_native_chat_history"
         static let collapseLongMessages = "openclaw_collapse_long_messages"
         static let renderMarkdown = "openclaw_render_markdown"
         static let showThinking = "openclaw_show_thinking"
@@ -138,6 +139,21 @@ final class ConfigurationManager: ObservableObject {
         }
     }
 
+    /// Gates the verbose per-message dump inside
+    /// `HistoryLoader.fetchAndMergeFromNetwork` (one line per
+    /// `history[i].content[j]`, plus a `history[i] summary` line).
+    /// OFF by default — the dump is noisy on every refresh and
+    /// only useful when actively debugging the
+    /// server-history-vs-local-cache merge. Parent gate is
+    /// `logsNativeChat` (same AND-gating pattern as the chatMessages
+    /// DIAG sub-toggles).
+    @Published var logsNativeChatHistory: Bool {
+        didSet {
+            defaults.set(logsNativeChatHistory,
+                         forKey: Keys.logsNativeChatHistory)
+        }
+    }
+
     @Published var locationMode: OpenClawLocationMode {
         didSet {
             defaults.set(locationMode.rawValue, forKey: Keys.locationMode)
@@ -215,6 +231,8 @@ final class ConfigurationManager: ObservableObject {
             defaults.object(forKey: Keys.logsChatMessagesCacheDump) as? Bool ?? false
         self.logsChatMessagesRenderDump =
             defaults.object(forKey: Keys.logsChatMessagesRenderDump) as? Bool ?? false
+        self.logsNativeChatHistory =
+            defaults.object(forKey: Keys.logsNativeChatHistory) as? Bool ?? false
 
         if let modeRaw = defaults.string(forKey: Keys.locationMode),
            let mode = OpenClawLocationMode(rawValue: modeRaw) {

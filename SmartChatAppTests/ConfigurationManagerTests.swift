@@ -41,4 +41,14 @@ final class ConfigurationManagerTests: XCTestCase {
         XCTAssertEqual(reloaded, true,
                        "UserDefaults must persist the cache-dump toggle across reads")
     }
+
+    func test_logsNativeChatHistory_defaultsToFalse() {
+        let key = "openclaw_logs_native_chat_history"
+        XCTAssertNil(defaults.object(forKey: key),
+                     "precondition: defaults suite is clean")
+        XCTAssertFalse(
+            defaults.object(forKey: key) as? Bool ?? false,
+            "precondition: UserDefaults fallback for unknown key is false"
+        )
+    }
 }

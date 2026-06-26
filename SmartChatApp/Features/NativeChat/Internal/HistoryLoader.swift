@@ -280,12 +280,19 @@ final class HistoryLoader {
             // `arguments` to grep for the exact phrasing the
             // dedupKey is comparing. We log the full content of
             // every content block (no prefix truncation) plus a
-            // per-message summary line. The log is gated on the
-            // same `logsNativeChat` Settings toggle as the
-            // chat-event full-payload dump (`EventInterpreter.swift`)
-            // so production logs aren't polluted.
+            // per-message summary line. The log is gated on
+            // `logsNativeChat` AND `logsNativeChatHistory`
+            // (Settings → Debug & Logs → NativeChat Logs → History
+            // Dump) so production logs aren't polluted. The
+            // `[history]` prefix after `[taskIdStr]` distinguishes
+            // these verbose per-message dumps from other
+            // `[taskIdStr]` status lines in the same file
+            // (e.g. the single-line "fetchAndMergeFromNetwork: N
+            // raw messages" at line 260), making `grep '\[history\]'`
+            // a clean way to extract just the dump output.
             for (index, msg) in openclawMessages.enumerated() {
                 if !ConfigurationManager.shared.logsNativeChat { break }
+                if !ConfigurationManager.shared.logsNativeChatHistory { break }
                 let contentCount = msg.content.count
                 for (ci, c) in msg.content.enumerated() {
                     let cType = c.type ?? "?"
@@ -295,11 +302,11 @@ final class HistoryLoader {
                     let cThinking = c.thinking ?? ""
                     let cId = c.id ?? ""
                     AppLogger.log(
-                        "[\(taskIdStr)] history[\(index)].content[\(ci)]: type=\(cType) id=\(cId) name=\(cName) text=\"\(cText)\" thinking=\"\(cThinking)\" arguments=\(cArgs)",
+                        "[\(taskIdStr)] [history] history[\(index)].content[\(ci)]: type=\(cType) id=\(cId) name=\(cName) text=\"\(cText)\" thinking=\"\(cThinking)\" arguments=\(cArgs)",
                         category: .nativeChat)
                 }
                 AppLogger.log(
-                    "[\(taskIdStr)] history[\(index)] summary: id=\(msg.id.uuidString.prefix(8)) role=\(msg.role) ts=\(msg.timestamp ?? -1) toolCallId=\(msg.toolCallId ?? "nil") toolName=\(msg.toolName ?? "nil") contentCount=\(contentCount)",
+                    "[\(taskIdStr)] [history] history[\(index)] summary: id=\(msg.id.uuidString.prefix(8)) role=\(msg.role) ts=\(msg.timestamp ?? -1) toolCallId=\(msg.toolCallId ?? "nil") toolName=\(msg.toolName ?? "nil") contentCount=\(contentCount)",
                     category: .nativeChat)
             }
 

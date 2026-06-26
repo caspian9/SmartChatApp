@@ -200,10 +200,12 @@ struct SettingsView: View {
                 Toggle("Network Logs", isOn: $config.logsNetwork)
                 Toggle("Cache Logs", isOn: $config.logsCache)
                 Toggle("NativeChat Logs", isOn: $config.logsNativeChat)
-                DisclosureGroup("DIAG Dumps", isExpanded: $chatDiagExpanded) {
-                    Toggle("Raw Cache Dump", isOn: $config.logsChatMessagesCacheDump)
-                    Toggle("View Render Dump", isOn: $config.logsChatMessagesRenderDump)
-                }
+                Toggle("Raw Cache Dump", isOn: $config.logsChatMessagesCacheDump)
+                    .padding(.leading, 16)
+                Toggle("View Render Dump", isOn: $config.logsChatMessagesRenderDump)
+                    .padding(.leading, 16)
+                Toggle("History Dump", isOn: $config.logsNativeChatHistory)
+                    .padding(.leading, 16)
                 Toggle("Markdown Logs", isOn: $config.logsMarkdown)
 
                 NavigationLink("Debug Logs Viewer") {
