@@ -307,6 +307,7 @@ final class NativeChatViewModel {
             // fires when the store's content changed, not on every
             // view re-render frame.
             if ConfigurationManager.shared.logsNativeChat,
+               ConfigurationManager.shared.logsChatMessagesCacheDump,
                chatMessagesDiagVersionBySession[sessionKey] != version {
                 for (i, m) in openclaw.enumerated() {
                     let textPreview = String(
@@ -339,6 +340,7 @@ final class NativeChatViewModel {
         // about to render. Version-gated so it only fires on
         // real writes (not every body re-eval).
         if ConfigurationManager.shared.logsNativeChat,
+           ConfigurationManager.shared.logsChatMessagesRenderDump,
            chatMessagesDiagVersionBySession[sessionKey] != version {
             for (i, m) in cached.enumerated() {
                 let textPreview = String(m.text.prefix(60))
