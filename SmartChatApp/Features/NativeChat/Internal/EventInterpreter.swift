@@ -202,6 +202,29 @@ final class EventInterpreter {
                         AppLogger.log("agent lifecycle end - SKIP (already processed): runId: \(runId)", category: .nativeChat, level: .debug)
                         return
                     }
+                    // Mark the runId as processed BEFORE any await. The
+                    // line 306 `await viewModel?.receiveMessage(message)`
+                    // yields the MainActor — without this early insert, a
+                    // racing re-delivery of the same `lifecycle=end` (the
+                    // WS server retransmits the terminal event after the
+                    // final ack) can enter this branch, read
+                    // `accumulatedAssistantTextByRun[runId]` after we
+                    // drain it at line ~321, compute `effective=0`, and
+                    // upsert an empty bubble over the streamed text.
+                    // Reproduced on device 2026-06-29 07:01:22 with the
+                    // weather agent run (runId FA2B00AB-DA1E-...):
+                    //   1st delivery → accumulated=305, effective=305
+                    //   2nd delivery → accumulated=-1 (nil), effective=0
+                    //   → assistant bubble shows empty.
+                    // Inserting synchronously at the top, before any
+                    // await, makes the guard at line ~201 above
+                    // monotonic. The duplicate insert at the end of
+                    // this branch stays as a no-op (Set.insert is
+                    // idempotent) and keeps the comment intent —
+                    // `processedLifecycleEndByRun` is the
+                    // "already-handled" record aligned with the per-run
+                    // accumulator lifetimes.
+                    processedLifecycleEndByRun.insert(runId)
                     AppLogger.log("agent lifecycle end - runId: \(runId), data keys: \(data.keys.map { $0 })", category: .nativeChat)
                     var inputTokens: Int?
                     var outputTokens: Int?
