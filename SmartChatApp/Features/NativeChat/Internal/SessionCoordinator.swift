@@ -230,9 +230,9 @@ final class SessionCoordinator {
             //      reclaiming memory; we just delay it so the
             //      view's transition isn't interrupted by an
             //      empty-`store[B]` window.)
-            Task { @MainActor in
-                MarkdownStreamManager.shared.releaseAll()
-            }
+            // (`MarkdownStreamManager.shared.releaseAll()` was
+            // called here previously; the third-party lib is gone
+            // now so no holders to release.)
             // `loadSessions` reads the new `lastSelectedSessionKey`
             // we just wrote to UserDefaults and assigns
             // `vm.selectedSession` accordingly. Then it calls
@@ -329,10 +329,11 @@ final class SessionCoordinator {
         let profileIdCapture = newProfileId
         let hadCache = hasCache
         Task {
-            // Release any active stream holders from the previous profile/session
-            await MainActor.run {
-                MarkdownStreamManager.shared.releaseAll()
-            }
+            // (Previously: `MarkdownStreamManager.shared.releaseAll()`
+            // — the third-party stream holder is gone now so no
+            // holders to release. Per-session cleanup of
+            // `EventInterpreter`'s per-run accumulators still happens
+            // via the session-switch path above.)
             // If we have a cached session selected, kick off history load
             // so the chat panel isn't empty while we wait for the network switch
             if hadCache {

@@ -25,13 +25,15 @@ settings:
 packages:
   OpenClawKit:
     path: ../openclaw/apps/shared/OpenClawKit
-  MarkdownDisplayView:
-    url: https://github.com/zjc19891106/MarkdownDisplayView.git
-    from: "1.7.8"
   # Pinned to the same version XcodeGen resolves for
   # `MarkdownDisplayView`'s transitive closure (0.8.0). Declared
   # explicitly here so `SmartChatAppTests` can import it for the
-  # preprocessor integration test (issue #23).
+  # preprocessor integration test (issue #23) AND so the main
+  # `SmartChatApp` target can `import Markdown` from
+  # `Core/Utilities/MarkdownToAttributedString.swift` (the
+  # swift-markdown AST walker that replaced the third-party
+  # `MarkdownDisplayView` / `MarkdownViewTextKit` rendering path
+  # on 2026-06-29).
   swift-markdown:
     url: https://github.com/swiftlang/swift-markdown.git
     from: "0.8.0"
@@ -60,8 +62,8 @@ targets:
         product: OpenClawProtocol
       - package: OpenClawKit
         product: OpenClawChatUI
-      - package: MarkdownDisplayView
-        product: MarkdownDisplayView
+      - package: swift-markdown
+        product: Markdown
     info:
       path: SmartChatApp/Info.plist
       properties:

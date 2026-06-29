@@ -25,6 +25,28 @@ struct MessageBubbleView: View {
 
     @ObservedObject private var collapseCache = CollapseStateCache.shared
 
+    /// ChatGPT-style typewriter reveal. Server-side streaming pushes
+    /// `message.text` updates in bursts of variable size (sometimes
+    /// a single character, sometimes a full sentence). Rendering the
+    /// text directly causes visible flicker: each delta inflates the
+    /// bubble's height, the parent VStack re-lays-out, and the
+    /// layout pass competes with the user reading the text. With this
+    /// state, the model layer owns the *authoritative* full text
+    /// (`message.text`), but the visible rendering shows a
+    /// separately-paced `displayedText` that grows ~60fps by 2-3
+    /// characters per tick. The user sees a steady, predictable
+    /// character-by-character reveal regardless of how the server's
+    /// deltas arrive. On `state == "final"` (lifecycle=end), the
+    /// typewriter snaps to the full text immediately so the bubble
+    /// doesn't lag behind a completed response. `displayedText`
+    /// resets when the view's `message.id` changes (different
+    /// message in the same bubble slot).
+    @State private var displayedText: String = ""
+    /// The currently-running typewriter Task, if any. Cancelled and
+    /// replaced on each new delta so only the latest target is
+    /// chased; also cancelled on `state == "final"`.
+    @State private var revealTask: Task<Void, Never>? = nil
+
     private let maxCollapsedLines: Int = 8
     private let maxCollapsedHeight: CGFloat = 150
 
@@ -241,7 +263,20 @@ struct MessageBubbleView: View {
                 // from the streaming hot loop, and makes the raw→formatted
                 // transition an explicit design point rather than a
                 // library accident.
-                Text(message.text)
+                //
+                // The `displayedText` source (vs. `message.text`
+                // directly) is what makes this a ChatGPT-style
+                // typewriter: a separate `@State` buffer is paced
+                // through `startTypewriterReveal` at 2 chars / 15ms,
+                // so the user sees a smooth steady character-by-
+                // character reveal regardless of how the model
+                // emits deltas (some bursts push 50+ chars at once,
+                // which would otherwise inflate the bubble's height
+                // in a single layout pass and look like a jump).
+                // `message.text` is the authoritative full text; we
+                // render a substring that's been chased up to the
+                // current target.
+                Text(displayedText)
                     .font(.body)
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
             } else {
@@ -322,7 +357,29 @@ struct MessageBubbleView: View {
                     // (column-aligned monospaced text), so handing
                     // the same text to a markdown parser would
                     // mangle the alignment.
+                    //
+                    // Markdown rendering goes through
+                    // `MarkdownCardView` — the same component used by
+                    // `CardRegistry` for tool-result cards, but now
+                    // driven by `swift-markdown` + a hand-written
+                    // `AttributedString` walker (see
+                    // `Core/Utilities/MarkdownToAttributedString.swift`).
+                    // The previous third-party `MarkdownViewTextKit`
+                    // path flickered on streaming→final transition
+                    // on device 2026-06-29 17:14 (Haidian bubble)
+                    // because the lib ran a multi-pass TextKit layout
+                    // that re-fired `onHeightChange` repeatedly during
+                    // the transition; the new path renders directly
+                    // via SwiftUI's `Text(AttributedString)`, which
+                    // computes intrinsic size once per content
+                    // change — no asynchronous re-measurement, no
+                    // layout feedback loop, no flicker. The bubble's
+                    // outgoing color override is layered on top of
+                    // the markdown renderer's default text color via
+                    // `.foregroundColor` so right-aligned user bubbles
+                    // still tint correctly.
                     MarkdownCardView(content: message.text)
+                        .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
                 } else if message.role == "thinking" {
                     ThinkingCardView(content: message.text)
                         .lineLimit(collapseLineLimit)
@@ -412,6 +469,28 @@ struct MessageBubbleView: View {
                 .padding(.top, 4)
             }
         }
+        // Typewriter reveal trigger: when the model layer pushes a
+        // new `message.text` (each assistant delta), kick off (or
+        // restart) the reveal task. When the model finalizes the
+        // bubble (`state != "streaming"`), the task snaps to the
+        // full text immediately. `.onAppear` covers the
+        // page-restore / scroll-into-view case where the bubble
+        // mounts with `message.text` already populated.
+        .onAppear {
+            startTypewriterReveal(target: message.text)
+        }
+        .onChange(of: message.text) { _, newValue in
+            startTypewriterReveal(target: newValue)
+        }
+        .onChange(of: message.state) { _, newState in
+            if newState != "streaming" {
+                // Snap to full on lifecycle=end so the bubble
+                // doesn't sit at 80% reveal when the response is
+                // actually complete.
+                revealTask?.cancel()
+                displayedText = message.text
+            }
+        }
         // Defensive `.id()` keyed on the streaming-vs-final branch.
         // The bug it addresses: after a streaming bubble reaches
         // `state == "final"`, the underlying `MarkdownViewRepresentable`
@@ -440,6 +519,78 @@ struct MessageBubbleView: View {
         // (where the copy-vs-display mismatch was visible), so the
         // streaming-fast-path is safe.
         .id(isAssistantStreaming ? "streaming" : message.text)
+    }
+
+    /// Drive the ChatGPT-style typewriter reveal for the
+    /// streaming branch. Called from `.onAppear`,
+    /// `.onChange(of: message.text)` (every model push), and
+    /// indirectly via the streaming branch's `.onAppear` for
+    /// page-restore / scroll-into-view. Cancels any in-flight
+    /// reveal task before starting a new one — each new model
+    /// text supersedes the previous target.
+    ///
+    /// Reveal cadence: 2 characters every 15ms ≈ 133 chars/sec,
+    /// which on a 30-char-per-line bubble is ~4 lines/sec. The
+    /// 20ms initial debounce coalesces burst deltas (the SDK
+    /// sometimes pushes 5-6 deltas in a single runloop tick);
+    /// each coalesced burst still advances one merged step
+    /// instead of jittering per delta.
+    ///
+    /// Performance: `prefix(_:)` on a String is O(N) but the
+    /// strings here are bounded (typical assistant reply <5KB),
+    /// so the per-tick work is microseconds. The 15ms sleep
+    /// gives the main runloop room to interleave other work
+    /// (scroll, gesture handling) so the typewriter doesn't
+    /// starve the rest of the UI.
+    private func startTypewriterReveal(target: String) {
+        // Final state is rendered as a single static frame
+        // (MarkdownCardView or plain Text). Nothing to typewrite
+        // — snap on lifecycle=end is handled by the
+        // `.onChange(of: message.state)` hook above.
+        guard message.state == "streaming" else { return }
+        // Fast-forward when the model is already ahead of the
+        // visible buffer by more than a screen — otherwise a
+        // huge burst (e.g. "海淀" returned whole at once) would
+        // type out for many seconds before catching up.
+        // ~600 chars is roughly one screen on an iPhone Pro at
+        // the default font size; under that, do the typewriter;
+        // over that, snap so the user isn't waiting for the
+        // animation to finish reading.
+        if target.count - displayedText.count > 600 {
+            revealedTextSetter(target)
+            return
+        }
+        revealTask?.cancel()
+        revealTask = Task { @MainActor in
+            // Debounce burst deltas.
+            try? await Task.sleep(for: .milliseconds(20))
+            if Task.isCancelled { return }
+            // Walk the buffer up to `target` at the cadence above.
+            // Each iteration advances 2 chars + 15ms sleep.
+            while displayedText.count < target.count {
+                if Task.isCancelled { return }
+                let chunk = min(2, target.count - displayedText.count)
+                let nextLength = displayedText.count + chunk
+                revealedTextSetter(String(target.prefix(nextLength)))
+                try? await Task.sleep(for: .milliseconds(15))
+            }
+            // Final snap so we're guaranteed to land on the exact
+            // target (rounding errors in the chunk loop won't leave
+            // us one character short).
+            if !Task.isCancelled {
+                revealedTextSetter(target)
+            }
+        }
+    }
+
+    /// `displayedText` setter used inside `Task { @MainActor in ... }`
+    /// blocks. Reads the current value through the @State property
+    /// wrapper (which always returns the latest stored value) and
+    /// writes the new one. Inlined into a free function so the
+    /// closure bodies above don't have to repeat the same
+    /// property-wrapper access dance.
+    private func revealedTextSetter(_ newValue: String) {
+        displayedText = newValue
     }
 
     /// Streaming assistant message: route to real streaming markdown view.

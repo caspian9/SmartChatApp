@@ -141,13 +141,15 @@ final class EventInterpreter {
                     AppLogger.log("agent lifecycle start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)", category: .nativeChat)
                     // Eager-mark removed: `MarkdownCache.needsMarkdown(for:)`
                     // is now lazy and content-keyed, so the lifecycle-start
-                    // placeholder (empty text) is short-circuited by the
-                    // pre-filters inside `needsMarkdown` and the final-state
-                    // message is computed on first view read. No need to
-                    // pre-mark by runId.
-                    await MainActor.run {
-                        MarkdownStreamManager.shared.holder(for: runId)
-                    }
+                    // No-op placeholder for the lifecycle=start
+                    // branch. Previously this eagerly pre-created a
+                    // `MarkdownStreamManager` holder so the streaming
+                    // view could mount a `MarkdownViewTextKit` for the
+                    // run; with the third-party lib removed (2026-06-29
+                    // flicker fix), there's no streaming markdown view
+                    // to prime. The bubble's lifecycle=start bubble
+                    // still emits a placeholder ChatMessage below so
+                    // the view can show its "typing" indicator.
                     // Remember the start time so subsequent `assistant`
                     // deltas can re-stamp it (the per-delta
                     // `ChatMessage` below has no other way to know it).
@@ -262,27 +264,21 @@ final class EventInterpreter {
                                 ? Date(timeIntervalSince1970: endedAtMs / 1000)
                                 : Date()))
                     AppLogger.log("agent lifecycle end - cache anchor: startedAtRun=\(assistantStartedAtByRun[runId]?.timeIntervalSince1970 ?? -1) endedAtMs=\(endedAtMs) → chosen=\(chosenAnchor.timeIntervalSince1970)", category: .nativeChat)
-                    // Flush the markdown stream buffer and read the full
-                    // accumulated text so it can be persisted. The
-                    // authoritative source is our local accumulator (server
-                    // deltas turn out to be incremental on device, not
-                    // cumulative as the prior comment assumed —
-                    // `MarkdownStreamManager.currentText()` would return
-                    // just the last delta's suffix). Fall back to the
-                    // holder's tracked text if our accumulator is empty
-                    // (e.g., agent produced no assistant text, only
-                    // thinking/tools).
-                    let fullText: String = await MainActor.run {
-                        MarkdownStreamManager.shared.end(messageId: runId)
-                        return MarkdownStreamManager.shared.currentText(for: runId) ?? ""
-                    }
-                    let effectiveFullText: String = {
-                        if let acc = accumulatedAssistantTextByRun[runId], !acc.isEmpty {
-                            return acc
-                        }
-                        return fullText
-                    }()
-                    AppLogger.log("agent lifecycle end - fullText len: \(fullText.count), accumulated len: \(accumulatedAssistantTextByRun[runId]?.count ?? -1), effective: \(effectiveFullText.count) for runId: \(runId)", category: .nativeChat)
+                    // Authoritative source for the final bubble's text is
+                    // `accumulatedAssistantTextByRun[runId]` (populated by
+                    // every `assistant` delta). Previously this code
+                    // also queried `MarkdownStreamManager.currentText`
+                    // as a secondary fallback, but with the third-party
+                    // lib removed the manager is gone and the accumulator
+                    // is the only authoritative store. Runs that produced
+                    // no assistant text (only thinking/tools) will
+                    // resolve to an empty `effectiveFullText`, which
+                    // the bubble view renders as an empty assistant
+                    // bubble; the lifecycle=end's `chatMessages` upsert
+                    // below will skip the empty-assistant path so we
+                    // don't show a stray placeholder.
+                    let effectiveFullText: String = accumulatedAssistantTextByRun[runId] ?? ""
+                    AppLogger.log("agent lifecycle end - accumulated len: \(accumulatedAssistantTextByRun[runId]?.count ?? -1), effective: \(effectiveFullText.count) for runId: \(runId)", category: .nativeChat)
                     // Pull startedAt from the lifecycle=start record
                     // when the server omits it on the end event (the
                     // end event's `startedAt` is sometimes 0). Falls
@@ -352,12 +348,12 @@ final class EventInterpreter {
                     // aligned with the per-run accumulators above — they're
                     // all torn down together at the natural end of the run.
                     processedLifecycleEndByRun.insert(runId)
-                    // Holder no longer needed — SwiftUI flips to the static
-                    // MarkdownCardView once state becomes "final", so the streaming
-                    // view is dismantled. Release to bound memory across many turns.
-                    await MainActor.run {
-                        MarkdownStreamManager.shared.release(messageId: runId)
-                    }
+                    // No-op cleanup. With the third-party
+                    // `MarkdownStreamManager` removed, there's no
+                    // streaming-view holder to release on lifecycle=end.
+                    // The bubble's lifecycle=end upserts the final
+                    // ChatMessage below, which is what `MessageReceiver`
+                    // persists and the bubble view renders.
                     // Only the real terminal signal resets the sending flag.
                     // `resetSendState` (instead of a direct assignment) also
                     // cancels the send-timeout watchdog armed in
@@ -524,9 +520,6 @@ final class EventInterpreter {
                     }
                 }
                 accumulatedAssistantTextByRun[runId] = accText
-                await MainActor.run {
-                    MarkdownStreamManager.shared.appendCumulative(messageId: runId, cumulative: text)
-                }
                 // Re-stamp startedAt from the lifecycle=start record
                 // so the bubble's "HH:mm" prefix doesn't disappear
                 // on each subsequent delta (the upsert-by-id path
