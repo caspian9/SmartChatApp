@@ -53,6 +53,36 @@ struct PersistedMessageEnvelope: Codable, Sendable {
     }
 }
 
+/// Aggregate stats across every persisted session. Returned by
+/// `MessageCacheStorage.stats()` and surfaced by the Settings
+/// page's Cache section ("X messages (Y sessions)" + date range).
+/// `oldestTimestamp` / `newestTimestamp` are nil when the cache
+/// has no messages with a non-nil timestamp; otherwise they
+/// span the full disk-truth age of the user's history. Sendable
+/// because the implementation crosses actor boundaries (the
+/// storage is an actor, the store is `@MainActor`, the Settings
+/// view is on `@MainActor`); `Equatable` so the view can avoid
+/// duplicate re-renders via the existing `chatMessagesCachedVersionBySession`
+/// pattern (or its successor).
+public struct MessageCacheStats: Sendable, Equatable {
+    public let sessionCount: Int
+    public let messageCount: Int
+    public let oldestTimestamp: Double?
+    public let newestTimestamp: Double?
+
+    public init(
+        sessionCount: Int,
+        messageCount: Int,
+        oldestTimestamp: Double?,
+        newestTimestamp: Double?
+    ) {
+        self.sessionCount = sessionCount
+        self.messageCount = messageCount
+        self.oldestTimestamp = oldestTimestamp
+        self.newestTimestamp = newestTimestamp
+    }
+}
+
 public protocol MessageCacheStorageProtocol: Sendable {
     /// Synchronous load. Reads UserDefaults directly. Use this from
     /// the @MainActor store for the *initial* hydrate on session
@@ -134,13 +164,14 @@ public protocol MessageCacheStorageProtocol: Sendable {
     func maxTimestamp(for sessionKey: String) async -> Double?
     func messageIds(for sessionKey: String) async -> Set<String>
     /// Aggregate stats across all session keys currently on disk.
-    /// Returns `(sessionCount, messageCount)` — used by the Settings
-    /// page to display "X messages (Y sessions)" next to the
-    /// "Clear Message Cache" button. Implementations must scan
-    /// every persisted session (not just hydrated ones) so the
-    /// count reflects what is on disk, independent of which
-    /// sessions the user has visited this launch.
-    func stats() async -> (sessionCount: Int, messageCount: Int)
+    /// Returns `MessageCacheStats` (sessionCount + messageCount
+    /// + oldest/newest timestamp span) — used by the Settings
+    /// page to render "X messages (Y sessions)" plus the date
+    /// range row. Implementations must scan every persisted
+    /// session (not just hydrated ones) so the count reflects
+    /// what is on disk, independent of which sessions the user
+    /// has visited this launch.
+    func stats() async -> MessageCacheStats
 }
 
 public actor MessageCacheStorage: MessageCacheStorageProtocol {
@@ -211,10 +242,23 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
 
         var added = 0
         var deduped = 0
+        var dedupedById = 0
         var skippedEmpty = 0
         for msg in messages {
             if isEmptyTextPlaceholder(msg) {
                 skippedEmpty += 1
+                continue
+            }
+            // Id-dedup runs BEFORE content-dedup so a server re-fetch
+            // that returns a message whose UUID we already have cached
+            // is a clean no-op (existing entry's id is preserved, no
+            // chance of an in-progress match against the just-appended
+            // copy). Content-dedup is the fallback for the streaming-
+            // vs-server shape mismatch (see `dedupKey` doc). Both are
+            // KEEP-on-match — id stability > content authority — same
+            // contract as the existing content-dedup behavior.
+            if allMessages.contains(where: { $0.id == msg.id }) {
+                dedupedById += 1
                 continue
             }
             let key = dedupKey(for: msg)
@@ -244,7 +288,7 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
         scheduleDiskWrite(for: sessionKey)
 
         AppLogger.log(
-            "[MessageCacheStorage append] sessionKey=\(String(sessionKey.prefix(8))) original=\(originalCount) added=\(added) deduped=\(deduped) skippedEmpty=\(skippedEmpty) final=\(allMessages.count)",
+            "[MessageCacheStorage append] sessionKey=\(String(sessionKey.prefix(8))) original=\(originalCount) added=\(added) deduped=\(deduped) dedupedById=\(dedupedById) skippedEmpty=\(skippedEmpty) final=\(allMessages.count)",
             category: .cache)
         return allMessages
     }
@@ -279,18 +323,33 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     public func messageIds(for sessionKey: String) async -> Set<String> {
         Set(await load(for: sessionKey).map { $0.id.uuidString })
     }
-    public func stats() async -> (sessionCount: Int, messageCount: Int) {
+    public func stats() async -> MessageCacheStats {
         // Scan UserDefaults for every persisted session key. We can't
         // just iterate `cache` because that dict only contains
         // sessions this actor has loaded since launch — Settings
         // needs the disk-truth count, not the in-memory working set.
         var sessionCount = 0
         var messageCount = 0
+        var oldest: Double?
+        var newest: Double?
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(keyPrefix) {
             sessionCount += 1
             if let data = defaults.data(forKey: key),
                let envelopes = try? JSONDecoder().decode([PersistedMessageEnvelope].self, from: data) {
                 messageCount += envelopes.count
+                // Only consider non-nil timestamps for the span.
+                // A nil `timestamp` is rare (streaming placeholders
+                // typically get one before persisting) but skip
+                // rather than count as 0 — counting as 0 would put
+                // nil entries at the head of every span, which is
+                // misleading.
+                let timestamps = envelopes.compactMap { $0.message.timestamp }
+                if let sessionOldest = timestamps.min() {
+                    oldest = min(oldest ?? sessionOldest, sessionOldest)
+                }
+                if let sessionNewest = timestamps.max() {
+                    newest = max(newest ?? sessionNewest, sessionNewest)
+                }
             }
             // A session whose entry can't decode still counts as a
             // session — the user can see it (and Clear All will
@@ -304,7 +363,12 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
             // add a one-shot migration if the in-the-wild install
             // base has pre-envelope data to recover.
         }
-        return (sessionCount: sessionCount, messageCount: messageCount)
+        return MessageCacheStats(
+            sessionCount: sessionCount,
+            messageCount: messageCount,
+            oldestTimestamp: oldest,
+            newestTimestamp: newest
+        )
     }
 
     public func replaceForSession(_ messages: [OpenClawChatMessage], for sessionKey: String) async -> [OpenClawChatMessage] {

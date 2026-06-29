@@ -20,6 +20,21 @@ final class FakeMessageCacheStorage: MessageCacheStorageProtocol, @unchecked Sen
         let result: [OpenClawChatMessage] = lock.withLock { state in
             var all = state[sessionKey] ?? []
             for msg in messages {
+                // Mirror the production `MessageCacheStorage.append`
+                // id-dedup contract (added in sub-task 1 of #36):
+                // same id in cache → skip the new copy. We
+                // intentionally do NOT mirror content-dedup here
+                // because the existing `MessageCacheStoreTests`
+                // rely on append admitting multiple same-text
+                // entries (e.g., `test_append_updatesLastSeenTimestampToMax`
+                // appends 3 same-text messages with different
+                // timestamps and expects lastSeen to track the
+                // max). The production storage's content-dedup is
+                // covered by `MessageCacheStorageTests`; the fake
+                // only needs id-dedup for `HistoryLoaderAppendTests`.
+                if all.contains(where: { $0.id == msg.id }) {
+                    continue
+                }
                 all.append(msg)
             }
             all.sort { ($0.timestamp ?? 0) < ($1.timestamp ?? 0) }
@@ -54,14 +69,19 @@ final class FakeMessageCacheStorage: MessageCacheStorageProtocol, @unchecked Sen
         lock.withLock { $0[sessionKey] = [] }
     }
 
-    /// Legacy authoritative-replace method. The persistence plan
-    /// removes this from the protocol once the
-    /// `MessageCacheStore` migration lands; for now this stub
-    /// preserves protocol conformance for the test mock by
-    /// delegating to `append`. The dedup behavior is equivalent
-    /// for the test cases that exercise this path.
+    /// Authoritative-replace used by `HistoryLoader.fetchAndMergeFromNetwork`.
+/// Faithfully simulates the production `MessageCacheStorage.replaceForSession`
+/// wipe+replace semantics: clears the session first, then writes the
+/// incoming messages as the new sole contents. This is critical for
+/// `HistoryLoaderAppendTests` — they need the wipe to verify that
+/// switching to `append` (issue #36) preserves client-only entries
+/// that `replaceForSession` would have erased.
     func replaceForSession(_ messages: [OpenClawChatMessage], for sessionKey: String) async -> [OpenClawChatMessage] {
-        return await append(messages, for: sessionKey)
+        let result: [OpenClawChatMessage] = lock.withLock { state in
+            state[sessionKey] = messages
+            return messages
+        }
+        return result
     }
 
     func clearAll() async {
@@ -76,10 +96,20 @@ final class FakeMessageCacheStorage: MessageCacheStorageProtocol, @unchecked Sen
         Set(await load(for: sessionKey).map { $0.id.uuidString })
     }
 
-    func stats() async -> (sessionCount: Int, messageCount: Int) {
+    func stats() async -> MessageCacheStats {
         let snapshot = lock.withLock { $0 }
         let messageCount = snapshot.values.reduce(0) { $0 + $1.count }
-        return (sessionCount: snapshot.count, messageCount: messageCount)
+        // Mirror the production storage's span semantics: skip
+        // nil timestamps (counting them as 0 would put nil entries
+        // at the head of every span).
+        let allTimestamps = snapshot.values
+            .flatMap { $0.compactMap(\.timestamp) }
+        return MessageCacheStats(
+            sessionCount: snapshot.count,
+            messageCount: messageCount,
+            oldestTimestamp: allTimestamps.min(),
+            newestTimestamp: allTimestamps.max()
+        )
     }
 
     // No-op for the fake: the in-memory dict IS the

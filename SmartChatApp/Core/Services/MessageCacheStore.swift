@@ -240,11 +240,11 @@ public final class MessageCacheStore {
 
     /// Disk-truth aggregate stats across all session keys, not just
     /// the ones hydrated into memory. Used by the Settings page to
-    /// render "X messages (Y sessions)" next to the Clear Message
-    /// Cache button. The Settings display was previously hard-wired
-    /// to `(0, 0)` because the view never assigned `messageCacheStats`
-    /// after the initial state — this method is the only caller.
-    public func stats() async -> (sessionCount: Int, messageCount: Int) {
+    /// render "X messages (Y sessions)" plus the date-range row
+    /// next to the Clear Message Cache button. Returns
+    /// `MessageCacheStats` so the Settings view can render the
+    /// span (oldest/newest) in one call.
+    public func stats() async -> MessageCacheStats {
         await storage.stats()
     }
 }

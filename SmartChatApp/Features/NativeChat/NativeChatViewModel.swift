@@ -591,17 +591,18 @@ final class NativeChatViewModel {
         let dispatch = await slashCommandRouter.dispatch(text)
         switch dispatch {
         case .execute(let result):
-            await handleCommandResult(result, sessionKey: sessionKey)
+            await handleCommandResult(text, result, sessionKey: sessionKey)
         case .passthrough:
             await sendAsMessage(text)
         }
     }
 
-    private func handleCommandResult(_ result: SlashCommandResult, sessionKey: String) async {
+    private func handleCommandResult(_ text: String, _ result: SlashCommandResult, sessionKey: String) async {
         switch result {
-        case .bubble(let text):
-            await appendSystemBubble(text, sessionKey: sessionKey)
-        case .clearAndBubble(let text):
+        case .bubble(let resultText):
+            await appendUserBubble(text, sessionKey: sessionKey)
+            await appendSystemBubble(resultText, sessionKey: sessionKey)
+        case .clearAndBubble(let resultText):
             // The clear + append happens here (awaited) so the
             // bubble lands AFTER the wipe on the store actor.
             // LocalCommandRegistry's /clear executor also calls
@@ -613,14 +614,46 @@ final class NativeChatViewModel {
             // symmetry with future local commands that want to
             // clear without going through the router.
             await store.clear(for: sessionKey)
-            await appendSystemBubble(text, sessionKey: sessionKey)
+            await appendUserBubble(text, sessionKey: sessionKey)
+            await appendSystemBubble(resultText, sessionKey: sessionKey)
         case .silent:
-            break
+            await appendUserBubble(text, sessionKey: sessionKey)
         }
         isSending = false
         scrollRequest = NativeChatScrollRequest(
             token: scrollRequest.token &+ 1, kind: .newMessage
         )
+    }
+
+    /// Persists the user-typed text as a user-role bubble. Used by
+    /// the slash-command path so local commands (e.g. `/help`,
+    /// `/disconnect`) render with the same outgoing bubble shape as
+    /// server commands — closing the UX gap where the user's typed
+    /// input was invisible (issue #36).
+    ///
+    /// Mirrors `appendSystemBubble`'s shape but with `role: "user"`
+    /// and no runId/seq metadata (slash commands don't enter a
+    /// streaming run; the bubble is a final outgoing message).
+    private func appendUserBubble(_ text: String, sessionKey: String) async {
+        let msg = ChatMessage(
+            id: UUID().uuidString,
+            text: text,
+            timestamp: Date(),
+            role: "user",
+            state: "final",
+            runId: nil,
+            seq: nil,
+            startedAt: nil,
+            endedAt: nil,
+            livenessState: nil,
+            toolCallId: nil,
+            toolName: nil,
+            stopReason: nil,
+            isFresh: true
+        )
+        if let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: msg) {
+            await store.append([openclaw], for: sessionKey)
+        }
     }
 
     private func appendSystemBubble(_ text: String, sessionKey: String) async {
