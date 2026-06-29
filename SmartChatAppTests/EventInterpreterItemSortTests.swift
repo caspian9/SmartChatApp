@@ -870,25 +870,70 @@ final class EventInterpreterItemSortTests: XCTestCase {
             "No-overlap deltas must still concatenate (pure incremental path unchanged)")
     }
 
-    /// Below the 8-char LCP threshold the algorithm falls back to
-    /// plain concat. The two deltas share a 3-char LCP but
-    /// neither is a prefix of the other — the old code's
-    /// "incremental" branch already produced plain concat for
-    /// this shape, so this test acts as a regression guard
-    /// against future over-aggressive LCP alignment
-    /// (e.g. someone lowering `partialOverlapMinLCP` and
-    /// wrongly marking "abc"/"abd"/"abe" pairs as overlapping).
-    func test_assistantDelta_shortOverlapBelowThreshold_concatenates() async throws {
+    /// Below the 8-char LCP threshold, the prefix-overlap rewrite
+    /// doesn't apply — but a SUFFIX-prefix overlap (prev ends with
+    /// chars that text also begins with) still needs handling.
+    /// Plain `prev + text` would duplicate the overlap; the fix
+    /// trims `text` by the overlap and only appends the unique tail.
+    /// Pre-fix (and pre-suffix-overlap-detection) the production
+    /// code would have produced visible duplication like
+    /// "abc看看看看def" for this input — the BUG-3 "Frankenstein"
+    /// pattern observed in production 2026-06-29 with the
+    /// Beijing-location agent run ("让我们让我查一下 Gateway",
+    /// "iOSiOS 节点", "看到了看到了" on short Chinese deltas).
+    /// Input below deliberately constructs a real suffix-prefix
+    /// overlap (prev ends with "看看", text starts with "看看") so
+    /// the KMP-based `longestSuffixPrefixOverlap` detects the
+    /// 2-char alignment and trims before append.
+    func test_assistantDelta_shortOverlapBelowThreshold_withSuffixOverlap_trimsUnique() async throws {
         let runId = "r-po-3"
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "abc看看", seq: 1)),
+            sessionKey: "session-1")
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "看看def", seq: 2)),
+            sessionKey: "session-1")
+        let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertEqual(bubble?.text, "abc看看def",
+            "Suffix-prefix overlap (2 chars < threshold) must trim the duplicated tail of prev from the head of text")
+    }
+
+    /// Truly independent fragments (no shared chars at all —
+    /// neither prefix nor suffix overlap) still plain-concat.
+    /// Sanity check that the new suffix-overlap branch didn't
+    /// regress the no-overlap case.
+    func test_assistantDelta_noPrefixNoSuffixOverlap_concatenates() async throws {
+        let runId = "r-po-3b"
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "abc", seq: 1)),
+            sessionKey: "session-1")
+        await interpreter.handleTransportEvent(
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "123", seq: 2)),
+            sessionKey: "session-1")
+        let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
+        XCTAssertEqual(bubble?.text, "abc123",
+            "No-overlap fragments must plain-concat — neither prefix nor suffix overlap")
+    }
+
+    /// A delta that's fully contained in prev's suffix is a
+    /// redundant replay, not new content. Without this guard,
+    /// the suffix-overlap trim would still trim to "" and append
+    /// nothing — but the explicit drop is cheaper and avoids
+    /// the upsert round-trip (`MessageReceiver.receiveMessage`
+    /// would otherwise rewrite the same store entry with the
+    /// identical text).
+    func test_assistantDelta_textAlreadyInAccumulatorSuffix_isDropped() async throws {
+        let runId = "r-po-3c"
         await interpreter.handleTransportEvent(
             .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "abcdef", seq: 1)),
             sessionKey: "session-1")
+        // 2nd delta is exactly prev's last 3 chars — redundant.
         await interpreter.handleTransportEvent(
-            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "abc123", seq: 2)),
+            .agent(makeAssistantDeltaEvent(runId: runId, ts: 200, text: "def", seq: 2)),
             sessionKey: "session-1")
         let bubble = vm.chatMessages(for: "session-1").first { $0.role == "assistant" }
-        XCTAssertEqual(bubble?.text, "abcdefabc123",
-            "LCP below threshold (8) must fall through to plain concat")
+        XCTAssertEqual(bubble?.text, "abcdef",
+            "Delta fully contained in prev's suffix must be dropped (already accumulated)")
     }
 
     /// Transport-level retransmit: same delta text AND same seq
@@ -928,6 +973,26 @@ final class EventInterpreterItemSortTests: XCTestCase {
         let thinking = vm.chatMessages(for: "session-1").first { $0.role == "thinking" }
         XCTAssertEqual(thinking?.text, "step 1: parsed input and continue",
             "Thinking stream partial-overlap must use LCP alignment, not plain concat")
+    }
+
+    /// Thinking stream's mirror of the BUG-3 suffix-overlap fix:
+    /// when prev's tail and text's head share characters below the
+    /// 8-char LCP threshold, plain concat would duplicate the
+    /// overlap. Locks the suffix-overlap detection into the
+    /// thinking branch — both assistant and thinking delta
+    /// handlers go through `EventInterpreter.longestSuffixPrefixOverlap`
+    /// for the LCP<8 case.
+    func test_thinkingDelta_shortSuffixOverlap_trimsUniqueTail() async throws {
+        let runId = "r-tpo-2"
+        await interpreter.handleTransportEvent(
+            .agent(makeThinkingEvent(runId: runId, ts: 100, data: ["thinking": "abc看看"], seq: 1)),
+            sessionKey: "session-1")
+        await interpreter.handleTransportEvent(
+            .agent(makeThinkingEvent(runId: runId, ts: 200, data: ["thinking": "看看def"], seq: 2)),
+            sessionKey: "session-1")
+        let thinking = vm.chatMessages(for: "session-1").first { $0.role == "thinking" }
+        XCTAssertEqual(thinking?.text, "abc看看def",
+            "Suffix-prefix overlap in the thinking stream must trim the duplicate tail-of-prev from text")
     }
 
     // MARK: - Chat event state=final recovery

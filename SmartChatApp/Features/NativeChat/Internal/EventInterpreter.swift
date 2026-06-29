@@ -480,10 +480,47 @@ final class EventInterpreter {
                             category: .nativeChat)
                         accText = String(prev.prefix(lcp)) + String(text.dropFirst(lcp))
                     } else {
-                        // No meaningful overlap — plain concat is
-                        // the right answer (the two fragments
-                        // really are independent).
-                        accText = prev + text
+                        // LCP < 8: the prefix-overlap rewrite above
+                        // doesn't apply. BUT the server's incremental
+                        // deltas often SUFFIX-overlap prev (the next
+                        // fragment starts with the same chars prev
+                        // ends with, e.g. prev="...看看这个功能怎么用。",
+                        // text="看看这个功能"). Naive `prev + text`
+                        // here duplicates "看看这个功能" in the visible
+                        // bubble. Reproduced on device 2026-06-29
+                        // 07:50:35 with the Beijing-location agent
+                        // run — short Chinese deltas ("！", "°",
+                        // "E", "**") stacked across the LCP<8
+                        // branch and produced visible redundancy
+                        // ("让我让我们查一下", "iOSiOS",
+                        // "看到了看到了", etc.).
+                        //
+                        // Resolution: check whether prev's suffix
+                        // matches text's prefix and trim before
+                        // appending. Three sub-cases:
+                        //  - text is fully contained in prev's
+                        //    suffix (delta is a redundant replay) →
+                        //    drop, no accumulator change.
+                        //  - text's prefix overlaps prev's suffix by
+                        //    some chars → append only the unique tail
+                        //    of text (`prev + text.dropFirst(overlap)`).
+                        //  - no overlap → truly independent fragments,
+                        //    plain concat is correct.
+                        let suffixOverlap = EventInterpreter.longestSuffixPrefixOverlap(prev, text)
+                        if suffixOverlap == text.count {
+                            AppLogger.log(
+                                "agent assistant delta - ignored (text already in accumulator): runId: \(runId), prev len: \(prev.count), text len: \(text.count)",
+                                category: .nativeChat, level: .debug)
+                            return
+                        }
+                        if suffixOverlap > 0 {
+                            AppLogger.log(
+                                "agent assistant delta - suffix-overlap: overlap=\(suffixOverlap), prev len: \(prev.count), delta len: \(text.count)",
+                                category: .nativeChat)
+                            accText = prev + String(text.dropFirst(suffixOverlap))
+                        } else {
+                            accText = prev + text
+                        }
                     }
                 }
                 accumulatedAssistantTextByRun[runId] = accText
@@ -615,7 +652,8 @@ final class EventInterpreter {
                     // Partial overlap — same algorithm as the
                     // assistant branch. See the matching comment
                     // in `case "assistant"` for the issue #21
-                    // context.
+                    // (LCP≥8 LLM-rewrite) and the suffix-overlap
+                    // (LCP<8 incremental-delta duplication) cases.
                     let lcp = EventInterpreter.longestCommonPrefix(prev, text)
                     if lcp >= StreamingDelta.partialOverlapMinLCP {
                         AppLogger.log(
@@ -623,7 +661,21 @@ final class EventInterpreter {
                             category: .nativeChat)
                         accText = String(prev.prefix(lcp)) + String(text.dropFirst(lcp))
                     } else {
-                        accText = prev + text
+                        let suffixOverlap = EventInterpreter.longestSuffixPrefixOverlap(prev, text)
+                        if suffixOverlap == text.count {
+                            AppLogger.log(
+                                "agent thinking delta - ignored (text already in accumulator): prev len: \(prev.count), text len: \(text.count)",
+                                category: .nativeChat, level: .debug)
+                            return
+                        }
+                        if suffixOverlap > 0 {
+                            AppLogger.log(
+                                "agent thinking delta - suffix-overlap: overlap=\(suffixOverlap), prev len: \(prev.count), text len: \(text.count)",
+                                category: .nativeChat)
+                            accText = prev + String(text.dropFirst(suffixOverlap))
+                        } else {
+                            accText = prev + text
+                        }
                     }
                 }
                 accumulatedThinkingTextByRun[runId] = accText
@@ -1406,6 +1458,77 @@ final class EventInterpreter {
             i += 1
         }
         return i
+    }
+
+    /// Largest `l` such that `a.suffix(l) == b.prefix(l)` — the
+    /// number of chars to skip on the leading edge of `b` when
+    /// appending it after `a` to avoid duplicating the trailing
+    /// portion of `a`. Returns 0 when there's no overlap (e.g.,
+    /// `a` ends with "怎么用。" and `b` starts with "让我查" — the
+    /// boundary is real, no trim needed). Returns `b.count` when
+    /// `b` is fully contained in `a`'s tail — caller treats that as
+    /// "already accumulated", drops the redundant delta. O(|a| +
+    /// |b|) — uses KMP's failure function on `b` to walk `a` in
+    /// one pass, tracking the trailing-match length.
+    ///
+    /// Sister function to `longestCommonPrefix`, which handles the
+    /// LLM-rewrite shape (issue #21). This handles the incremental
+    /// delta shape: when the server emits short, fragmentary deltas
+    /// ("E", "°", "看看这个功能") rather than full cumulative
+    /// re-sends, each new chunk starts with chars already at the end
+    /// of the accumulator. Plain concat would duplicate that tail —
+    /// this trims it before appending.
+    ///
+    /// Implementation note: a naive two-pointer walk (one from
+    /// `a`'s tail, one from `b`'s head, moving inward) is WRONG for
+    /// cases like `a = "X让我们查"`, `b = "让我们查一下"`. There
+    /// `a.suffix(4) == b.prefix(4) == "让我们查"` (overlap = 4) but
+    /// `a[end] != b[0]` ('查' != '让'), so the naive walk returns
+    /// 0 — exactly the duplication we're trying to fix. KMP lets us
+    /// find the correct trailing alignment in a single pass.
+    private static func longestSuffixPrefixOverlap(_ a: String, _ b: String) -> Int {
+        if a.isEmpty || b.isEmpty { return 0 }
+        let aChars = a.unicodeScalars
+        let bChars = b.unicodeScalars
+        let m = bChars.count
+        guard m > 0, aChars.count > 0 else { return 0 }
+
+        // KMP failure function for `b`: pi[i] = length of longest
+        // proper prefix of b[0..i] that is also a suffix of b[0..i].
+        var pi = [Int](repeating: 0, count: m)
+        var i = 1
+        while i < m {
+            var j = pi[i - 1]
+            while j > 0 && bChars[bChars.index(bChars.startIndex, offsetBy: i)] != bChars[bChars.index(bChars.startIndex, offsetBy: j)] {
+                j = pi[j - 1]
+            }
+            if bChars[bChars.index(bChars.startIndex, offsetBy: i)] == bChars[bChars.index(bChars.startIndex, offsetBy: j)] {
+                j += 1
+            }
+            pi[i] = j
+            i += 1
+        }
+
+        // Walk through `a`. `k` tracks the current match length
+        // against `b`. After processing the last char of `a`, `k`
+        // equals the length of the longest prefix of `b` that
+        // matches a SUFFIX of `a` (i.e., the trailing alignment).
+        var k = 0
+        for aIdx in 0..<aChars.count {
+            let aChar = aChars[aChars.index(aChars.startIndex, offsetBy: aIdx)]
+            let bCharAtK = bChars[bChars.index(bChars.startIndex, offsetBy: k)]
+            while k > 0 && aChar != bCharAtK {
+                k = pi[k - 1]
+            }
+            if aChar == bChars[bChars.index(bChars.startIndex, offsetBy: k)] {
+                k += 1
+            }
+            if k > m { k = pi[m - 1] }
+        }
+        // Cap at b's length — full match can't exceed b.count, and
+        // also avoids false positives where `b`'s tail happens to
+        // re-appear in `a`'s interior.
+        return min(k, m)
     }
 
     /// Full JSON dump of a payload value for log diagnostics.
