@@ -412,6 +412,34 @@ struct MessageBubbleView: View {
                 .padding(.top, 4)
             }
         }
+        // Defensive `.id()` keyed on the streaming-vs-final branch.
+        // The bug it addresses: after a streaming bubble reaches
+        // `state == "final"`, the underlying `MarkdownViewRepresentable`
+        // / third-party `MarkdownViewTextKit` (MarkdownDisplayView)
+        // was retaining stale frames across rapid `markdown`-setter
+        // calls, producing the user-visible "bubble has multiple
+        // overlapping renderings of the same content" pattern on
+        // 2026-06-29 17:14 (Haidian weather: copy was clean, view
+        // showed 3-4 stacked snapshots of the same source).
+        //
+        // Why `message.text` only on the final branch: during
+        // streaming, the bubble re-renders on every assistant
+        // delta, and rebuilding the MarkdownCardView subtree on
+        // every delta (via `.id(message.text)`) introduced visible
+        // jitter — every keystroke triggered CommonMark parse +
+        // TextKit layout from scratch. Keying `.id` on the
+        // STABLE STRING "streaming" during streaming keeps the
+        // view identity stable so the markdown view just mutates
+        // `view.markdown = text` in place (the cheap path). On the
+        // transition to `state == "final"`, the id flips to
+        // `message.text`, the entire subtree is torn down, and a
+        // fresh `MarkdownCardView` is mounted — eliminating any
+        // cross-frame leakage from the streaming hot loop.
+        //
+        // The bug only manifested in the post-final stable state
+        // (where the copy-vs-display mismatch was visible), so the
+        // streaming-fast-path is safe.
+        .id(isAssistantStreaming ? "streaming" : message.text)
     }
 
     /// Streaming assistant message: route to real streaming markdown view.
