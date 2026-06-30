@@ -49,6 +49,34 @@ final class EventInterpreter {
     /// then disappears as more deltas come in, until `lifecycle=end`
     /// restores it. Same pattern as `toolStartedAtByCall` below.
     private var assistantStartedAtByRun: [String: Date] = [:]
+    /// Per-run counter for the next assistant fragment's stable id
+    /// slot. Each "tool boundary" (any `item phase=start` event)
+    /// increments the counter so the next segment of assistant text
+    /// gets a fresh id and upserts into a separate bubble instead of
+    /// stitching onto the previous one. Without this split, the
+    /// LCP-12 partial-overlap rewrite (issue #21) was producing
+    /// Frankenstein text by stretching a single bubble across the
+    /// model's "thinking aloud" segments and the actual response —
+    /// see the user-reported EFB69836 weather run on 2026-06-29:
+    /// pre-tool "Saturday is July 4 — 5 days out...", inter-tool
+    /// "Only 3-day data...", inter-tool "Saturday is **July 4**...",
+    /// and response "Found it. From..." all collapsed into one
+    /// Frankenstein bubble. Each fragment id is
+    /// "<runId>:assistant:<N>". The view's `sortForDisplay` puts
+    /// these in order via the per-fragment `seq` (the seq of each
+    /// fragment's last delta). Cleared at `lifecycle=end` along with
+    /// the other per-run dicts.
+    private var assistantFragmentIdxByRun: [String: Int] = [:]
+    /// Per-run seq of the LAST assistant delta we processed.
+    /// The finalize helper at every `item phase=start` boundary
+    /// uses this so the finalize ChatMessage can carry the
+    /// fragment's correct seq (otherwise it would write `seq: nil`
+    /// in `recordStreamingMetadata`, and the per-run sort in
+    /// `sortForDisplay` would interpret that as `Int.max` and put
+    /// the finalized fragment AFTER the response fragment — the
+    /// reverse of the user's "preamble first, response last"
+    /// expectation).
+    private var lastAssistantSeqByRun: [String: Int] = [:]
     /// Per-tool-call startedAt, keyed by "<runId>:<toolCallId>".
     /// The legacy `stream: "tool"` path fires `phase: "update"`
     /// events that wipe `startedAt` to nil on each call, which
@@ -155,8 +183,14 @@ final class EventInterpreter {
                     // `ChatMessage` below has no other way to know it).
                     let startedAt = startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : timestamp
                     assistantStartedAtByRun[runId] = startedAt
+                    // Placeholder uses fragment 0's id so the first
+                    // streaming delta (which also reads N=0) lands
+                    // on the same slot — without this match, the
+                    // delta would upsert onto a different UUID and
+                    // spawn a duplicate empty placeholder.
+                    let placeholderFragmentId = "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])"
                     let message = ChatMessage(
-                        id: runId,
+                        id: placeholderFragmentId,
                         text: "",
                         // Use the local received time (Date()) for the
                         // sort key, NOT `timestamp` (the server's
@@ -288,8 +322,16 @@ final class EventInterpreter {
                         if startedAtMs > 0 { return Date(timeIntervalSince1970: startedAtMs / 1000) }
                         return assistantStartedAtByRun[runId] ?? timestamp
                     }()
+                    // Use the current fragment id so the final-state
+                    // upsert REPLACES the streaming entry for the
+                    // last fragment (same UUID), not a different
+                    // fragment id (which would create a duplicate
+                    // bubble after the streaming finalize on the
+                    // previous tool boundary already incremented the
+                    // fragment counter).
+                    let finalFragmentId = "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])"
                     let message = ChatMessage(
-                        id: runId,
+                        id: finalFragmentId,
                         text: effectiveFullText,
                         // Cache-anchor: the run's
                         // `lifecycle=start` `startedAt` (recorded in
@@ -341,6 +383,13 @@ final class EventInterpreter {
                     assistantStartedAtByRun.removeValue(forKey: runId)
                     accumulatedThinkingTextByRun.removeValue(forKey: runId)
                     lastSeenSeqByRun.removeValue(forKey: runId)
+                    // Fragment counter — must be reset so the next
+                    // run for this same runId (in the unusual case
+                    // of a session resume or a re-spawn) starts from
+                    // fragment 0 instead of appending onto the
+                    // previous run's count.
+                    assistantFragmentIdxByRun.removeValue(forKey: runId)
+                    lastAssistantSeqByRun.removeValue(forKey: runId)
                     // Mark the runId as processed BEFORE returning so any
                     // racing re-delivery of the same `lifecycle=end` event
                     // short-circuits at the top of this branch. Inserting
@@ -520,14 +569,33 @@ final class EventInterpreter {
                     }
                 }
                 accumulatedAssistantTextByRun[runId] = accText
+                // Track the latest seq per run so the finalize at
+                // the next tool boundary can propagate the right
+                // `seq` into the streaming-metadata overlay (the
+                // finalize ChatMessage itself is built with
+                // `seq: nil` because it doesn't represent a single
+                // payload — `lastAssistantSeqByRun` is the source
+                // of truth for the "sort key" the per-run
+                // `sortForDisplay` reads).
+                if let seq {
+                    lastAssistantSeqByRun[runId] = seq
+                }
                 // Re-stamp startedAt from the lifecycle=start record
                 // so the bubble's "HH:mm" prefix doesn't disappear
                 // on each subsequent delta (the upsert-by-id path
                 // would otherwise clobber the start time the first
                 // delta put in).
                 let startedAt = assistantStartedAtByRun[runId] ?? timestamp
+                // Fragment id: `<runId>:assistant:<N>`. N is the current
+                // fragment index; each tool-boundary finalize (see
+                // `item phase=start` branch) bumps it so the next
+                // segment gets its own slot. The deterministic-UUID
+                // converter maps this string to a stable UUID per
+                // fragment, so `MessageCacheStorage.upsert` keeps each
+                // fragment separate instead of merging them.
+                let fragmentId = "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])"
                 let message = ChatMessage(
-                    id: runId,
+                    id: fragmentId,
                     text: accText,
                     // Local received time for the sort key — see
                     // the matching comment on the lifecycle=start
@@ -823,10 +891,17 @@ final class EventInterpreter {
                     )
                     await viewModel?.receiveMessage(message)
                     // Tool call is fully done — drop the start-timestamp
-                    // entries so memory doesn't grow across many tool
-                    // calls in one run.
+                    // entry so memory doesn't grow across many tool
+                    // calls in one run. We deliberately do NOT clear
+                    // `toolReceivedAtByCall[toolKey]` here for the same
+                    // reason as the `command_output (end)` branch above:
+                    // the modern `item phase=end` branch consumes that
+                    // sort-key value (line 954), and for exec/bash tools
+                    // it may arrive AFTER the legacy `tool (result)`.
+                    // Clearing it here would regress the
+                    // "#11 toolCall appears below #12 toolResult"
+                    // sort order. The dict is bounded per run.
                     toolStartedAtByCall.removeValue(forKey: toolKey)
-                    toolReceivedAtByCall.removeValue(forKey: toolKey)
                 } else {
                     // Any phase other than "start" / "update" / "result"
                     // is a server shape we don't recognize. Log a
@@ -891,6 +966,19 @@ final class EventInterpreter {
                     callText += "\n" + progressText
                 }
                 if itemPhase == "start" {
+                    // Tool-boundary finalize: any assistant text the
+                    // model emitted BEFORE this tool (preamble or
+                    // post-previous-tool thinking) becomes its own
+                    // assistant bubble. Without this, the buffer
+                    // would carry over and the next fragment's
+                    // partial-overlap rewrite (LCP ≥ 8) or
+                    // plain-concat branch (LCP < 8) would stitch
+                    // the prior fragment's tail onto the new fragment's
+                    // head, producing the user-reported Frankenstein
+                    // bubble. The fragment counter is bumped inside
+                    // `finalizeAssistantFragmentIfAny`, so subsequent
+                    // deltas in the new segment go to `runId:assistant:<N+1>`.
+                    await finalizeAssistantFragmentIfAny(runId)
                     // Remember BOTH the server's start timestamp (for
                     // `startedAt` display — "HH:MM" label) and the
                     // local-received time (for the sort key so the
@@ -1030,20 +1118,28 @@ final class EventInterpreter {
                     isFresh: true
                 )
                 await viewModel?.receiveMessage(message)
-                // Cleanup moved here from the `item phase=end` branch:
-                // that branch fires before `command_output` arrives, so
-                // removing `toolStartedAtByCall[toolKey]` there would let
-                // this `command_output phase=end` write a toolResult
-                // bubble with `startedAt: nil` (clobbering the valid
-                // start time the `item phase=start` recorded). Only
-                // release the per-tool state once the terminal
-                // command_output has actually landed. Dict is bounded
-                // by the number of tool calls in a single run, so a
-                // missed cleanup (no command_output ever arrives) is
-                // harmless.
+                // Cleanup of `toolStartedAtByCall` only — the
+                // `toolReceivedAtByCall` value is the toolCall's sort
+                // timestamp and is consumed by the `item phase=end`
+                // branch (line 954), which for exec/bash tools may
+                // arrive AFTER this `command_output (end)`. Clearing
+                // `toolReceivedAtByCall` here would make `item (end)`
+                // fall back to `Date()` and put the toolCall's sort
+                // key LATER than the toolResult's command_output (end)
+                // timestamp — exactly the user-reported
+                // "#11 toolCall appears below #12 toolResult" bug.
+                // Cleanup of `toolStartedAtByCall` is correct here
+                // because we want `command_output (end)` to see the
+                // recorded start time (see the note in the legacy
+                // `tool (result)` branch for the symmetric reasoning).
+                // The orphaned `toolReceivedAtByCall` entries are
+                // bounded by the number of tool calls in a single run
+                // and are reclaimed at app restart; the dict is not
+                // expected to grow unboundedly across runs in a single
+                // session because lifecycle=end typically follows the
+                // last tool's item (end) shortly after.
                 if outputPhase == "end" {
                     toolStartedAtByCall.removeValue(forKey: toolKey)
-                    toolReceivedAtByCall.removeValue(forKey: toolKey)
                 }
             default:
                 // plan, approval, patch, compaction, error — not yet surfaced.
@@ -1241,7 +1337,13 @@ final class EventInterpreter {
                         .map(\.text)
                         .joined(separator: "\n\n")
                     let message = ChatMessage(
-                        id: runId,
+                        // Fragment id (matches the streaming path's
+                        // id scheme; slash-command replies don't
+                        // produce streaming deltas so N is still 0
+                        // here unless a prior tool split bumped it —
+                        // either way the deterministic-UUID converter
+                        // keeps this stable within the run).
+                        id: "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])",
                         text: combinedText,
                         timestamp: now,
                         role: resolvedRole,
@@ -1312,8 +1414,14 @@ final class EventInterpreter {
                         // accumulator value when computing
                         // effectiveFullText).
                         let resolvedStartedAt = assistantStartedAtByRun[runId]
+                        // Use the current fragment id so the
+                        // state=final recovery overwrites the
+                        // streaming placeholder on the SAME slot
+                        // (same UUID) instead of spawning a
+                        // duplicate bubble at a different id.
+                        let recoveryFragmentId = "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])"
                         let message = ChatMessage(
-                            id: runId,
+                            id: recoveryFragmentId,
                             text: serverText,
                             // Local received time for sort —
                             // matches the lifecycle=start branch
@@ -1427,6 +1535,69 @@ final class EventInterpreter {
             // handle it.
             AppLogger.log("transport event UNHANDLED: \(event)", category: .nativeChat, level: .warning)
         }
+    }
+
+    // MARK: - Assistant fragment helpers
+
+    /// Finalize the accumulated assistant-text buffer (if any) as
+    /// a complete `role=assistant, state=final` bubble, then clear
+    /// the buffer so the next segment starts fresh. Called at every
+    /// `item phase=start` so each inter-tool "thinking aloud" text
+    /// becomes its own bubble rather than being stitched onto the
+    /// next response fragment via the LCP partial-overlap rewrite.
+    ///
+    /// Idempotent: called even when the buffer is empty (e.g. two
+    /// item phase=start events in quick succession for the same
+    /// toolCall — the second call finds an empty buffer and bails).
+    /// The state stamp is `state="final"` because this fragment's
+    /// text is logically complete at the tool boundary; the next
+    /// fragment opens with a fresh accumulator.
+    private func finalizeAssistantFragmentIfAny(_ runId: String) async {
+        guard let buf = accumulatedAssistantTextByRun[runId], !buf.isEmpty else { return }
+        let idx = assistantFragmentIdxByRun[runId, default: 0]
+        let fragId = "\(runId):assistant:\(idx)"
+        let resolvedStartedAt = assistantStartedAtByRun[runId]
+        let resolvedEndedAt = Date()
+        // Use the seq of the LAST streaming delta in this fragment
+        // (recorded by `lastAssistantSeqByRun`) so the
+        // streaming-metadata overlay carries the same seq the
+        // streaming ChatMessage had. Without this, the finalize
+        // would record `seq: nil`, which the per-run sort in
+        // `sortForDisplay` interprets as `Int.max`, and the
+        // finalized fragment would sort AFTER the response —
+        // the reverse of the user's "earlier fragment first"
+        // expectation.
+        let fragmentLastSeq = lastAssistantSeqByRun[runId]
+        let finalMessage = ChatMessage(
+            id: fragId,
+            text: buf,
+            timestamp: resolvedEndedAt,
+            role: "assistant",
+            state: "final",
+            runId: runId,
+            seq: fragmentLastSeq,
+            startedAt: resolvedStartedAt,
+            endedAt: resolvedEndedAt,
+            livenessState: nil,
+            toolCallId: nil,
+            toolName: nil,
+            stopReason: nil,
+            isFresh: false
+        )
+        AppLogger.log(
+            "agent assistant fragment finalize: id=\(fragId.suffix(20)) runId-prefix=\(String(runId.prefix(8))) textLen=\(buf.count) textPreview=\"\(String(buf.prefix(60)))\(buf.count > 60 ? "…(\(buf.count))" : "")\"",
+            category: .nativeChat)
+        await viewModel?.receiveMessage(finalMessage)
+        // Increment the fragment counter so the next segment writes
+        // to a different id slot (the streaming upsert path also
+        // reads `assistantFragmentIdxByRun[runId]`, so both paths
+        // see the same N value here).
+        assistantFragmentIdxByRun[runId] = idx + 1
+        // Clear the accumulator so the next fragment starts from
+        // an empty prev (so the LCP=0 plain-concat branch can't
+        // accidentally Frankenstein the prior fragment's tail
+        // onto the new fragment's head).
+        accumulatedAssistantTextByRun[runId] = ""
     }
 
     // MARK: - Static helpers (kept here because they're only used in `.log(...)` paths)
