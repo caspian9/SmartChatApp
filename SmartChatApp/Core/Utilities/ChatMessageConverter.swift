@@ -364,10 +364,21 @@ enum ChatMessageConverter {
             // safe and avoids writing a round-trip the SDK
             // can't decode.
             role: ChatMessageConverter.normalizeRole(chatMessage.role),
-            content: [OpenClawChatMessageContent(
-                type: "text", text: chatMessage.text, thinking: nil,
-                thinkingSignature: nil, mimeType: nil, fileName: nil,
-                content: nil, id: nil, name: nil, arguments: nil)],
+            // Schema must match the server's `chat.history` shape so a
+            // streaming bubble and a server-returned bubble with the same
+            // logical content dedup against each other in
+            // `MessageCacheStorage.dedupKey`. Without this split, a
+            // streaming thinking bubble lands in the cache as
+            // `type="text", text="<thinking>"`, while the server returns
+            // `type="thinking", thinking="<thinking>"`; both pass the
+            // dedupKey match (same hash, same role), the streaming copy
+            // is KEEP'd, and `toChatMessage` reads it as plain text —
+            // the user reports "history thinking content not displayed".
+            // toolCall bubbles use the same inline merge that the
+            // streaming path produces (EventInterpreter formats the
+            // toolCall text into `chatMessage.text` for the tool bubble);
+            // see `MessageFormatters.formatToolCallBubbleText`.
+            content: [Self.contentItem(for: chatMessage)],
             timestamp: chatMessage.timestamp.timeIntervalSince1970 * 1000,
             toolCallId: chatMessage.toolCallId,
             toolName: chatMessage.toolName,
@@ -382,6 +393,39 @@ enum ChatMessageConverter {
             // need to grow a "isStreaming" hint — out of scope
             // for this branch.)
         )
+    }
+
+    /// Build the single `OpenClawChatMessageContent` for a
+    /// `ChatMessage` being written to the cache. The schema split
+    /// mirrors the server's `chat.history` projection so a streaming
+    /// thinking bubble (role: "thinking") and a server-returned
+    /// thinking block (type: "thinking") end up with the same shape
+    /// in the cache, and `MessageCacheStorage.dedupKey`'s content
+    /// hash treats them as duplicates. Without this split, the
+    /// streaming copy wins dedup but reads back as plain text, and
+    /// the user sees the response bubble without its reasoning.
+    ///
+    /// The previous implementation always wrote `type: "text",
+    /// text: chatMessage.text, thinking: nil` regardless of role —
+    /// correct for assistant/user/toolCall bubbles but wrong for
+    /// thinking, where the content belongs in the `thinking` field.
+    static func contentItem(for chatMessage: ChatMessage) -> OpenClawChatMessageContent {
+        if chatMessage.role == "thinking" {
+            return OpenClawChatMessageContent(
+                type: "thinking",
+                text: nil,
+                thinking: chatMessage.text,
+                thinkingSignature: nil,
+                mimeType: nil, fileName: nil, content: nil,
+                id: nil, name: nil, arguments: nil)
+        }
+        return OpenClawChatMessageContent(
+            type: "text",
+            text: chatMessage.text,
+            thinking: nil,
+            thinkingSignature: nil,
+            mimeType: nil, fileName: nil, content: nil,
+            id: nil, name: nil, arguments: nil)
     }
 
     /// Deterministically derive a UUID from an arbitrary string. Used

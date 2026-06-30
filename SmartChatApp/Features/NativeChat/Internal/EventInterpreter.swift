@@ -2,6 +2,20 @@ import SwiftUI
 import OpenClawChatUI
 import OpenClawKit
 
+/// Tunables for the streaming-delta accumulator. Centralized so
+/// the threshold is greppable from the test target and so a
+/// future revision can lift these to `ConfigurationManager` if
+/// per-profile tuning becomes useful.
+private enum StreamingDelta {
+    /// Minimum longest-common-prefix length to trust a
+    /// partial-overlap rewrite instead of falling back to plain
+    /// concatenation. Below this, plain concat is the safer
+    /// default — short common prefixes like "the " or " a "
+    /// would otherwise wrongly mark unrelated fragments as
+    /// overlapping.
+    static let partialOverlapMinLCP = 8
+}
+
 @MainActor
 final class EventInterpreter {
     weak var viewModel: NativeChatViewModel?
@@ -35,6 +49,34 @@ final class EventInterpreter {
     /// then disappears as more deltas come in, until `lifecycle=end`
     /// restores it. Same pattern as `toolStartedAtByCall` below.
     private var assistantStartedAtByRun: [String: Date] = [:]
+    /// Per-run counter for the next assistant fragment's stable id
+    /// slot. Each "tool boundary" (any `item phase=start` event)
+    /// increments the counter so the next segment of assistant text
+    /// gets a fresh id and upserts into a separate bubble instead of
+    /// stitching onto the previous one. Without this split, the
+    /// LCP-12 partial-overlap rewrite (issue #21) was producing
+    /// Frankenstein text by stretching a single bubble across the
+    /// model's "thinking aloud" segments and the actual response —
+    /// see the user-reported EFB69836 weather run on 2026-06-29:
+    /// pre-tool "Saturday is July 4 — 5 days out...", inter-tool
+    /// "Only 3-day data...", inter-tool "Saturday is **July 4**...",
+    /// and response "Found it. From..." all collapsed into one
+    /// Frankenstein bubble. Each fragment id is
+    /// "<runId>:assistant:<N>". The view's `sortForDisplay` puts
+    /// these in order via the per-fragment `seq` (the seq of each
+    /// fragment's last delta). Cleared at `lifecycle=end` along with
+    /// the other per-run dicts.
+    private var assistantFragmentIdxByRun: [String: Int] = [:]
+    /// Per-run seq of the LAST assistant delta we processed.
+    /// The finalize helper at every `item phase=start` boundary
+    /// uses this so the finalize ChatMessage can carry the
+    /// fragment's correct seq (otherwise it would write `seq: nil`
+    /// in `recordStreamingMetadata`, and the per-run sort in
+    /// `sortForDisplay` would interpret that as `Int.max` and put
+    /// the finalized fragment AFTER the response fragment — the
+    /// reverse of the user's "preamble first, response last"
+    /// expectation).
+    private var lastAssistantSeqByRun: [String: Int] = [:]
     /// Per-tool-call startedAt, keyed by "<runId>:<toolCallId>".
     /// The legacy `stream: "tool"` path fires `phase: "update"`
     /// events that wipe `startedAt` to nil on each call, which
@@ -87,6 +129,17 @@ final class EventInterpreter {
     ///   2nd/3rd arrival keeps the bubble intact.
     @ObservationIgnored
     private var processedLifecycleEndByRun: Set<String> = []
+    /// Per-(runId, stream) `seq` watermark. The server's
+    /// `payload.seq` is monotonic per-stream (assistant and
+    /// thinking are independent streams with their own seq
+    /// counters; an assistant seq of 2 and a thinking seq of 1
+    /// for the same run are both valid and unrelated). Rejecting
+    /// a delta with `seq <= lastSeen` drops transport-level
+    /// retransmits and out-of-order arrivals at the gate, before
+    /// any text comparison runs. Cleared on `lifecycle=end`
+    /// alongside the other per-run accumulators.
+    @ObservationIgnored
+    private var lastSeenSeqByRun: [String: [String: Int]] = [:]
 
     func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String) async {
         switch event {
@@ -116,20 +169,28 @@ final class EventInterpreter {
                     AppLogger.log("agent lifecycle start - runId: \(runId), seq: \(seq ?? -1), startedAt: \(startedAtMs)", category: .nativeChat)
                     // Eager-mark removed: `MarkdownCache.needsMarkdown(for:)`
                     // is now lazy and content-keyed, so the lifecycle-start
-                    // placeholder (empty text) is short-circuited by the
-                    // pre-filters inside `needsMarkdown` and the final-state
-                    // message is computed on first view read. No need to
-                    // pre-mark by runId.
-                    await MainActor.run {
-                        MarkdownStreamManager.shared.holder(for: runId)
-                    }
+                    // No-op placeholder for the lifecycle=start
+                    // branch. Previously this eagerly pre-created a
+                    // `MarkdownStreamManager` holder so the streaming
+                    // view could mount a `MarkdownViewTextKit` for the
+                    // run; with the third-party lib removed (2026-06-29
+                    // flicker fix), there's no streaming markdown view
+                    // to prime. The bubble's lifecycle=start bubble
+                    // still emits a placeholder ChatMessage below so
+                    // the view can show its "typing" indicator.
                     // Remember the start time so subsequent `assistant`
                     // deltas can re-stamp it (the per-delta
                     // `ChatMessage` below has no other way to know it).
                     let startedAt = startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : timestamp
                     assistantStartedAtByRun[runId] = startedAt
+                    // Placeholder uses fragment 0's id so the first
+                    // streaming delta (which also reads N=0) lands
+                    // on the same slot — without this match, the
+                    // delta would upsert onto a different UUID and
+                    // spawn a duplicate empty placeholder.
+                    let placeholderFragmentId = "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])"
                     let message = ChatMessage(
-                        id: runId,
+                        id: placeholderFragmentId,
                         text: "",
                         // Use the local received time (Date()) for the
                         // sort key, NOT `timestamp` (the server's
@@ -177,6 +238,29 @@ final class EventInterpreter {
                         AppLogger.log("agent lifecycle end - SKIP (already processed): runId: \(runId)", category: .nativeChat, level: .debug)
                         return
                     }
+                    // Mark the runId as processed BEFORE any await. The
+                    // line 306 `await viewModel?.receiveMessage(message)`
+                    // yields the MainActor — without this early insert, a
+                    // racing re-delivery of the same `lifecycle=end` (the
+                    // WS server retransmits the terminal event after the
+                    // final ack) can enter this branch, read
+                    // `accumulatedAssistantTextByRun[runId]` after we
+                    // drain it at line ~321, compute `effective=0`, and
+                    // upsert an empty bubble over the streamed text.
+                    // Reproduced on device 2026-06-29 07:01:22 with the
+                    // weather agent run (runId FA2B00AB-DA1E-...):
+                    //   1st delivery → accumulated=305, effective=305
+                    //   2nd delivery → accumulated=-1 (nil), effective=0
+                    //   → assistant bubble shows empty.
+                    // Inserting synchronously at the top, before any
+                    // await, makes the guard at line ~201 above
+                    // monotonic. The duplicate insert at the end of
+                    // this branch stays as a no-op (Set.insert is
+                    // idempotent) and keeps the comment intent —
+                    // `processedLifecycleEndByRun` is the
+                    // "already-handled" record aligned with the per-run
+                    // accumulator lifetimes.
+                    processedLifecycleEndByRun.insert(runId)
                     AppLogger.log("agent lifecycle end - runId: \(runId), data keys: \(data.keys.map { $0 })", category: .nativeChat)
                     var inputTokens: Int?
                     var outputTokens: Int?
@@ -214,27 +298,21 @@ final class EventInterpreter {
                                 ? Date(timeIntervalSince1970: endedAtMs / 1000)
                                 : Date()))
                     AppLogger.log("agent lifecycle end - cache anchor: startedAtRun=\(assistantStartedAtByRun[runId]?.timeIntervalSince1970 ?? -1) endedAtMs=\(endedAtMs) → chosen=\(chosenAnchor.timeIntervalSince1970)", category: .nativeChat)
-                    // Flush the markdown stream buffer and read the full
-                    // accumulated text so it can be persisted. The
-                    // authoritative source is our local accumulator (server
-                    // deltas turn out to be incremental on device, not
-                    // cumulative as the prior comment assumed —
-                    // `MarkdownStreamManager.currentText()` would return
-                    // just the last delta's suffix). Fall back to the
-                    // holder's tracked text if our accumulator is empty
-                    // (e.g., agent produced no assistant text, only
-                    // thinking/tools).
-                    let fullText: String = await MainActor.run {
-                        MarkdownStreamManager.shared.end(messageId: runId)
-                        return MarkdownStreamManager.shared.currentText(for: runId) ?? ""
-                    }
-                    let effectiveFullText: String = {
-                        if let acc = accumulatedAssistantTextByRun[runId], !acc.isEmpty {
-                            return acc
-                        }
-                        return fullText
-                    }()
-                    AppLogger.log("agent lifecycle end - fullText len: \(fullText.count), accumulated len: \(accumulatedAssistantTextByRun[runId]?.count ?? -1), effective: \(effectiveFullText.count) for runId: \(runId)", category: .nativeChat)
+                    // Authoritative source for the final bubble's text is
+                    // `accumulatedAssistantTextByRun[runId]` (populated by
+                    // every `assistant` delta). Previously this code
+                    // also queried `MarkdownStreamManager.currentText`
+                    // as a secondary fallback, but with the third-party
+                    // lib removed the manager is gone and the accumulator
+                    // is the only authoritative store. Runs that produced
+                    // no assistant text (only thinking/tools) will
+                    // resolve to an empty `effectiveFullText`, which
+                    // the bubble view renders as an empty assistant
+                    // bubble; the lifecycle=end's `chatMessages` upsert
+                    // below will skip the empty-assistant path so we
+                    // don't show a stray placeholder.
+                    let effectiveFullText: String = accumulatedAssistantTextByRun[runId] ?? ""
+                    AppLogger.log("agent lifecycle end - accumulated len: \(accumulatedAssistantTextByRun[runId]?.count ?? -1), effective: \(effectiveFullText.count) for runId: \(runId)", category: .nativeChat)
                     // Pull startedAt from the lifecycle=start record
                     // when the server omits it on the end event (the
                     // end event's `startedAt` is sometimes 0). Falls
@@ -244,8 +322,16 @@ final class EventInterpreter {
                         if startedAtMs > 0 { return Date(timeIntervalSince1970: startedAtMs / 1000) }
                         return assistantStartedAtByRun[runId] ?? timestamp
                     }()
+                    // Use the current fragment id so the final-state
+                    // upsert REPLACES the streaming entry for the
+                    // last fragment (same UUID), not a different
+                    // fragment id (which would create a duplicate
+                    // bubble after the streaming finalize on the
+                    // previous tool boundary already incremented the
+                    // fragment counter).
+                    let finalFragmentId = "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])"
                     let message = ChatMessage(
-                        id: runId,
+                        id: finalFragmentId,
                         text: effectiveFullText,
                         // Cache-anchor: the run's
                         // `lifecycle=start` `startedAt` (recorded in
@@ -296,6 +382,14 @@ final class EventInterpreter {
                     accumulatedAssistantTextByRun.removeValue(forKey: runId)
                     assistantStartedAtByRun.removeValue(forKey: runId)
                     accumulatedThinkingTextByRun.removeValue(forKey: runId)
+                    lastSeenSeqByRun.removeValue(forKey: runId)
+                    // Fragment counter — must be reset so the next
+                    // run for this same runId (in the unusual case
+                    // of a session resume or a re-spawn) starts from
+                    // fragment 0 instead of appending onto the
+                    // previous run's count.
+                    assistantFragmentIdxByRun.removeValue(forKey: runId)
+                    lastAssistantSeqByRun.removeValue(forKey: runId)
                     // Mark the runId as processed BEFORE returning so any
                     // racing re-delivery of the same `lifecycle=end` event
                     // short-circuits at the top of this branch. Inserting
@@ -303,12 +397,12 @@ final class EventInterpreter {
                     // aligned with the per-run accumulators above — they're
                     // all torn down together at the natural end of the run.
                     processedLifecycleEndByRun.insert(runId)
-                    // Holder no longer needed — SwiftUI flips to the static
-                    // MarkdownCardView once state becomes "final", so the streaming
-                    // view is dismantled. Release to bound memory across many turns.
-                    await MainActor.run {
-                        MarkdownStreamManager.shared.release(messageId: runId)
-                    }
+                    // No-op cleanup. With the third-party
+                    // `MarkdownStreamManager` removed, there's no
+                    // streaming-view holder to release on lifecycle=end.
+                    // The bubble's lifecycle=end upserts the final
+                    // ChatMessage below, which is what `MessageReceiver`
+                    // persists and the bubble view renders.
                     // Only the real terminal signal resets the sending flag.
                     // `resetSendState` (instead of a direct assignment) also
                     // cancels the send-timeout watchdog armed in
@@ -358,29 +452,133 @@ final class EventInterpreter {
                 AppLogger.log("agent assistant delta - text len: \(text.count), runId: \(runId)", category: .nativeChat)
                 guard !text.isEmpty else { return }
                 let prev = accumulatedAssistantTextByRun[runId] ?? ""
+
+                // Seq guard: drop retransmits / out-of-order
+                // arrivals before any text comparison runs.
+                // payload.seq is monotonic per-stream (assistant
+                // and thinking are independent; the assistant
+                // seq of 2 and thinking seq of 1 for the same
+                // run are unrelated). The `payload.stream` value
+                // is included in the watermark key so the two
+                // streams don't share a counter — see the
+                // matching comment on `lastSeenSeqByRun` above
+                // for the per-stream keying rationale. Skipped
+                // when seq is nil so older servers without a seq
+                // field aren't blocked at the gate.
+                if let seq, let seen = lastSeenSeqByRun[runId]?[payload.stream], seq <= seen {
+                    AppLogger.log(
+                        "agent assistant delta - ignored (seq replay): runId: \(runId), stream: \(payload.stream), seen: \(seen), deltaSeq: \(seq)",
+                        category: .nativeChat, level: .warning)
+                    return
+                }
+                if let seq {
+                    var perStream = lastSeenSeqByRun[runId] ?? [:]
+                    perStream[payload.stream] = seq
+                    lastSeenSeqByRun[runId] = perStream
+                }
+
+                // Exact-duplicate short-circuit. If the new delta
+                // is byte-identical to the accumulator we already
+                // have, there's nothing to update. log only when
+                // seq is also identical (transport-level
+                // retransmit); a same-text different-seq arrival
+                // is a no-op and stays silent.
+                guard text != prev else {
+                    AppLogger.log(
+                        "agent assistant delta - ignored (identical text): runId: \(runId), text len: \(text.count)",
+                        category: .nativeChat, level: .debug)
+                    return
+                }
+
                 let accText: String
-                if !prev.isEmpty, text.hasPrefix(prev) {
-                    // Cumulative: the new delta includes everything
-                    // we already had plus more. Use it as-is so the
-                    // bubble grows monotonically along the
-                    // server's actual progression instead of
-                    // producing a concatenation of past deltas.
+                if prev.isEmpty || text.hasPrefix(prev) {
+                    // First delta, or cumulative shape: server is
+                    // sending the full-so-far text on every chunk.
+                    // Replace, don't append — using the new delta
+                    // as-is keeps the bubble growing monotonically
+                    // along the server's actual progression
+                    // instead of producing a concatenation of past
+                    // deltas.
                     accText = text
-                } else if !prev.isEmpty, prev.hasPrefix(text) {
+                } else if prev.hasPrefix(text) {
                     // Out-of-order / stale: the new delta is a
                     // state we already passed through. The
                     // accumulator is already ahead. Drop the
                     // delta so we don't regress the visible text.
-                    AppLogger.log("agent assistant delta - ignored (stale): prev len: \(prev.count), delta len: \(text.count)", category: .nativeChat, level: .warning)
+                    AppLogger.log(
+                        "agent assistant delta - ignored (stale): prev len: \(prev.count), delta len: \(text.count)",
+                        category: .nativeChat, level: .warning)
                     return
                 } else {
-                    // Incremental: delta is a fresh fragment that
-                    // doesn't overlap with what we have. Append.
-                    accText = prev + text
+                    // Partial overlap: neither is a full prefix of
+                    // the other, but they share a common prefix of
+                    // meaningful length. This is the
+                    // LLM-rewrites-earlier-tokens shape that the
+                    // old "Incremental: append" branch mishandled
+                    // (issue #21 real-world example: "this is **ok"
+                    // → "this is **flowed ok" produced
+                    // "this is **okthis is **flowed ok").
+                    let lcp = EventInterpreter.longestCommonPrefix(prev, text)
+                    if lcp >= StreamingDelta.partialOverlapMinLCP {
+                        AppLogger.log(
+                            "agent assistant delta - partial-overlap: lcp=\(lcp), prev len: \(prev.count), delta len: \(text.count)",
+                            category: .nativeChat)
+                        accText = String(prev.prefix(lcp)) + String(text.dropFirst(lcp))
+                    } else {
+                        // LCP < 8: the prefix-overlap rewrite above
+                        // doesn't apply. BUT the server's incremental
+                        // deltas often SUFFIX-overlap prev (the next
+                        // fragment starts with the same chars prev
+                        // ends with, e.g. prev="...看看这个功能怎么用。",
+                        // text="看看这个功能"). Naive `prev + text`
+                        // here duplicates "看看这个功能" in the visible
+                        // bubble. Reproduced on device 2026-06-29
+                        // 07:50:35 with the Beijing-location agent
+                        // run — short Chinese deltas ("！", "°",
+                        // "E", "**") stacked across the LCP<8
+                        // branch and produced visible redundancy
+                        // ("让我让我们查一下", "iOSiOS",
+                        // "看到了看到了", etc.).
+                        //
+                        // Resolution: check whether prev's suffix
+                        // matches text's prefix and trim before
+                        // appending. Three sub-cases:
+                        //  - text is fully contained in prev's
+                        //    suffix (delta is a redundant replay) →
+                        //    drop, no accumulator change.
+                        //  - text's prefix overlaps prev's suffix by
+                        //    some chars → append only the unique tail
+                        //    of text (`prev + text.dropFirst(overlap)`).
+                        //  - no overlap → truly independent fragments,
+                        //    plain concat is correct.
+                        let suffixOverlap = EventInterpreter.longestSuffixPrefixOverlap(prev, text)
+                        if suffixOverlap == text.count {
+                            AppLogger.log(
+                                "agent assistant delta - ignored (text already in accumulator): runId: \(runId), prev len: \(prev.count), text len: \(text.count)",
+                                category: .nativeChat, level: .debug)
+                            return
+                        }
+                        if suffixOverlap > 0 {
+                            AppLogger.log(
+                                "agent assistant delta - suffix-overlap: overlap=\(suffixOverlap), prev len: \(prev.count), delta len: \(text.count)",
+                                category: .nativeChat)
+                            accText = prev + String(text.dropFirst(suffixOverlap))
+                        } else {
+                            accText = prev + text
+                        }
+                    }
                 }
                 accumulatedAssistantTextByRun[runId] = accText
-                await MainActor.run {
-                    MarkdownStreamManager.shared.appendCumulative(messageId: runId, cumulative: text)
+                // Track the latest seq per run so the finalize at
+                // the next tool boundary can propagate the right
+                // `seq` into the streaming-metadata overlay (the
+                // finalize ChatMessage itself is built with
+                // `seq: nil` because it doesn't represent a single
+                // payload — `lastAssistantSeqByRun` is the source
+                // of truth for the "sort key" the per-run
+                // `sortForDisplay` reads).
+                if let seq {
+                    lastAssistantSeqByRun[runId] = seq
                 }
                 // Re-stamp startedAt from the lifecycle=start record
                 // so the bubble's "HH:mm" prefix doesn't disappear
@@ -388,8 +586,16 @@ final class EventInterpreter {
                 // would otherwise clobber the start time the first
                 // delta put in).
                 let startedAt = assistantStartedAtByRun[runId] ?? timestamp
+                // Fragment id: `<runId>:assistant:<N>`. N is the current
+                // fragment index; each tool-boundary finalize (see
+                // `item phase=start` branch) bumps it so the next
+                // segment gets its own slot. The deterministic-UUID
+                // converter maps this string to a stable UUID per
+                // fragment, so `MessageCacheStorage.upsert` keeps each
+                // fragment separate instead of merging them.
+                let fragmentId = "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])"
                 let message = ChatMessage(
-                    id: runId,
+                    id: fragmentId,
                     text: accText,
                     // Local received time for the sort key — see
                     // the matching comment on the lifecycle=start
@@ -468,16 +674,70 @@ final class EventInterpreter {
                 // holds the complete thinking rather than the last
                 // fragment.
                 let prev = accumulatedThinkingTextByRun[runId] ?? ""
+
+                // Seq guard: drop retransmits / out-of-order
+                // arrivals for the thinking stream too. Per-stream
+                // watermark — see the matching comment in
+                // `case "assistant"` for why we key on
+                // `(runId, stream)` rather than just `runId`.
+                if let seq, let seen = lastSeenSeqByRun[runId]?[payload.stream], seq <= seen {
+                    AppLogger.log(
+                        "agent thinking delta - ignored (seq replay): runId: \(runId), stream: \(payload.stream), seen: \(seen), deltaSeq: \(seq)",
+                        category: .nativeChat, level: .warning)
+                    return
+                }
+                if let seq {
+                    var perStream = lastSeenSeqByRun[runId] ?? [:]
+                    perStream[payload.stream] = seq
+                    lastSeenSeqByRun[runId] = perStream
+                }
+
+                // Exact-duplicate short-circuit (mirror of the
+                // assistant branch above).
+                guard text != prev else {
+                    AppLogger.log(
+                        "agent thinking delta - ignored (identical text): runId: \(runId), text len: \(text.count)",
+                        category: .nativeChat, level: .debug)
+                    return
+                }
+
                 let accText: String
-                if !prev.isEmpty, text.hasPrefix(prev) {
+                if prev.isEmpty || text.hasPrefix(prev) {
                     accText = text
-                } else if !prev.isEmpty, prev.hasPrefix(text) {
+                } else if prev.hasPrefix(text) {
                     AppLogger.log(
                         "agent thinking delta - ignored (stale): prev len: \(prev.count), delta len: \(text.count)",
                         category: .nativeChat, level: .warning)
                     return
                 } else {
-                    accText = prev + text
+                    // Partial overlap — same algorithm as the
+                    // assistant branch. See the matching comment
+                    // in `case "assistant"` for the issue #21
+                    // (LCP≥8 LLM-rewrite) and the suffix-overlap
+                    // (LCP<8 incremental-delta duplication) cases.
+                    let lcp = EventInterpreter.longestCommonPrefix(prev, text)
+                    if lcp >= StreamingDelta.partialOverlapMinLCP {
+                        AppLogger.log(
+                            "agent thinking delta - partial-overlap: lcp=\(lcp), prev len: \(prev.count), delta len: \(text.count)",
+                            category: .nativeChat)
+                        accText = String(prev.prefix(lcp)) + String(text.dropFirst(lcp))
+                    } else {
+                        let suffixOverlap = EventInterpreter.longestSuffixPrefixOverlap(prev, text)
+                        if suffixOverlap == text.count {
+                            AppLogger.log(
+                                "agent thinking delta - ignored (text already in accumulator): prev len: \(prev.count), text len: \(text.count)",
+                                category: .nativeChat, level: .debug)
+                            return
+                        }
+                        if suffixOverlap > 0 {
+                            AppLogger.log(
+                                "agent thinking delta - suffix-overlap: overlap=\(suffixOverlap), prev len: \(prev.count), text len: \(text.count)",
+                                category: .nativeChat)
+                            accText = prev + String(text.dropFirst(suffixOverlap))
+                        } else {
+                            accText = prev + text
+                        }
+                    }
                 }
                 accumulatedThinkingTextByRun[runId] = accText
                 let message = ChatMessage(
@@ -631,10 +891,17 @@ final class EventInterpreter {
                     )
                     await viewModel?.receiveMessage(message)
                     // Tool call is fully done — drop the start-timestamp
-                    // entries so memory doesn't grow across many tool
-                    // calls in one run.
+                    // entry so memory doesn't grow across many tool
+                    // calls in one run. We deliberately do NOT clear
+                    // `toolReceivedAtByCall[toolKey]` here for the same
+                    // reason as the `command_output (end)` branch above:
+                    // the modern `item phase=end` branch consumes that
+                    // sort-key value (line 954), and for exec/bash tools
+                    // it may arrive AFTER the legacy `tool (result)`.
+                    // Clearing it here would regress the
+                    // "#11 toolCall appears below #12 toolResult"
+                    // sort order. The dict is bounded per run.
                     toolStartedAtByCall.removeValue(forKey: toolKey)
-                    toolReceivedAtByCall.removeValue(forKey: toolKey)
                 } else {
                     // Any phase other than "start" / "update" / "result"
                     // is a server shape we don't recognize. Log a
@@ -699,6 +966,19 @@ final class EventInterpreter {
                     callText += "\n" + progressText
                 }
                 if itemPhase == "start" {
+                    // Tool-boundary finalize: any assistant text the
+                    // model emitted BEFORE this tool (preamble or
+                    // post-previous-tool thinking) becomes its own
+                    // assistant bubble. Without this, the buffer
+                    // would carry over and the next fragment's
+                    // partial-overlap rewrite (LCP ≥ 8) or
+                    // plain-concat branch (LCP < 8) would stitch
+                    // the prior fragment's tail onto the new fragment's
+                    // head, producing the user-reported Frankenstein
+                    // bubble. The fragment counter is bumped inside
+                    // `finalizeAssistantFragmentIfAny`, so subsequent
+                    // deltas in the new segment go to `runId:assistant:<N+1>`.
+                    await finalizeAssistantFragmentIfAny(runId)
                     // Remember BOTH the server's start timestamp (for
                     // `startedAt` display — "HH:MM" label) and the
                     // local-received time (for the sort key so the
@@ -777,10 +1057,6 @@ final class EventInterpreter {
                     isFresh: true
                 )
                 await viewModel?.receiveMessage(message)
-                if itemPhase == "end" {
-                    toolStartedAtByCall.removeValue(forKey: toolKey)
-                    toolReceivedAtByCall.removeValue(forKey: toolKey)
-                }
             case "command_output":
                 // Per-item command output stream. For exec/bash tools the
                 // result body arrives here in `output` (incremental on
@@ -842,6 +1118,29 @@ final class EventInterpreter {
                     isFresh: true
                 )
                 await viewModel?.receiveMessage(message)
+                // Cleanup of `toolStartedAtByCall` only — the
+                // `toolReceivedAtByCall` value is the toolCall's sort
+                // timestamp and is consumed by the `item phase=end`
+                // branch (line 954), which for exec/bash tools may
+                // arrive AFTER this `command_output (end)`. Clearing
+                // `toolReceivedAtByCall` here would make `item (end)`
+                // fall back to `Date()` and put the toolCall's sort
+                // key LATER than the toolResult's command_output (end)
+                // timestamp — exactly the user-reported
+                // "#11 toolCall appears below #12 toolResult" bug.
+                // Cleanup of `toolStartedAtByCall` is correct here
+                // because we want `command_output (end)` to see the
+                // recorded start time (see the note in the legacy
+                // `tool (result)` branch for the symmetric reasoning).
+                // The orphaned `toolReceivedAtByCall` entries are
+                // bounded by the number of tool calls in a single run
+                // and are reclaimed at app restart; the dict is not
+                // expected to grow unboundedly across runs in a single
+                // session because lifecycle=end typically follows the
+                // last tool's item (end) shortly after.
+                if outputPhase == "end" {
+                    toolStartedAtByCall.removeValue(forKey: toolKey)
+                }
             default:
                 // plan, approval, patch, compaction, error — not yet surfaced.
                 AppLogger.log("agent UNHANDLED stream=\(payload.stream) runId=\(payload.runId) seq=\(payload.seq ?? -1) data=\(EventInterpreter.serializeDataForLog(data))", category: .nativeChat)
@@ -991,63 +1290,158 @@ final class EventInterpreter {
             // thinking branch — no stable id namespace, would
             // create an unkeyed bubble that can't dedup).
             if let runId = chat.runId, !textBlocks.isEmpty {
-                let now = Date()
-                // Use `chat.state` if the server supplies one
-                // (typically "final" for slash-command responses);
-                // default to "final" so the bubble renders its
-                // complete content rather than the
-                // typing-indicator shell.
-                let resolvedState = chat.state ?? "final"
-                // Prefer the chat event's role when it's set;
-                // default to "assistant" so non-streaming slash-
-                // command replies render in the same visual lane
-                // as the agent's assistant deltas.
-                let resolvedRole = role == "?" ? "assistant" : role
-                // Concatenate text blocks in order. A single chat
-                // event can carry multiple text blocks (rare but
-                // possible — the SDK sometimes splits paragraphs).
-                // Use "\n\n" as the separator so the bubble's
-                // markdown renderer treats them as separate
-                // paragraphs rather than smushing them onto one
-                // line.
-                let combinedText = textBlocks
-                    .sorted { $0.blockIndex < $1.blockIndex }
-                    .map(\.text)
-                    .joined(separator: "\n\n")
-                let message = ChatMessage(
-                    id: runId,
-                    text: combinedText,
-                    timestamp: now,
-                    role: resolvedRole,
-                    state: resolvedState,
-                    runId: runId,
-                    seq: nil,
-                    startedAt: nil,
-                    endedAt: nil,
-                    livenessState: nil,
-                    toolCallId: nil,
-                    toolName: nil,
-                    stopReason: nil,
-                    isFresh: true
-                )
-                await viewModel?.receiveMessage(message)
-                // Slash-command responses are delivered via the
-                // chat-event stream (no agent-event lifecycle=end
-                // accompanies them), so the watchdog-armed
-                // `isSending = true` from `sendAsMessage` would
-                // stay stuck forever — the input box / send
-                // button would refuse touches until the 90s
-                // watchdog finally fires. Reset it here on the
-                // terminal chat event so the user can send the
-                // next message immediately.
+                // Skip when the agent-event path is (or has been)
+                // active for this runId. The agent-event path
+                // writes a ChatMessage with proper startedAt /
+                // endedAt from lifecycle=start / lifecycle=end.
+                // The chat event's text blocks carry no timing
+                // info, so upserting with `startedAt: nil,
+                // endedAt: nil` here would wipe the time footer
+                // the agent path set on the same id (`runId`).
                 //
-                // Skip on non-terminal states (a server that
-                // streams the slash-command reply across multiple
-                // chat events would deliver intermediate states
-                // here; resetting on each would prematurely drop
-                // `isSending` while text is still arriving).
-                if resolvedState == "final" {
-                    viewModel?.resetSendState()
+                // Keep this routing path for true
+                // server-text-only flows — slash-command replies,
+                // any other server reply that the agent-event
+                // stream doesn't accompany — where the
+                // agent-event path doesn't fire and this is the
+                // only chance to display the response.
+                let agentPathActiveOrDone =
+                    accumulatedAssistantTextByRun[runId] != nil
+                    || processedLifecycleEndByRun.contains(runId)
+                if agentPathActiveOrDone {
+                    AppLogger.log(
+                        "chat event text - skipping routing (agent-event path active or completed for runId: \(runId))",
+                        category: .nativeChat, level: .debug)
+                } else {
+                    let now = Date()
+                    // Use `chat.state` if the server supplies one
+                    // (typically "final" for slash-command responses);
+                    // default to "final" so the bubble renders its
+                    // complete content rather than the
+                    // typing-indicator shell.
+                    let resolvedState = chat.state ?? "final"
+                    // Prefer the chat event's role when it's set;
+                    // default to "assistant" so non-streaming slash-
+                    // command replies render in the same visual lane
+                    // as the agent's assistant deltas.
+                    let resolvedRole = role == "?" ? "assistant" : role
+                    // Concatenate text blocks in order. A single chat
+                    // event can carry multiple text blocks (rare but
+                    // possible — the SDK sometimes splits paragraphs).
+                    // Use "\n\n" as the separator so the bubble's
+                    // markdown renderer treats them as separate
+                    // paragraphs rather than smushing them onto one
+                    // line.
+                    let combinedText = textBlocks
+                        .sorted { $0.blockIndex < $1.blockIndex }
+                        .map(\.text)
+                        .joined(separator: "\n\n")
+                    let message = ChatMessage(
+                        // Fragment id (matches the streaming path's
+                        // id scheme; slash-command replies don't
+                        // produce streaming deltas so N is still 0
+                        // here unless a prior tool split bumped it —
+                        // either way the deterministic-UUID converter
+                        // keeps this stable within the run).
+                        id: "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])",
+                        text: combinedText,
+                        timestamp: now,
+                        role: resolvedRole,
+                        state: resolvedState,
+                        runId: runId,
+                        seq: nil,
+                        startedAt: nil,
+                        endedAt: nil,
+                        livenessState: nil,
+                        toolCallId: nil,
+                        toolName: nil,
+                        stopReason: nil,
+                        isFresh: true
+                    )
+                    await viewModel?.receiveMessage(message)
+                    // Slash-command responses are delivered via the
+                    // chat-event stream (no agent-event lifecycle=end
+                    // accompanies them), so the watchdog-armed
+                    // `isSending = true` from `sendAsMessage` would
+                    // stay stuck forever — the input box / send
+                    // button would refuse touches until the 90s
+                    // watchdog finally fires. Reset it here on the
+                    // terminal chat event so the user can send the
+                    // next message immediately.
+                    //
+                    // Skip on non-terminal states (a server that
+                    // streams the slash-command reply across multiple
+                    // chat events would deliver intermediate states
+                    // here; resetting on each would prematurely drop
+                    // `isSending` while text is still arriving).
+                    if resolvedState == "final" {
+                        viewModel?.resetSendState()
+                    }
+                }
+            }
+
+            // Recovery path: the server sends the authoritative
+            // full assistant text in the chat event's `text`
+            // content block when `state == "final"`. Use it to
+            // correct our accumulator if the run is still
+            // active. Skipped when:
+            //  - state != "final" (chat events during streaming
+            //    carry in-progress text, not authoritative)
+            //  - runId is nil (no stable namespace to match)
+            //  - accumulator is nil (lifecycle=end has already
+            //    cleared it — bubble is already final)
+            //  - chat event's text matches accumulator (no-op)
+            if chat.state == "final",
+               let runId = chat.runId,
+               accumulatedAssistantTextByRun[runId] != nil,
+               let unwrapped = chat.message?.value {
+                let dict = EventInterpreter.unwrapAnyCodable(unwrapped)
+                if let dict = dict as? [String: Any],
+                   dict["role"] as? String == "assistant",
+                   let content = dict["content"] as? [Any] {
+                    let serverText = content
+                        .compactMap { ($0 as? [String: Any])?["text"] as? String }
+                        .joined(separator: "")
+                    let prev = accumulatedAssistantTextByRun[runId] ?? ""
+                    if !serverText.isEmpty, serverText != prev {
+                        AppLogger.log(
+                            "chat event - assistant state=final recovery: runId: \(runId), prev len: \(prev.count), server len: \(serverText.count)",
+                            category: .nativeChat)
+                        accumulatedAssistantTextByRun[runId] = serverText
+                        // Do NOT clear the accumulator here —
+                        // let the subsequent lifecycle=end run
+                        // normally (it'll read the corrected
+                        // accumulator value when computing
+                        // effectiveFullText).
+                        let resolvedStartedAt = assistantStartedAtByRun[runId]
+                        // Use the current fragment id so the
+                        // state=final recovery overwrites the
+                        // streaming placeholder on the SAME slot
+                        // (same UUID) instead of spawning a
+                        // duplicate bubble at a different id.
+                        let recoveryFragmentId = "\(runId):assistant:\(assistantFragmentIdxByRun[runId, default: 0])"
+                        let message = ChatMessage(
+                            id: recoveryFragmentId,
+                            text: serverText,
+                            // Local received time for sort —
+                            // matches the lifecycle=start branch
+                            // convention; the server's
+                            // payload.ts could be in the past
+                            // due to gateway clock skew.
+                            timestamp: Date(),
+                            role: "assistant",
+                            state: "final",
+                            runId: runId,
+                            seq: nil,
+                            startedAt: resolvedStartedAt,
+                            endedAt: nil,
+                            livenessState: nil,
+                            toolCallId: nil, toolName: nil,
+                            stopReason: nil,
+                            isFresh: true
+                        )
+                        await viewModel?.receiveMessage(message)
+                    }
                 }
             }
 
@@ -1143,7 +1537,163 @@ final class EventInterpreter {
         }
     }
 
+    // MARK: - Assistant fragment helpers
+
+    /// Finalize the accumulated assistant-text buffer (if any) as
+    /// a complete `role=assistant, state=final` bubble, then clear
+    /// the buffer so the next segment starts fresh. Called at every
+    /// `item phase=start` so each inter-tool "thinking aloud" text
+    /// becomes its own bubble rather than being stitched onto the
+    /// next response fragment via the LCP partial-overlap rewrite.
+    ///
+    /// Idempotent: called even when the buffer is empty (e.g. two
+    /// item phase=start events in quick succession for the same
+    /// toolCall — the second call finds an empty buffer and bails).
+    /// The state stamp is `state="final"` because this fragment's
+    /// text is logically complete at the tool boundary; the next
+    /// fragment opens with a fresh accumulator.
+    private func finalizeAssistantFragmentIfAny(_ runId: String) async {
+        guard let buf = accumulatedAssistantTextByRun[runId], !buf.isEmpty else { return }
+        let idx = assistantFragmentIdxByRun[runId, default: 0]
+        let fragId = "\(runId):assistant:\(idx)"
+        let resolvedStartedAt = assistantStartedAtByRun[runId]
+        let resolvedEndedAt = Date()
+        // Use the seq of the LAST streaming delta in this fragment
+        // (recorded by `lastAssistantSeqByRun`) so the
+        // streaming-metadata overlay carries the same seq the
+        // streaming ChatMessage had. Without this, the finalize
+        // would record `seq: nil`, which the per-run sort in
+        // `sortForDisplay` interprets as `Int.max`, and the
+        // finalized fragment would sort AFTER the response —
+        // the reverse of the user's "earlier fragment first"
+        // expectation.
+        let fragmentLastSeq = lastAssistantSeqByRun[runId]
+        let finalMessage = ChatMessage(
+            id: fragId,
+            text: buf,
+            timestamp: resolvedEndedAt,
+            role: "assistant",
+            state: "final",
+            runId: runId,
+            seq: fragmentLastSeq,
+            startedAt: resolvedStartedAt,
+            endedAt: resolvedEndedAt,
+            livenessState: nil,
+            toolCallId: nil,
+            toolName: nil,
+            stopReason: nil,
+            isFresh: false
+        )
+        AppLogger.log(
+            "agent assistant fragment finalize: id=\(fragId.suffix(20)) runId-prefix=\(String(runId.prefix(8))) textLen=\(buf.count) textPreview=\"\(String(buf.prefix(60)))\(buf.count > 60 ? "…(\(buf.count))" : "")\"",
+            category: .nativeChat)
+        await viewModel?.receiveMessage(finalMessage)
+        // Increment the fragment counter so the next segment writes
+        // to a different id slot (the streaming upsert path also
+        // reads `assistantFragmentIdxByRun[runId]`, so both paths
+        // see the same N value here).
+        assistantFragmentIdxByRun[runId] = idx + 1
+        // Clear the accumulator so the next fragment starts from
+        // an empty prev (so the LCP=0 plain-concat branch can't
+        // accidentally Frankenstein the prior fragment's tail
+        // onto the new fragment's head).
+        accumulatedAssistantTextByRun[runId] = ""
+    }
+
     // MARK: - Static helpers (kept here because they're only used in `.log(...)` paths)
+
+    /// Length of the longest common prefix of two strings, in
+    /// Unicode scalars (NOT grapheme clusters — emoji ZWJ
+    /// sequences span multiple scalars and should not split
+    /// mid-codepoint; using `Characters` would combine the ZWJ
+    /// into a single grapheme and miss mid-sequence divergence).
+    /// O(min(len(a), len(b))); for typical delta sizes (a few
+    /// hundred to a few thousand chars) this is sub-millisecond
+    /// on modern iPhones.
+    private static func longestCommonPrefix(_ a: String, _ b: String) -> Int {
+        let aChars = a.unicodeScalars
+        let bChars = b.unicodeScalars
+        let n = min(aChars.count, bChars.count)
+        var i = 0
+        while i < n {
+            let aIdx = aChars.index(aChars.startIndex, offsetBy: i)
+            let bIdx = bChars.index(bChars.startIndex, offsetBy: i)
+            if aChars[aIdx] != bChars[bIdx] { break }
+            i += 1
+        }
+        return i
+    }
+
+    /// Largest `l` such that `a.suffix(l) == b.prefix(l)` — the
+    /// number of chars to skip on the leading edge of `b` when
+    /// appending it after `a` to avoid duplicating the trailing
+    /// portion of `a`. Returns 0 when there's no overlap (e.g.,
+    /// `a` ends with "怎么用。" and `b` starts with "让我查" — the
+    /// boundary is real, no trim needed). Returns `b.count` when
+    /// `b` is fully contained in `a`'s tail — caller treats that as
+    /// "already accumulated", drops the redundant delta. O(|a| +
+    /// |b|) — uses KMP's failure function on `b` to walk `a` in
+    /// one pass, tracking the trailing-match length.
+    ///
+    /// Sister function to `longestCommonPrefix`, which handles the
+    /// LLM-rewrite shape (issue #21). This handles the incremental
+    /// delta shape: when the server emits short, fragmentary deltas
+    /// ("E", "°", "看看这个功能") rather than full cumulative
+    /// re-sends, each new chunk starts with chars already at the end
+    /// of the accumulator. Plain concat would duplicate that tail —
+    /// this trims it before appending.
+    ///
+    /// Implementation note: a naive two-pointer walk (one from
+    /// `a`'s tail, one from `b`'s head, moving inward) is WRONG for
+    /// cases like `a = "X让我们查"`, `b = "让我们查一下"`. There
+    /// `a.suffix(4) == b.prefix(4) == "让我们查"` (overlap = 4) but
+    /// `a[end] != b[0]` ('查' != '让'), so the naive walk returns
+    /// 0 — exactly the duplication we're trying to fix. KMP lets us
+    /// find the correct trailing alignment in a single pass.
+    private static func longestSuffixPrefixOverlap(_ a: String, _ b: String) -> Int {
+        if a.isEmpty || b.isEmpty { return 0 }
+        let aChars = a.unicodeScalars
+        let bChars = b.unicodeScalars
+        let m = bChars.count
+        guard m > 0, aChars.count > 0 else { return 0 }
+
+        // KMP failure function for `b`: pi[i] = length of longest
+        // proper prefix of b[0..i] that is also a suffix of b[0..i].
+        var pi = [Int](repeating: 0, count: m)
+        var i = 1
+        while i < m {
+            var j = pi[i - 1]
+            while j > 0 && bChars[bChars.index(bChars.startIndex, offsetBy: i)] != bChars[bChars.index(bChars.startIndex, offsetBy: j)] {
+                j = pi[j - 1]
+            }
+            if bChars[bChars.index(bChars.startIndex, offsetBy: i)] == bChars[bChars.index(bChars.startIndex, offsetBy: j)] {
+                j += 1
+            }
+            pi[i] = j
+            i += 1
+        }
+
+        // Walk through `a`. `k` tracks the current match length
+        // against `b`. After processing the last char of `a`, `k`
+        // equals the length of the longest prefix of `b` that
+        // matches a SUFFIX of `a` (i.e., the trailing alignment).
+        var k = 0
+        for aIdx in 0..<aChars.count {
+            let aChar = aChars[aChars.index(aChars.startIndex, offsetBy: aIdx)]
+            let bCharAtK = bChars[bChars.index(bChars.startIndex, offsetBy: k)]
+            while k > 0 && aChar != bCharAtK {
+                k = pi[k - 1]
+            }
+            if aChar == bChars[bChars.index(bChars.startIndex, offsetBy: k)] {
+                k += 1
+            }
+            if k > m { k = pi[m - 1] }
+        }
+        // Cap at b's length — full match can't exceed b.count, and
+        // also avoids false positives where `b`'s tail happens to
+        // re-appear in `a`'s interior.
+        return min(k, m)
+    }
 
     /// Full JSON dump of a payload value for log diagnostics.
     /// Preserves the complete nested structure so a user can grep

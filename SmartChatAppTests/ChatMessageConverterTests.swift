@@ -439,4 +439,94 @@ final class ChatMessageConverterTests: XCTestCase {
         XCTAssertEqual(chats.first?.text, "")
         XCTAssertEqual(chats.first?.role, "assistant")
     }
+
+    // MARK: - Schema symmetry: streaming write ↔ history read
+
+    func testToOpenClawChatMessage_thinkingRole_writesToThinkingField() {
+        // Regression for the user-reported "history[25].content[0]
+        // (thinking) not displayed" bug. The streaming write path
+        // used to emit `type:"text", text:"<thinking>", thinking:nil`
+        // for every ChatMessage regardless of role, so a streaming
+        // thinking bubble and a server-returned thinking block had
+        // different shapes in the cache. `MessageCacheStorage.dedupKey`
+        // hashes text+role+tsBucket — both produced the same hash
+        // (because text is the thinking string in the streaming copy
+        // and the thinking fallback in the read path also surfaces
+        // that string), so the streaming copy was KEEP'd and the
+        // server's properly-shaped copy was DROP'd. `toChatMessage`
+        // then read the streaming copy as `type:"text", text:"..."`,
+        // not a thinking block — no thinking bubble rendered.
+        //
+        // The fix routes role=="thinking" through
+        // `contentItem(for:)` which writes `type:"thinking",
+        // thinking:"<text>", text:nil`, matching the server's
+        // `chat.history` projection. Now both paths share the same
+        // content shape and the KEEP-on-dedup decision doesn't
+        // silently swap schema.
+        let chat = ChatMessage(
+            id: UUID().uuidString, text: "let me think",
+            timestamp: Date(timeIntervalSince1970: 1700),
+            role: "thinking", state: "final", runId: "r-1", seq: 3,
+            startedAt: nil, endedAt: nil, livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil, isFresh: true)
+        let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: chat)
+        XCTAssertNotNil(openclaw)
+        XCTAssertEqual(openclaw?.content.count, 1)
+        XCTAssertEqual(openclaw?.content.first?.type, "thinking",
+                       "streaming thinking bubble must write type=\"thinking\" to match server schema")
+        XCTAssertEqual(openclaw?.content.first?.thinking, "let me think",
+                       "thinking bubble content lives in the `thinking` field, not `text`")
+        XCTAssertNil(openclaw?.content.first?.text,
+                     "thinking bubble must NOT write the content into `text` — that's the assistant/user schema")
+    }
+
+    func testToOpenClawChatMessage_assistantRole_keepsTextSchema() {
+        // Companion to the above: the assistant/user schema stays
+        // `type:"text", text:"<chatMessage.text>"`. The split on
+        // role=="thinking" must not regress non-thinking writes.
+        let chat = ChatMessage(
+            id: UUID().uuidString, text: "the answer",
+            timestamp: Date(timeIntervalSince1970: 1700),
+            role: "assistant", state: "final", runId: "r-1", seq: 4,
+            startedAt: nil, endedAt: nil, livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil, isFresh: true)
+        let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: chat)
+        XCTAssertEqual(openclaw?.content.first?.type, "text")
+        XCTAssertEqual(openclaw?.content.first?.text, "the answer")
+        XCTAssertNil(openclaw?.content.first?.thinking)
+    }
+
+    func testToChatMessage_streamingThinkingRoundTrip_emitsThinkingBubble() {
+        // End-to-end: a streaming thinking bubble written by
+        // `toOpenClawChatMessage` must round-trip back through
+        // `toChatMessage` as a thinking bubble. Before the fix,
+        // the streaming copy went into the cache with
+        // `type:"text"` and `text:"<thinking content>"`, so
+        // `toChatMessage` produced an assistant-role bubble with
+        // the thinking string as its text — no ThinkingCardView
+        // was rendered. After the fix, the streaming copy lands
+        // in the cache as `type:"thinking", thinking:"<content>"`
+        // (matching the server), and `toChatMessage`'s
+        // first-non-empty-thinking scan (line 73-80) produces a
+        // thinking ChatMessage just like it does for server-
+        // returned thinking blocks.
+        let streamed = ChatMessage(
+            id: UUID().uuidString, text: "reasoning content",
+            timestamp: Date(timeIntervalSince1970: 1700),
+            role: "thinking", state: "final", runId: "r-1", seq: 3,
+            startedAt: nil, endedAt: nil, livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil, isFresh: true)
+        guard let persisted = ChatMessageConverter.toOpenClawChatMessage(from: streamed) else {
+            XCTFail("toOpenClawChatMessage returned nil")
+            return
+        }
+        let chats = ChatMessageConverter.toChatMessage(from: persisted)
+        XCTAssertEqual(chats.count, 1, "streaming thinking round-trips to 1 thinking bubble")
+        XCTAssertEqual(chats[0].role, "thinking",
+                       "round-trip must surface the thinking bubble, not an assistant bubble with the thinking string as text")
+        XCTAssertEqual(chats[0].text, "reasoning content")
+    }
 }
