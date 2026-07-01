@@ -49,6 +49,22 @@ struct Theme {
         Color(hex: "10A37F")
     }
 
+    /// Token for the Assistant badge chip (issue #33). Mirrors
+    /// the `primary` green so the chip visually anchors to the
+    /// brand color of the assistant output.
+    var badgeAssistant: Color {
+        Color(hex: "10A37F")
+    }
+
+    /// Token for the SlashCommand badge chip (issue #33). Hex
+    /// `#3B82F6` — info blue, distinct from the hardcoded
+    /// `.blue` used by the pre-existing Thinking chip (out of
+    /// scope to migrate) so the two similarly-themed chips don't
+    /// visually collide.
+    var badgeSlashCommand: Color {
+        Color(hex: "3B82F6")
+    }
+
     var inputBackground: Color {
         colorScheme == .dark ? Color(hex: "40414F") : Color(hex: "EEEEEE")
     }
