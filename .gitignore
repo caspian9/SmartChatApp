@@ -1,5 +1,10 @@
 # Xcode
 build/
+# Catch any xcodebuild -derivedDataPath=./buildN override
+# (the Makefile itself writes only to ~/Library/Developer/Xcode/DerivedData/,
+# but a manual `xcodebuild -derivedDataPath ./build2 ...` would otherwise
+# show up as untracked).
+build*/
 *.pbxuser
 !*.pbxuser
 *.mode1v3

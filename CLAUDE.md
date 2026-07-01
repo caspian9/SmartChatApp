@@ -10,7 +10,7 @@ SmartChatApp is an iOS AI chat application that connects to
 OpenClaw Gateway, supporting streaming message output and
 interactive content cards (music, video, buttons, images).
 
-**Tech stack:** SwiftUI, iOS 17 Observation (`@Observable`),
+**Tech stack:** SwiftUI, iOS 18 Observation (`@Observable`),
 XcodeGen, Swift Package Manager.
 
 ## Build & Test
@@ -25,7 +25,7 @@ make install           # build + install
 make build             # build only
 
 # Build & test in the simulator (this is what CI uses).
-xcodebuild test -scheme SmartChatAppTests \
+xcodebuild test -scheme SmartChatApp \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
@@ -43,17 +43,23 @@ SmartChatApp/
 ├── project.yml             # XcodeGen config (source of truth for Info.plist + SPM)
 ├── SmartChatApp/           # Main source
 │   ├── App/                # @main entry
+│   ├── Models/             # GatewayProfile, CardData, SessionKey, ProfileConnectionState
 │   ├── Core/
-│   │   ├── Models/         # GatewayProfile
-│   │   ├── Network/        # SessionManager, GatewayClient, GatewayChatTransport
-│   │   ├── NodeHandlers/   # NodeCommandRouter + location/device handlers
-│   │   └── Services/       # CardRegistry, ProfileManager, caches, AppLogger
+│   │   ├── Commands/       # LocalCommandRegistry, SlashCommandRouter, ServerCommandSource
+│   │   ├── Network/        # SessionManager, ConnectionCoordinator, ConnectionTransport, GatewayChatTransport
+│   │   ├── NodeHandlers/   # NodeCommandRouter + LocationService, DeviceService
+│   │   ├── Services/       # CardRegistry, ProfileManager, AppLogger, ConfigurationManager, cache layers
+│   │   └── Utilities/      # ChatMessageConverter, MessageFormatters, MarkdownToAttributedString
 │   ├── Features/
-│   │   ├── Home/ ChatList/ NativeChat/ Chat/ Settings/
-│   ├── Cards/              # Music / Video / Button / Image / Markdown / Thinking
+│   │   ├── Home/           # HomeView, EntryCard
+│   │   ├── ChatList/       # ChatListView
+│   │   ├── NativeChat/     # NativeChatView/ViewModel, MessageBubbleView, ChatInputView, Internal/{EventInterpreter, HistoryLoader, MessageReceiver, SessionCoordinator}
+│   │   ├── Chat/           # ChatView
+│   │   └── Settings/       # SettingsView, ProfileListView, EditProfileSheet, DebugLogsView, DiscoveryLogsView
+│   ├── Cards/              # Music / Video / Button / Image / Markdown / Thinking / ChatCardOverlay / MarkdownTextPreprocessor
 │   ├── Design/             # Theme, Typography
 │   └── Resources/          # Assets.xcassets
-├── SmartChatAppTests/      # Unit tests
+├── SmartChatAppTests/      # Unit tests + Mocks/ + Commands/ subdirs
 └── docs/                   # Public design notes (optional reading)
 ```
 
@@ -69,14 +75,19 @@ grep for most often. Everything else is in `docs/ARCHITECTURE.md`.
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| `SessionManager` | `Core/Network/` | Gateway connection (actor, operator/node roles) |
+| `SessionManager` | `Core/Network/` | Gateway connection (operator/node roles, parallel connect) |
+| `ConnectionCoordinator` | `Core/Network/` | Connect / disconnect state machine + role coalescing |
+| `ConnectionState` | `Core/Network/` | `@Observable` phase (`disconnected` / `connecting` / `connected` / `reconnecting`) |
 | `ProfileManager` | `Core/Services/` | Gateway profile storage & switching |
+| `ProfileConnectionState` | `Models/` | Pure decision: should this row show the connecting spinner (issue #35) |
 | `NativeChatViewModel` | `Features/NativeChat/` | Chat state + agent event stream handling |
+| `HistoryLoader` | `Features/NativeChat/Internal/` | Pulls server history into the local cache |
+| `MessageCacheStorage` | `Core/Services/` | Per-session on-disk message persistence (id-dedup, append-only) |
 | `AppLogger` | `Core/Services/` | App-wide log capture (OSLog + in-memory ring buffer) |
 | `CardRegistry` | `Core/Services/` | Interactive card rendering dispatch |
-| `MessageCache` | `Core/Services/` | Per-session message persistence |
 | `ConfigurationManager` | `Core/Services/` | App settings (appearance, capabilities, debug flags) |
-| `MarkdownStreamManager` | `Core/Services/` | Incremental markdown streaming state |
+| `LocalCommandRegistry` | `Core/Commands/` | Built-in slash commands (`/help`, `/clear`, `/connect`, etc.) |
+| `SlashCommandRouter` | `Core/Commands/` | Parses + dispatches slash commands to local or server sources |
 
 ## State Management
 
@@ -157,7 +168,7 @@ Settings → Gateway → Advanced) are separate and control
 ## Gateway Profile
 
 All gateway connections go through `ProfileManager` +
-`GatewayProfile` (`Core/Models/`). The Codable profile carries:
+`GatewayProfile` (`Models/`). The Codable profile carries:
 id, name, colorTag, host, port, token, tlsEnabled, isActive. Entry
 points:
 
