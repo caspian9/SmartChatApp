@@ -611,6 +611,25 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     // server's `role: "assistant"` (typical shape for a
     // thinking sub-block of the assistant turn) collides with
     // the streaming-side `role: "thinking"`.
+    //
+    // The dedup key is intentionally `role + text` (no timestamp
+    // bucket, no usage fingerprint). Adding a `tsBucket =
+    // Int64(ts / 10_000)` would assume the streaming-side
+    // timestamp (device-local `Date()` at send-time /
+    // `lifecycle=start` arrival) and the server's
+    // `chat.history.ts` for the same logical message land in
+    // the same 10s window. They often don't — a flaky
+    // WebSocket can drift the two by tens of seconds, at which
+    // point the bucket splits and the dedup misses, producing
+    // the "two bubbles after refresh" regression we fixed in
+    // this branch (see
+    // `MessageCacheStorageRefreshDedupTests`). Including `usage`
+    // in the fingerprint would likewise miss the streaming
+    // sentinel (`{input:-1,...}`) vs server `usage=nil` case.
+    // `role + text` is still unique enough per session: two
+    // consecutive identical assistant replies in a session are
+    // the same logical answer and the user reads them as one
+    // bubble anyway.
     private func dedupKey(for message: OpenClawChatMessage) -> String {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -634,12 +653,25 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
             roleForHash = MessageCacheStorage.normalizeRoleForDedup(message.role)
         }
 
-        let tsBucket: Int64 = {
-            guard let ts = message.timestamp else { return -1 }
-            return Int64(ts / 10_000)
-        }()
-
-        let data = "\(roleForHash)|\(textForHash)|\(tsBucket)".data(using: .utf8) ?? Data()
+        // `usage` deliberately does NOT contribute to the dedup
+        // key. The streaming `lifecycle=end` writes the
+        // `{input:-1, ...}` "no token data" sentinel and the
+        // server's `chat.history` returns `usage=nil` for the
+        // same logical message; the previous key (which
+        // fingerprinted usage via JSON round-trip) correctly
+        // deduped these via KEEP-on-match, but would now collide
+        // them anyway because identical text+role wins. Including
+        // usage in the key risks the inverse: a streaming
+        // entry with `usage={input:1234}` and a server copy with
+        // `usage=nil` would hash differently and produce the
+        // "two assistant bubbles after refresh" regression we
+        // fixed in this branch (see
+        // `MessageCacheStorageRefreshDedupTests`). Id stability
+        // for usage-bearing entries is preserved upstream by
+        // `applyUsagePreservation` in `HistoryLoader`, which
+        // splices the streaming-time usage block into the
+        // server copy before `append` runs.
+        let data = "\(roleForHash)|\(textForHash)".data(using: .utf8) ?? Data()
         let hash = SHA256.hash(data: data)
         return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
     }

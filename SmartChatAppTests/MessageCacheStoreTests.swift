@@ -138,9 +138,9 @@ final class MessageCacheStoreTests: XCTestCase {
     //
     // The 3 `test_replaceForSession_*` tests previously lived here.
     // `replaceForSession` is gone: `HistoryLoader.fetchAndMergeFromNetwork`
-    // now calls `store.append(...)` and relies on `dedupKey` (text +
-    // role + tsBucket + usage) to absorb overlaps. Any future test
-    // that needs to assert "wipe and start over" should use
+    // now calls `store.append(...)` and relies on `dedupKey` (role +
+    // text) to absorb overlaps. Any future test that needs to
+    // assert "wipe and start over" should use
     // `clear(for:)` followed by `append(_:for:)`, not a hypothetical
     // `replaceForSession`.
 
