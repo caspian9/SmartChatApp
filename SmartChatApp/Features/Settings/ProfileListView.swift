@@ -157,22 +157,19 @@ private struct ProfileRow: View {
             Button {
                 Task { await onButtonTap() }
             } label: {
-                ZStack {
-                    // `.id(isConnecting)` forces SwiftUI to mount a
-                    // fresh `SpinnerSlot` subview on every
-                    // false→true→false→true transition. Without this,
-                    // the row's `ProgressView` instance can be reused
-                    // across scrolls/refreshes and its internal
-                    // animation timer can pause, making the spinner
-                    // appear frozen (issue #35).
-                    SpinnerSlot(isConnecting: isConnecting)
-                        .id(isConnecting)
+                // The button is a plain text label. The connecting
+                // spinner and the "Failed" flash have moved out of
+                // the row to a persistent toolbar indicator in
+                // `SettingsView` — Form/List rows get destroyed on
+                // scroll, which tore down the in-row spinner and
+                // caused the "wait then appear" gap (issue #35
+                // follow-up chain).
+                Group {
                     if isFailedFlashActive {
-                        Text("Failed")
-                            .foregroundColor(.red)
+                        Text("Failed").foregroundColor(.red)
+                    } else {
+                        Text(isActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
                     }
-                    Text(isActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
-                        .opacity((isConnecting || isFailedFlashActive) ? 0 : 1)
                 }
             }
             .font(.caption)
@@ -223,23 +220,6 @@ private struct ProfileRow: View {
                 onRequestDelete()
             } label: {
                 Label("Delete", systemImage: "trash")
-            }
-        }
-    }
-}
-
-/// Wraps the connecting spinner so the parent ZStack can apply
-/// `.id(isConnecting)` and force a fresh subview on each connect
-/// attempt (issue #35). When the inner `if isConnecting` flips
-/// without the `.id`, SwiftUI may reuse the existing `ProgressView`
-/// across scrolls/refreshes, pausing its internal animation timer.
-private struct SpinnerSlot: View {
-    let isConnecting: Bool
-    var body: some View {
-        Group {
-            if isConnecting {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle())
             }
         }
     }

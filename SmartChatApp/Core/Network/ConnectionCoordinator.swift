@@ -154,12 +154,31 @@ actor ConnectionCoordinator {
                 enabledCaps: enabledCaps
             )
         case .operatorAndNode:
-            await connectNodeRole(
-                gatewayURL: gatewayURL,
-                authToken: authToken,
-                enabledCaps: enabledCaps
-            )
-            try await connectOperator(gatewayURL: gatewayURL, authToken: authToken)
+            // Run node + operator connects in parallel instead of
+            // sequentially. Sequential was the previous default
+            // (`await connectNodeRole(...); try await connectOperator(...)`),
+            // but for `operatorAndNode` profiles both connections are
+            // independent (separate transports, separate WebSockets) and
+            // there is no ordering reason to wait for node before
+            // starting operator. `withThrowingTaskGroup` ensures both
+            // are awaited before returning and propagates any
+            // `connectOperator` error to the caller.
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    await self.connectNodeRole(
+                        gatewayURL: gatewayURL,
+                        authToken: authToken,
+                        enabledCaps: enabledCaps
+                    )
+                }
+                group.addTask {
+                    try await self.connectOperator(
+                        gatewayURL: gatewayURL,
+                        authToken: authToken
+                    )
+                }
+                try await group.waitForAll()
+            }
         }
     }
 

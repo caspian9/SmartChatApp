@@ -1,6 +1,6 @@
 import XCTest
-@testable import SmartChatApp
 import OpenClawKit
+@testable import SmartChatApp
 
 /// Pins the full (activeProfileId × profileRole × phase) matrix
 /// that drives the spinner in `ProfileListView` and `EditProfileSheet`
@@ -133,6 +133,99 @@ final class ProfileConnectionStateTests: XCTestCase {
         // popping in mid-session.
         let activeId = UUID()
         let profile = makeProfile(id: activeId, role: .operatorAndNode)
+        XCTAssertFalse(
+            ProfileConnectionState.isProfileConnecting(
+                activeProfileId: activeId,
+                profileId: profile.id,
+                profileRole: profile.role,
+                phase: .reconnecting(reason: "ping timeout")
+            )
+        )
+    }
+
+    // MARK: - Non-connecting phases for `.operatorOnly` profile role
+    //
+    // The `(_, _): return false` catch-all currently covers every
+    // (phase, role) pair where phase is non-connecting. These tests
+    // pin the behavior for `.operatorOnly` so a regression that
+    // special-cases `.operatorAndNode` for non-connecting phases
+    // (e.g. the previous review found this hole) would still fail
+    // here.
+
+    func test_activeProfile_operatorOnlyRole_phaseConnected_returnsFalse() {
+        let activeId = UUID()
+        let profile = makeProfile(id: activeId, role: .operatorOnly)
+        XCTAssertFalse(
+            ProfileConnectionState.isProfileConnecting(
+                activeProfileId: activeId,
+                profileId: profile.id,
+                profileRole: profile.role,
+                phase: .connected
+            )
+        )
+    }
+
+    func test_activeProfile_operatorOnlyRole_phaseDisconnected_returnsFalse() {
+        let activeId = UUID()
+        let profile = makeProfile(id: activeId, role: .operatorOnly)
+        XCTAssertFalse(
+            ProfileConnectionState.isProfileConnecting(
+                activeProfileId: activeId,
+                profileId: profile.id,
+                profileRole: profile.role,
+                phase: .disconnected
+            )
+        )
+    }
+
+    func test_activeProfile_operatorOnlyRole_phaseReconnecting_returnsFalse() {
+        let activeId = UUID()
+        let profile = makeProfile(id: activeId, role: .operatorOnly)
+        XCTAssertFalse(
+            ProfileConnectionState.isProfileConnecting(
+                activeProfileId: activeId,
+                profileId: profile.id,
+                profileRole: profile.role,
+                phase: .reconnecting(reason: "ping timeout")
+            )
+        )
+    }
+
+    // MARK: - Non-connecting phases for `.nodeOnly` profile role
+    //
+    // Same matrix coverage as `.operatorOnly` above. Without these,
+    // a regression that adds an early `case (.connected, .operatorAndNode):`
+    // could pass the existing test suite.
+
+    func test_activeProfile_nodeOnlyRole_phaseConnected_returnsFalse() {
+        let activeId = UUID()
+        let profile = makeProfile(id: activeId, role: .nodeOnly)
+        XCTAssertFalse(
+            ProfileConnectionState.isProfileConnecting(
+                activeProfileId: activeId,
+                profileId: profile.id,
+                profileRole: profile.role,
+                phase: .connected
+            )
+        )
+    }
+
+    func test_activeProfile_nodeOnlyRole_phaseDisconnected_returnsFalse() {
+        let activeId = UUID()
+        let profile = makeProfile(id: activeId, role: .nodeOnly)
+        XCTAssertFalse(
+            ProfileConnectionState.isProfileConnecting(
+                activeProfileId: activeId,
+                profileId: profile.id,
+                profileRole: profile.role,
+                phase: .disconnected
+            )
+        )
+    }
+
+    func test_activeProfile_nodeOnlyRole_phaseReconnecting_returnsFalse() {
+        let activeId = UUID()
+        let profile = makeProfile(id: activeId, role: .nodeOnly)
         XCTAssertFalse(
             ProfileConnectionState.isProfileConnecting(
                 activeProfileId: activeId,
