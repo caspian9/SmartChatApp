@@ -16,6 +16,14 @@ final class HistoryLoader {
     /// used everywhere else in this loader. Set via VM init or directly in
     /// tests.
     weak var store: MessageCacheStore?
+    /// Test-only seam for `fetchAndMergeFromNetwork`. The default
+    /// closure goes through `SessionManager.shared`; tests inject
+    /// a fake transport so they don't need a live gateway. The
+    /// closure is `@MainActor`-isolated because callers (and
+    /// `fetchAndMergeFromNetwork`) are main-actor. Production
+    /// code never touches this — it's set in tests only.
+    @ObservationIgnored
+    var transportFactory: (@MainActor (String) async throws -> (any OpenClawChatTransport))?
 
     // Per-session-key reentrancy guard for `loadHistory()`. The class is
     // @MainActor; this static is deliberately outside the actor so
@@ -234,15 +242,30 @@ final class HistoryLoader {
     /// `scrollKind` is the scroll request kind to fire on success. The
     /// caller picks `.historyLoaded` (multi-poll) or `.manualRefresh`
     /// (single scroll, bypasses `userHasScrolled`).
-    private func fetchAndMergeFromNetwork(
+    ///
+    /// Visibility: `internal` (no `private` / `fileprivate`) so the
+    /// `HistoryLoaderAppendTests` can drive it directly with a
+    /// fake transport. The test seam is `transportFactory`; in
+    /// production the closure is nil and we go through
+    /// `SessionManager.shared` as before.
+    func fetchAndMergeFromNetwork(
         sessionKey: String,
         sessionKeyPreview: String,
         taskIdStr: String,
         scrollKind: NativeChatScrollKind
     ) async {
         do {
-            try await SessionManager.shared.ensureConnected()
-            let transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
+            let transport: any OpenClawChatTransport
+            if let factory = transportFactory {
+                // Test path: the closure provides a transport
+                // directly (no live gateway needed). Skip the
+                // `ensureConnected` call so the test doesn't
+                // depend on a real SessionManager.
+                transport = try await factory(sessionKey)
+            } else {
+                try await SessionManager.shared.ensureConnected()
+                transport = await SessionManager.shared.makeTransport(sessionKey: sessionKey)
+            }
             let history = try await transport.requestHistory(sessionKey: sessionKey)
 
             // Staleness check: the user may have switched to a
@@ -261,7 +284,7 @@ final class HistoryLoader {
                 category: .nativeChat)
 
             // Convert the server payload to OpenClawChatMessage.
-            let openclawMessages: [OpenClawChatMessage] = (history.messages ?? []).enumerated().compactMap {
+            var openclawMessages: [OpenClawChatMessage] = (history.messages ?? []).enumerated().compactMap {
                 index, anyCodable -> OpenClawChatMessage? in
                 guard let msg = try? JSONDecoder().decode(OpenClawChatMessage.self,
                                                           from: JSONEncoder().encode(anyCodable)) else {
@@ -352,22 +375,36 @@ final class HistoryLoader {
                 AppLogger.log(
                     "[\(taskIdStr)] fetchAndMergeFromNetwork: new content (newMax=\(newMaxTimestamp ?? -1)), scrollKind=\(scrollKind)",
                     category: .nativeChat)
-                // Write the server's authoritative response to the
-                // store via `replaceForSession` (wipes + writes —
-                // clears any streaming residue from a previous
-                // run). This is the fix for the "both bubbles
-                // co-exist" bug: the previous `append`-based
-                // path used content-dedup which missed same-content
-                // different-id entries (the streaming path's
-                // synthesized runId vs. the server's UUID for the
-                // same final message). The storage's
-                // `replaceForSession` short-circuits on empty
-                // payloads (weak-network guard) so a successful
-                // decode of `[]` doesn't wipe the cache.
-                await store?.replaceForSession(openclawMessages, for: sessionKey)
-                // DIAG: confirm the post-replaceForSession state.
-                // Pairs with the agent-delta post-upsert log — together
-                // they disambiguate "stream bubble not in store
+                // Preserves the streaming-time `usage` block on the
+                // INCOMING server messages before the append. The
+                // server's `chat.history` omits `usage`, but the
+                // local cache (which the user populated during
+                // streaming) has it. Previously this lived inside
+                // `MessageCacheStorage.replaceForSession` and ran
+                // on every entry being written; now that we use
+                // `append`, the merge does not touch existing
+                // entries' `usage`, so the preservation has to run
+                // on the incoming array before it lands. Without
+                // this, every refresh would silently erase the
+                // "↑input ↓output ↑cacheRead ↓cacheWrite" footer.
+                openclawMessages = applyUsagePreservation(
+                    to: openclawMessages, sessionKey: sessionKey)
+                // Write the server payload onto the cache via
+                // `append` instead of `replaceForSession`. The
+                // previous `replaceForSession` wiped the session
+                // first, which erased client-only messages (the
+                // user's outgoing text bubble before the server
+                // confirmed it) and any client-side artifacts the
+                // server doesn't re-emit. `append` relies on
+                // `MessageCacheStorage.append`'s id-dedup +
+                // content-dedup to absorb overlaps; the same
+                // dedup logic that prevents duplicate bubbles
+                // also prevents the merge from re-creating
+                // entries that already exist locally.
+                await store?.append(openclawMessages, for: sessionKey)
+                // DIAG: confirm the post-append state. Pairs with
+                // the agent-delta post-upsert log — together they
+                // disambiguate "stream bubble not in store
                 // (upsert was dropped)" from "stream bubble wiped
                 // by history (chat.history ran after stream)".
                 if ConfigurationManager.shared.logsNativeChat {
@@ -376,7 +413,7 @@ final class HistoryLoader {
                         .map { String($0.id.uuidString.prefix(8)) }
                         .joined(separator: ",")
                     AppLogger.log(
-                        "[\(taskIdStr)] post-replaceForSession in store: bubbleCount=\(postHistory.count) firstIds=[\(firstIds)]",
+                        "[\(taskIdStr)] post-append in store: bubbleCount=\(postHistory.count) firstIds=[\(firstIds)]",
                         category: .nativeChat)
                 }
                 // The previous implementation only honored signal 1, so a
@@ -406,6 +443,71 @@ final class HistoryLoader {
                 "[\(taskIdStr)] fetchAndMergeFromNetwork error: \(error.localizedDescription)",
                 category: .nativeChat, level: .error)
         }
+    }
+
+    /// Mirrors the usage-preservation pass that lived in
+    /// `MessageCacheStorage.replaceForSession`. The previous
+    /// code wiped-and-replaced the session on every server
+    /// fetch, and the preservation logic ran inline. Now that
+    /// `fetchAndMergeFromNetwork` uses `append` (which doesn't
+    /// touch existing entries' usage), the preservation logic
+    /// must run on the INCOMING `openclawMessages` array
+    /// BEFORE the append — splicing the streaming-time `usage`
+    /// block from the local cache into any incoming message
+    /// whose text + role + timestamp matches. Without this,
+    /// the bubble's `↑input ↓output ↑cacheRead ↓cacheWrite`
+    /// footer silently disappears on the first refresh of any
+    /// session (issue #36).
+    ///
+    /// Returns the modified array (NOT the count of preserved
+    /// entries — the caller passes it straight into
+    /// `store.append`). Returning the array keeps the merge
+    /// call site a one-liner.
+    private func applyUsagePreservation(
+        to messages: [OpenClawChatMessage],
+        sessionKey: String
+    ) -> [OpenClawChatMessage] {
+        let existing = store?.messages(for: sessionKey) ?? []
+        guard !existing.isEmpty else { return messages }
+        var preservedCount = 0
+        let preserved = messages.map { incoming in
+            guard incoming.usage == nil else { return incoming }
+            guard let newText = incoming.content.first?.text,
+                  let newTs = incoming.timestamp else { return incoming }
+            if let match = existing.first(where: { old in
+                guard old.role == incoming.role else { return false }
+                guard let oldText = old.content.first?.text else { return false }
+                guard oldText == newText else { return false }
+                guard let oldTs = old.timestamp else { return false }
+                return abs(oldTs - newTs) < 1000
+            }), let oldUsage = match.usage {
+                preservedCount += 1
+                // `OpenClawChatMessage.usage` is `let` (immutable
+                // by design — message content is treated as a
+                // value snapshot). Construct a fresh message
+                // with the streamed usage spliced in via the
+                // explicit memberwise init; all other fields
+                // carry over from the server's payload.
+                return OpenClawChatMessage(
+                    id: incoming.id,
+                    role: incoming.role,
+                    content: incoming.content,
+                    timestamp: incoming.timestamp,
+                    toolCallId: incoming.toolCallId,
+                    toolName: incoming.toolName,
+                    usage: oldUsage,
+                    stopReason: incoming.stopReason,
+                    errorMessage: incoming.errorMessage
+                )
+            }
+            return incoming
+        }
+        if preservedCount > 0 {
+            AppLogger.log(
+                "[HistoryLoader applyUsagePreservation] sessionKey=\(String(sessionKey.prefix(8))) preserved usage from \(preservedCount) streaming entries",
+                category: .nativeChat)
+        }
+        return preserved
     }
 }
 

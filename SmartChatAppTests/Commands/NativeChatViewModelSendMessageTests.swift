@@ -96,9 +96,15 @@ final class NativeChatViewModelSendMessageTests: XCTestCase {
         vm.inputText = "/help"
         await vm.sendMessage()
         let messages = currentMessages(vm)
-        XCTAssertEqual(messages.count, 1)
-        XCTAssertEqual(messages.first?.role, "system")
-        XCTAssertEqual(messages.first?.text, "HELP TEXT")
+        // Issue #36: the user's typed input is now echoed as a
+        // user-role bubble alongside the system result (was just
+        // the system bubble pre-#36). Order: user (typed "/help")
+        // then system ("HELP TEXT").
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages[0].role, "user")
+        XCTAssertEqual(messages[0].text, "/help")
+        XCTAssertEqual(messages[1].role, "system")
+        XCTAssertEqual(messages[1].text, "HELP TEXT")
         XCTAssertTrue(transport.calls.isEmpty,
             "Category A must not call transport")
     }
@@ -122,9 +128,14 @@ final class NativeChatViewModelSendMessageTests: XCTestCase {
         vm.inputText = "/clear"
         await vm.sendMessage()
         let messages = currentMessages(vm)
-        XCTAssertEqual(messages.count, 1)
-        XCTAssertEqual(messages.first?.role, "system")
-        XCTAssertEqual(messages.first?.text, "Chat cleared")
+        // Issue #36: the user's typed "/clear" is now echoed as
+        // a user-role bubble alongside the cleared result.
+        // Order: user (typed "/clear"), system ("Chat cleared").
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages[0].role, "user")
+        XCTAssertEqual(messages[0].text, "/clear")
+        XCTAssertEqual(messages[1].role, "system")
+        XCTAssertEqual(messages[1].text, "Chat cleared")
         XCTAssertTrue(transport.calls.isEmpty)
     }
 
@@ -191,7 +202,9 @@ final class NativeChatViewModelSendMessageTests: XCTestCase {
         vm.selectedSession = makeTestSession(key: testSessionKey)
         vm.inputText = "/status"
         await vm.sendMessage()
-        XCTAssertEqual(currentMessages(vm).first?.text, "LOCAL")
+        // Issue #36: local /status now echoes the user bubble too.
+        XCTAssertEqual(currentMessages(vm).first?.text, "/status")
+        XCTAssertEqual(currentMessages(vm).last?.text, "LOCAL")
         XCTAssertTrue(transport.calls.isEmpty)
     }
 
@@ -219,6 +232,13 @@ final class NativeChatViewModelSendMessageTests: XCTestCase {
         vm.selectedSession = makeTestSession(key: testSessionKey)
         vm.inputText = "/boom"
         await vm.sendMessage()
-        XCTAssertTrue(currentMessages(vm).first?.text.contains("Command failed") ?? false)
+        // Issue #36: the user's typed "/boom" is now echoed
+        // before the error result. So the error bubble is the
+        // LAST one, not the first.
+        let messages = currentMessages(vm)
+        XCTAssertEqual(messages.first?.text, "/boom",
+            "user bubble echoes the typed input first")
+        XCTAssertTrue(messages.last?.text.contains("Command failed") ?? false,
+            "error bubble lands after the user echo")
     }
 }

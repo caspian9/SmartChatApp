@@ -9,7 +9,7 @@ struct SettingsView: View {
     @State private var isCreatingNew = false
     @State private var showProfileSheet = false
     @State private var sessionCacheCount: Int = 0
-    @State private var messageCacheStats: (sessionCount: Int, messageCount: Int) = (0, 0)
+    @State private var messageCacheStats = MessageCacheStats(sessionCount: 0, messageCount: 0, oldestTimestamp: nil, newestTimestamp: nil)
     @State private var profileListRefresh: Bool = false
     /// Drives the destructive-action confirmation alert (issue #30).
     /// `nil` = no alert shown; non-nil = alert for that case.
@@ -160,8 +160,16 @@ struct SettingsView: View {
                 HStack {
                     Text("Message Cache")
                     Spacer()
-                    Text("\(messageCacheStats.messageCount) messages (\(messageCacheStats.sessionCount) sessions)")
-                        .foregroundColor(theme.textSecondary)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("\(messageCacheStats.messageCount) messages (\(messageCacheStats.sessionCount) sessions)")
+                            .foregroundColor(theme.textSecondary)
+                        if let oldest = messageCacheStats.oldestTimestamp,
+                           let newest = messageCacheStats.newestTimestamp {
+                            Text("\(formatDate(oldest)) → \(formatDate(newest))")
+                                .font(.caption2)
+                                .foregroundColor(theme.textSecondary)
+                        }
+                    }
                 }
 
                 Button("Clear Session Cache") {
@@ -358,6 +366,19 @@ struct SettingsView: View {
             sessionCacheCount = count
             messageCacheStats = messageStats
         }
+    }
+
+    /// Format a `MessageCacheStats` timestamp (milliseconds since
+    /// epoch — see `MessageCacheStorage.append`'s tsBucket math:
+    /// `tsBucket = Int64(ts / 10_000)`) into a short "MMM d"
+    /// display string. Returns the formatted string. The
+    /// milliseconds-to-seconds conversion is the divide-by-1000
+    /// here; the SDK's timestamp unit is milliseconds.
+    private func formatDate(_ timestamp: Double) -> String {
+        let date = Date(timeIntervalSince1970: timestamp / 1000)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: date)
     }
 }
 

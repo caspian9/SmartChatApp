@@ -58,6 +58,65 @@ final class MessageCacheStorageTests: XCTestCase {
         XCTAssertEqual(loaded[0].content.first?.text, msg.content.first?.text)
     }
 
+    // MARK: - id-dedup (issue #36)
+
+    /// KEEP-on-id semantics (mirror of KEEP-on-content above).
+    /// Server returns a message whose UUID we already have cached;
+    /// the existing entry wins (id stability > content authority).
+    /// The previous behavior would have replaced the existing
+    /// entry's content with the incoming copy (the upsert path's
+    /// id-replace rule, applied accidentally). With append now
+    /// doing id-dedup BEFORE content-dedup, the existing entry is
+    /// untouched.
+    func test_append_dedupsById_existingId_skipped() async {
+        let key = "session-1"
+        let sharedId = UUID()
+        let first = makeMsg(id: sharedId, text: "original text", timestamp: 1000)
+        let second = makeMsg(id: sharedId, text: "REPLACEMENT text", timestamp: 2000)
+        await storage.append([first], for: key)
+        await storage.append([second], for: key)
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded[0].content.first?.text, "original text",
+                       "id-dedup must KEEP the existing entry's content (not last-write-wins)")
+        XCTAssertEqual(loaded[0].id, sharedId)
+    }
+
+    /// In-progress dedup check: when `[A, A]` is appended in a
+    /// single call, the second A must not appear in the final
+    /// array. Catches a regression where `allMessages.contains`
+    /// ran against the in-progress append (so the second A always
+    /// matched the just-appended first A and never landed).
+    func test_append_dedupsById_appendedMessageNotDeduplicatedAgainstItself() async {
+        let key = "session-1"
+        let sharedId = UUID()
+        let a1 = makeMsg(id: sharedId, text: "first arrival", timestamp: 1000)
+        let a2 = makeMsg(id: sharedId, text: "second arrival", timestamp: 2000)
+        await storage.append([a1, a2], for: key)
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 1, "in-progress append must not let A→A survive in a single call")
+    }
+
+    /// Id-dedup and content-dedup are independent axes. To assert
+    /// "id-dedup doesn't break a legitimate new append", we use
+    /// messages that collide on NEITHER axis: different ids AND
+    /// different timestamps (different tsBucket, so content-dedup
+    /// doesn't fire either). Both must be appended. (A same-content
+    /// different-ids case would still be content-deduped — that's
+    /// the complementary contract, not a regression of id-dedup.)
+    func test_append_dedupsById_differentIdsDifferentTimestamp_appended() async {
+        let key = "session-1"
+        let id1 = UUID()
+        let id2 = UUID()
+        let msg1 = makeMsg(id: id1, text: "first", timestamp: 1000)
+        let msg2 = makeMsg(id: id2, text: "second", timestamp: 2000)
+        await storage.append([msg1], for: key)
+        await storage.append([msg2], for: key)
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 2,
+                       "different ids with different timestamps must both be appended")
+    }
+
     func test_append_dedupsByContent_keepsExistingOnDedupMatch() async {
         // KEEP (not REPLACE) on dedup key match: the existing message's
         // id is preserved so callers keying expand state on the id
@@ -212,6 +271,92 @@ final class MessageCacheStorageTests: XCTestCase {
         let s2 = await storage.load(for: "session-2")
         XCTAssertEqual(s1.count, 0)
         XCTAssertEqual(s2.count, 1)
+    }
+
+    // MARK: - stats() extended shape (issue #36)
+    //
+    // `stats()` now returns a `MessageCacheStats` struct with
+    // `oldestTimestamp` / `newestTimestamp` for the Settings
+    // time-span display. The 5 tests below lock in the contract:
+    // nil for empty, single message echoes itself, multi-message
+    // returns the extrema, nil-timestamp messages don't poison
+    // the span, and the existing sessionCount / messageCount
+    // semantics are unchanged by the extension.
+
+    func test_stats_returnsOldestAndNewestTimestamps_emptySession_returnsNilNil() async {
+        // The pre-existing `clearAll` returns the disk to a clean
+        // slate; combined with a fresh suite, the stats pass sees
+        // zero sessions and zero messages — both timestamps nil.
+        await storage.clearAll()
+        let stats = await storage.stats()
+        XCTAssertEqual(stats.sessionCount, 0)
+        XCTAssertEqual(stats.messageCount, 0)
+        XCTAssertNil(stats.oldestTimestamp)
+        XCTAssertNil(stats.newestTimestamp)
+    }
+
+    func test_stats_returnsOldestAndNewestTimestamps_singleMessage_returnsThatTimestamp() async {
+        let key = "session-1"
+        await storage.append([makeMsg(timestamp: 1000)], for: key)
+        // `stats()` scans UserDefaults directly. The append path
+        // is debounced (100ms coalesce), so we must flush before
+        // reading disk-truth stats. (The Settings view hits this
+        // through the `MessageCacheStore` — the production caller
+        // doesn't need to flush explicitly because the user's UI
+        // navigation pace dwarfs the debounce window.)
+        await storage.flushPendingWrites()
+        let stats = await storage.stats()
+        XCTAssertEqual(stats.oldestTimestamp, 1000)
+        XCTAssertEqual(stats.newestTimestamp, 1000)
+    }
+
+    func test_stats_returnsOldestAndNewestTimestamps_multipleMessages_returnsExtrema() async {
+        let key = "session-1"
+        await storage.append(
+            [makeMsg(text: "a", timestamp: 3000),
+             makeMsg(text: "b", timestamp: 1000),
+             makeMsg(text: "c", timestamp: 2000)],
+            for: key)
+        await storage.flushPendingWrites()
+        let stats = await storage.stats()
+        XCTAssertEqual(stats.oldestTimestamp, 1000)
+        XCTAssertEqual(stats.newestTimestamp, 3000)
+    }
+
+    func test_stats_oldestAndNewest_treatsNullTimestampAsSkipped() async {
+        // A message with `timestamp: nil` is unusual (streaming
+        // placeholders normally get one before persisting) but
+        // must not count as the min/max — counting nil as 0 would
+        // put nil entries at the head of every span and mislead
+        // the user about when their oldest chat actually started.
+        let key = "session-1"
+        let nilTs = OpenClawChatMessage(
+            id: UUID(), role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: "no ts", thinking: nil,
+                thinkingSignature: nil, mimeType: nil, fileName: nil,
+                content: nil)],
+            timestamp: nil, toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        await storage.append([nilTs, makeMsg(timestamp: 5000)], for: key)
+        await storage.flushPendingWrites()
+        let stats = await storage.stats()
+        XCTAssertEqual(stats.oldestTimestamp, 5000)
+        XCTAssertEqual(stats.newestTimestamp, 5000,
+                       "nil timestamp must not be treated as 0 / oldest")
+    }
+
+    func test_stats_sessionCountAndMessageCount_unchangedByExtension() async {
+        // Regression: the existing 2-tuple contract still works.
+        // Adding the timestamp fields MUST NOT change sessionCount
+        // / messageCount semantics — Settings displays them
+        // alongside the new timestamp row.
+        await storage.append([makeMsg(timestamp: 1000)], for: "session-1")
+        await storage.append([makeMsg(timestamp: 2000)], for: "session-2")
+        await storage.flushPendingWrites()
+        let stats = await storage.stats()
+        XCTAssertEqual(stats.sessionCount, 2)
+        XCTAssertEqual(stats.messageCount, 2)
     }
 
     func test_clearAll_removesAllSessions() async {
