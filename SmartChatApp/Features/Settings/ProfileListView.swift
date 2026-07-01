@@ -72,13 +72,14 @@ struct ProfileListView: View {
         // Spinner should only appear on the active profile's row — non-active
         // rows must remain clickable so the user can click "Switch" to
         // cancel the in-flight attempt and switch to a different profile.
-        guard profileManager.activeProfile?.id == profile.id else { return false }
-        switch (connectionState.phase, profile.role) {
-        case (.connecting(let role), .operatorOnly): return role == .`operator`
-        case (.connecting(let role), .nodeOnly): return role == .node
-        case (.connecting(let role), .operatorAndNode): return role == .`operator` || role == .node
-        default: return false
-        }
+        // Pure decision extracted to `ProfileConnectionState` for testability
+        // (issue #35).
+        return ProfileConnectionState.isProfileConnecting(
+            activeProfileId: profileManager.activeProfile?.id,
+            profileId: profile.id,
+            profileRole: profile.role,
+            phase: connectionState.phase
+        )
     }
 
     private func isButtonDisabled(for profile: GatewayProfile) -> Bool {
@@ -156,17 +157,19 @@ private struct ProfileRow: View {
             Button {
                 Task { await onButtonTap() }
             } label: {
-                ZStack {
-                    if isConnecting {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
-                    }
+                // The button is a plain text label. The connecting
+                // spinner and the "Failed" flash have moved out of
+                // the row to a persistent toolbar indicator in
+                // `SettingsView` — Form/List rows get destroyed on
+                // scroll, which tore down the in-row spinner and
+                // caused the "wait then appear" gap (issue #35
+                // follow-up chain).
+                Group {
                     if isFailedFlashActive {
-                        Text("Failed")
-                            .foregroundColor(.red)
+                        Text("Failed").foregroundColor(.red)
+                    } else {
+                        Text(isActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
                     }
-                    Text(isActive ? (isConnected ? "Disconnect" : "Connect") : "Switch")
-                        .opacity((isConnecting || isFailedFlashActive) ? 0 : 1)
                 }
             }
             .font(.caption)

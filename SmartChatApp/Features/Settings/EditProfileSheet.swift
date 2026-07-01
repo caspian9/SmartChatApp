@@ -69,8 +69,22 @@ struct EditProfileSheet: View {
     }
 
     private var isProfileConnecting: Bool {
-        if case .connecting = connectionState.phase { return true }
-        return false
+        // Gate on the active profile: only the active profile's
+        // row should show the spinner. When the sheet is editing
+        // a non-active or new profile, fall back to `.operatorAndNode`
+        // (matches the `editRole` default) and let the ID-mismatch
+        // path return false. Pure decision lives in
+        // `ProfileConnectionState` for testability (issue #35).
+        let activeId = ProfileManager.shared.activeProfile?.id
+        let profileId = profile?.id ?? activeId
+        let profileRole = profile?.role ?? .operatorAndNode
+        guard let profileId else { return false }
+        return ProfileConnectionState.isProfileConnecting(
+            activeProfileId: activeId,
+            profileId: profileId,
+            profileRole: profileRole,
+            phase: connectionState.phase
+        )
     }
 
     private var isProfileConnected: Bool {
@@ -312,7 +326,14 @@ struct EditProfileSheet: View {
                     if isFailedFlashActive {
                         Text("Failed").foregroundColor(.red)
                     } else if isProfileConnecting {
-                        ProgressView().progressViewStyle(CircularProgressViewStyle())
+                        // `.id(isProfileConnecting)` forces a fresh
+                        // ProgressView on each true→false→true
+                        // transition so the spinner's animation
+                        // timer can't pause across refreshes
+                        // (issue #35).
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .id(isProfileConnecting)
                         Text("Connecting...")
                     } else if isProfileConnected {
                         Image(systemName: "link.badge.plus")

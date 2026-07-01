@@ -219,6 +219,28 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .toolbar {
+            // Persistent connection indicator (issue #35 follow-up).
+            // The spinner lives in the navigation toolbar so it is
+            // never destroyed by the Form/List row recycling — it is
+            // continuously visible while any profile is connecting,
+            // regardless of scroll state. The row button no longer
+            // carries its own spinner (which was being torn down with
+            // the row).
+            ToolbarItem(placement: .topBarTrailing) {
+                if case .connecting = ConnectionState.shared.phase,
+                   let name = ProfileManager.shared.activeProfile?.name {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .controlSize(.small)
+                        Text("Connecting to \(name)")
+                            .font(.caption)
+                            .foregroundColor(theme.textSecondary)
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $showProfileSheet) {
             EditProfileSheet(profile: editingProfile) { name, colorTag, host, port, token, tlsEnabled, role, enabledCaps in
                 if let profile = editingProfile {
