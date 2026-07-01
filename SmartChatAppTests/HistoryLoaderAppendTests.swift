@@ -204,6 +204,75 @@ final class HistoryLoaderAppendTests: XCTestCase {
                        "streaming-time usage must survive the server merge (input=1234, server omitted it)")
     }
 
+    // MARK: - Test 4: streaming-time `usage` preserved when ids differ
+    //
+    // C1 follow-up: the test above (`streamingUsagePreserved_afterMerge`)
+    // uses `sharedId` for both the streamed and server copies. With
+    // matching ids, `MessageCacheStorage.append`'s new id-dedup drops
+    // the server copy BEFORE `applyUsagePreservation` has a chance to
+    // run — so that test passes by id-dedup, not by the splice. This
+    // test covers the realistic production case: the SDK's
+    // `OpenClawChatMessage.CodingKeys` omits `id` (see
+    // `PersistedMessageEnvelope`), so every server-side decode gets
+    // a fresh UUID, and the streamed (client-side synthesized) id
+    // never matches the server's id. The dedup that actually saves
+    // the streaming-time usage in production is therefore the
+    // KEEP-on-content-match branch of `append` — the existing entry
+    // stays, with its original `usage` intact.
+    //
+    // Asserts the user-visible contract: streaming-time `usage`
+    // survives the merge even when ids differ. (`applyUsagePreservation`
+    // runs first to splice usage into the server copy, then
+    // content-dedup drops the server copy and keeps the streamed one.
+    // The end state is the same: usage preserved.)
+
+    func test_fetchAndMergeFromNetwork_streamingUsagePreserved_differentIds_afterMerge() async throws {
+        let key = "session-1"
+        vm.selectedSession = makeSession(key: key)
+        let streamedId = UUID()
+        let serverId = UUID()
+        let streamingUsage = makeUsageSentinel(input: 1234)
+        let streamed = OpenClawChatMessage(
+            id: streamedId, role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: "final answer", thinking: nil,
+                thinkingSignature: nil, mimeType: nil, fileName: nil,
+                content: nil)],
+            timestamp: 2000, toolCallId: nil, toolName: nil,
+            usage: streamingUsage, stopReason: nil, errorMessage: nil)
+        await store.append([streamed], for: key)
+        await storage.flushPendingWrites()
+        // Server returns the same logical message (same text +
+        // role + same timestamp) but with a FRESH id and
+        // `usage: nil` — the typical shape of `chat.history`
+        // after the SDK drops `id` on JSON decode.
+        let serverCopy = OpenClawChatMessage(
+            id: serverId, role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: "final answer", thinking: nil,
+                thinkingSignature: nil, mimeType: nil, fileName: nil,
+                content: nil)],
+            timestamp: 2000, toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        fakeTransport.payload = makeHistoryPayload(
+            sessionKey: key, messages: [serverCopy])
+
+        await loader.fetchAndMergeFromNetwork(
+            sessionKey: key,
+            sessionKeyPreview: String(key.prefix(8)),
+            taskIdStr: "test4",
+            scrollKind: .historyLoaded
+        )
+
+        let stored = store.messages(for: key)
+        XCTAssertEqual(stored.count, 1,
+                       "content-dedup must keep the streamed entry; the fresh-id server copy is dropped")
+        XCTAssertEqual(stored.first?.usage?.input, 1234,
+                       "streaming-time usage must survive even when the server copy has a different id (input=1234, server omitted it)")
+        XCTAssertEqual(stored.first?.id, streamedId,
+                       "the entry that survives is the streamed (client-synthesized) one — content-dedup keeps it by KEEP-on-content-match")
+    }
+
     // MARK: - Helpers
 
     private func makeMsg(id: UUID = UUID(), role: String = "assistant",
