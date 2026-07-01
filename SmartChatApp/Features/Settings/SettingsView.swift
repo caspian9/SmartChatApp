@@ -369,10 +369,11 @@ struct SettingsView: View {
     }
 
     /// Format a `MessageCacheStats` timestamp (milliseconds since
-    /// epoch) into a short "MMM d" display string. Returns the
-    /// formatted string. The milliseconds-to-seconds conversion
-    /// is the divide-by-1000 here; the SDK's timestamp unit is
-    /// milliseconds.
+    /// epoch — see `MessageCacheStorage.append`'s tsBucket math:
+    /// `tsBucket = Int64(ts / 10_000)`) into a short "MMM d"
+    /// display string. Returns the formatted string. The
+    /// milliseconds-to-seconds conversion is the divide-by-1000
+    /// here; the SDK's timestamp unit is milliseconds.
     private func formatDate(_ timestamp: Double) -> String {
         let date = Date(timeIntervalSince1970: timestamp / 1000)
         let formatter = DateFormatter()

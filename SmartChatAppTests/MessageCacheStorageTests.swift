@@ -100,11 +100,10 @@ final class MessageCacheStorageTests: XCTestCase {
     /// Id-dedup and content-dedup are independent axes. To assert
     /// "id-dedup doesn't break a legitimate new append", we use
     /// messages that collide on NEITHER axis: different ids AND
-    /// different text (different content-dedup key, so the
-    /// content-dedup doesn't fire either). Both must be appended.
-    /// (A same-content different-ids case would still be
-    /// content-deduped — that's the complementary contract, not
-    /// a regression of id-dedup.)
+    /// different timestamps (different tsBucket, so content-dedup
+    /// doesn't fire either). Both must be appended. (A same-content
+    /// different-ids case would still be content-deduped — that's
+    /// the complementary contract, not a regression of id-dedup.)
     func test_append_dedupsById_differentIdsDifferentTimestamp_appended() async {
         let key = "session-1"
         let id1 = UUID()
@@ -444,8 +443,8 @@ final class MessageCacheStorageTests: XCTestCase {
         // end all had DIFFERENT ids but the same content, so all 3
         // landed in the cache. The fix added content-based dedup
         // to upsert (mirrors the `append` dedup): same role + same
-        // first line → drop the new one. This test locks in the
-        // dedup contract.
+        // first line + same tsBucket + same usage → drop the new
+        // one. This test locks in the dedup contract.
         let key = "session-1"
         let id1 = UUID()
         let id2 = UUID()
@@ -459,10 +458,10 @@ final class MessageCacheStorageTests: XCTestCase {
     }
 
     func test_upsert_dedupByContent_differentRoles_bothKept() async {
-        // The dedup is keyed on `role + text`. Two messages
-        // with the same text but DIFFERENT roles (e.g., one
-        // toolResult + one assistant bubble both containing
-        // "exit=0") must NOT be deduped — the user
+        // The dedup is keyed on `role + text + tsBucket + usage`.
+        // Two messages with the same text but DIFFERENT roles
+        // (e.g., one toolResult + one assistant bubble both
+        // containing "exit=0") must NOT be deduped — the user
         // wants to see them as separate bubbles.
         let key = "session-1"
         let id1 = UUID()
@@ -480,9 +479,9 @@ final class MessageCacheStorageTests: XCTestCase {
     // The 4 `test_replaceForSession_*` tests previously lived here.
     // `replaceForSession` is gone: `HistoryLoader.fetchAndMergeFromNetwork`
     // now calls `store.append(...)` and relies on `dedupKey`
-    // (role + text) to absorb overlaps. Any future test that needs
-    // to assert "wipe and start over" should use `clear` followed
-    // by `append`, not a hypothetical
+    // (text + role + tsBucket + usage) to absorb overlaps. Any future
+    // test that needs to assert "wipe and start over" should use
+    // `clear` followed by `append`, not a hypothetical
     // `replaceForSession`.
 
     // MARK: - dedupKey content-shape invariance (streamed vs server)
@@ -625,8 +624,8 @@ final class MessageCacheStorageTests: XCTestCase {
     // same logical message hashed to different keys and both
     // landed in the cache. The current key drops `usage`.
     //
-    // These tests pin that contract: same role + same text must
-    // dedup regardless of `usage` shape.
+    // These tests pin that contract: same role + same text +
+    // same tsBucket must dedup regardless of `usage` shape.
 
     /// `OpenClawChatUsage` has no memberwise init (only the
     /// `Codable` synthesis). Round-trip a sentinel through
@@ -681,8 +680,8 @@ final class MessageCacheStorageTests: XCTestCase {
         // Variant where the server's `chat.history` DOES return
         // a real usage block (e.g. a different server version
         // that fills it in). Different usage payloads but same
-        // text + role → must still dedup. The previous key
-        // would reject this; the current key accepts it.
+        // text + role + tsBucket → must still dedup. The previous
+        // key would reject this; the current key accepts it.
         // This is the "false positive" worry in reverse: if we
         // ever DID want usage to be part of the identity, this
         // would break. We explicitly assert the contract.

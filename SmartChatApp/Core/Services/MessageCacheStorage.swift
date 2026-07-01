@@ -612,24 +612,19 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     // thinking sub-block of the assistant turn) collides with
     // the streaming-side `role: "thinking"`.
     //
-    // The dedup key is intentionally `role + text` (no timestamp
-    // bucket, no usage fingerprint). Adding a `tsBucket =
-    // Int64(ts / 10_000)` would assume the streaming-side
-    // timestamp (device-local `Date()` at send-time /
-    // `lifecycle=start` arrival) and the server's
-    // `chat.history.ts` for the same logical message land in
-    // the same 10s window. They often don't — a flaky
-    // WebSocket can drift the two by tens of seconds, at which
-    // point the bucket splits and the dedup misses, producing
-    // the "two bubbles after refresh" regression we fixed in
-    // this branch (see
-    // `MessageCacheStorageRefreshDedupTests`). Including `usage`
-    // in the fingerprint would likewise miss the streaming
-    // sentinel (`{input:-1,...}`) vs server `usage=nil` case.
-    // `role + text` is still unique enough per session: two
-    // consecutive identical assistant replies in a session are
-    // the same logical answer and the user reads them as one
-    // bubble anyway.
+    // The dedup key is `role + text + tsBucket + usage`.
+    // `tsBucket = Int64(ts / 10_000)` is a 10-second bucket
+    // intended to catch streamed-vs-server copies of the same
+    // logical message (timestamps within a few ms of each other
+    // in practice). An earlier experiment dropped the bucket
+    // and made the key `role + text` only; that broke the user
+    // bubble because two consecutive user messages with the
+    // same text ("hi" repeated) collapsed onto each other even
+    // when they were minutes apart in real time. The 10-second
+    // bucket keeps near-in-time duplicates merged while
+    // preserving user-distinct messages typed at different
+    // times. See PR #49 + the revert log in PR #50 for the
+    // failure analysis that motivated restoring the bucket.
     private func dedupKey(for message: OpenClawChatMessage) -> String {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -653,25 +648,27 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
             roleForHash = MessageCacheStorage.normalizeRoleForDedup(message.role)
         }
 
+        let tsBucket: Int64 = {
+            guard let ts = message.timestamp else { return -1 }
+            return Int64(ts / 10_000)
+        }()
+
         // `usage` deliberately does NOT contribute to the dedup
         // key. The streaming `lifecycle=end` writes the
         // `{input:-1, ...}` "no token data" sentinel and the
         // server's `chat.history` returns `usage=nil` for the
-        // same logical message; the previous key (which
-        // fingerprinted usage via JSON round-trip) correctly
-        // deduped these via KEEP-on-match, but would now collide
-        // them anyway because identical text+role wins. Including
-        // usage in the key risks the inverse: a streaming
-        // entry with `usage={input:1234}` and a server copy with
-        // `usage=nil` would hash differently and produce the
-        // "two assistant bubbles after refresh" regression we
-        // fixed in this branch (see
-        // `MessageCacheStorageRefreshDedupTests`). Id stability
-        // for usage-bearing entries is preserved upstream by
-        // `applyUsagePreservation` in `HistoryLoader`, which
-        // splices the streaming-time usage block into the
-        // server copy before `append` runs.
-        let data = "\(roleForHash)|\(textForHash)".data(using: .utf8) ?? Data()
+        // same logical message; the streaming copy has the real
+        // token values once the run finalizes with usage, while
+        // the server copy sometimes carries a real usage block
+        // (newer server versions) and sometimes `usage=nil`
+        // (older). Including `usage` in the fingerprint would
+        // make the streamed-vs-server pair split into two entries
+        // whenever the usage shapes differ. Streaming-time
+        // `usage` is preserved upstream by
+        // `HistoryLoader.applyUsagePreservation` which splices
+        // it into the server copy before `append` runs, so the
+        // dedup layer can stay usage-blind.
+        let data = "\(roleForHash)|\(textForHash)|\(tsBucket)".data(using: .utf8) ?? Data()
         let hash = SHA256.hash(data: data)
         return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
     }

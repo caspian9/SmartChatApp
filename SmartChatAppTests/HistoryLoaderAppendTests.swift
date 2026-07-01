@@ -115,8 +115,8 @@ final class HistoryLoaderAppendTests: XCTestCase {
     // known limitation, see `PersistedMessageEnvelope` for the
     // disk-round-trip workaround), each server-side decode gets
     // a fresh UUID. So the dedup that catches this is
-    // **content-dedup** (same role + same text), not id-dedup.
-    // The store ends up with 2 entries (the
+    // **content-dedup** (same role + same text + same tsBucket),
+    // not id-dedup. The store ends up with 2 entries (the
     // existing serverA from the pre-populate + the new serverB);
     // the duplicate A is dropped.
 

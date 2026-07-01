@@ -449,7 +449,7 @@ final class ChatMessageConverterTests: XCTestCase {
         // for every ChatMessage regardless of role, so a streaming
         // thinking bubble and a server-returned thinking block had
         // different shapes in the cache. `MessageCacheStorage.dedupKey`
-        // hashes text+role — both produced the same hash
+        // hashes text+role+tsBucket — both produced the same hash
         // (because text is the thinking string in the streaming copy
         // and the thinking fallback in the read path also surfaces
         // that string), so the streaming copy was KEEP'd and the
