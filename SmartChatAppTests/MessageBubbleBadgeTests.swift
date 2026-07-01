@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import UIKit
 @testable import SmartChatApp
 
 /// Covers the role/state -> badge mapping that drives the
@@ -143,5 +145,44 @@ final class MessageBubbleBadgeTests: XCTestCase {
         // stays 1:1.
         let all = MessageBubbleBadge.allCases
         XCTAssertEqual(all.count, Set(all).count)
+    }
+
+    // MARK: - Label + backgroundColor pinning
+
+    func test_label_isStablePerCase() {
+        // Pinned labels so a future refactor doesn't change them
+        // without a corresponding test update. The chip's visible
+        // text comes from `label`, not the case name — a typo here
+        // (e.g. "ToolReslt") would ship silently without these pins.
+        XCTAssertEqual(MessageBubbleBadge.none.label, "")
+        XCTAssertEqual(MessageBubbleBadge.toolResult.label, "ToolResult")
+        XCTAssertEqual(MessageBubbleBadge.thinking.label,   "Thinking")
+        XCTAssertEqual(MessageBubbleBadge.toolCall.label,   "ToolCall")
+        XCTAssertEqual(MessageBubbleBadge.assistant.label,  "Assistant")
+        XCTAssertEqual(MessageBubbleBadge.slashCommand.label, "Slash")
+    }
+
+    func test_backgroundColor_eachCasePinsItsColor() {
+        let theme = Theme(colorScheme: .light)
+
+        // Pre-existing hardcoded colors (kept out of scope per PR plan).
+        XCTAssertEqual(
+            UIColor(MessageBubbleBadge.toolResult.backgroundColor(theme: theme)),
+            UIColor(Color.purple))
+        XCTAssertEqual(
+            UIColor(MessageBubbleBadge.thinking.backgroundColor(theme: theme)),
+            UIColor(Color.blue))
+        XCTAssertEqual(
+            UIColor(MessageBubbleBadge.toolCall.backgroundColor(theme: theme)),
+            UIColor(Color.orange))
+
+        // New theme-aware tokens — the resolver must reach the
+        // theme rather than baking a hex.
+        XCTAssertEqual(
+            UIColor(MessageBubbleBadge.assistant.backgroundColor(theme: theme)),
+            UIColor(theme.badgeAssistant))
+        XCTAssertEqual(
+            UIColor(MessageBubbleBadge.slashCommand.backgroundColor(theme: theme)),
+            UIColor(theme.badgeSlashCommand))
     }
 }

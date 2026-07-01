@@ -54,6 +54,10 @@ extension MessageBubbleBadge {
     /// horizontal padding) so the label + padding don't exceed
     /// the metadata row's width budget.
     var label: String {
+        // `slashCommand` renders as "Slash" (not "SlashCommand") —
+        // the longer label pushes the chip past the 6pt padding
+        // budget on narrow rows. The case name keeps the
+        // descriptive form for code-level references.
         switch self {
         case .none: return ""
         case .toolResult: return "ToolResult"
@@ -77,7 +81,7 @@ extension MessageBubbleBadge {
         case .thinking: return .blue
         case .toolCall: return .orange
         case .assistant: return theme.badgeAssistant
-        case .slashCommand: return theme.badgeInfo
+        case .slashCommand: return theme.badgeSlashCommand
         }
     }
 }

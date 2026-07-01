@@ -56,11 +56,12 @@ struct Theme {
         Color(hex: "10A37F")
     }
 
-    /// Token for the SlashCommand badge chip (issue #33). Info
-    /// blue — distinct from the hardcoded `.blue` used by the
-    /// pre-existing Thinking chip (out of scope to migrate) so
-    /// the two "info" chips don't visually collide.
-    var badgeInfo: Color {
+    /// Token for the SlashCommand badge chip (issue #33). Hex
+    /// `#3B82F6` — info blue, distinct from the hardcoded
+    /// `.blue` used by the pre-existing Thinking chip (out of
+    /// scope to migrate) so the two similarly-themed chips don't
+    /// visually collide.
+    var badgeSlashCommand: Color {
         Color(hex: "3B82F6")
     }
 

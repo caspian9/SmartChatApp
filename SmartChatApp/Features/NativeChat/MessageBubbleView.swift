@@ -65,6 +65,13 @@ struct MessageBubbleView: View {
 
                     let badge = MessageBubbleBadgeResolver.badge(for: message)
                     if badge != .none {
+                        // Decorative metadata tag — the bubble's role is
+                        // already conveyed by alignment (outgoing/incoming)
+                        // and styling, so hiding the chip from VoiceOver
+                        // keeps the bubble's accessibility tree focused on
+                        // the message content. If a user wants the chip
+                        // surfaced as a label later, swap this for
+                        // `.accessibilityLabel(badge.label)`.
                         Text(badge.label)
                             .font(.caption2)
                             .foregroundColor(.white)
@@ -72,6 +79,7 @@ struct MessageBubbleView: View {
                             .padding(.vertical, 2)
                             .background(badge.backgroundColor(theme: theme))
                             .cornerRadius(4)
+                            .accessibilityHidden(true)
                     }
 
                     if let startedAt = message.startedAt {
