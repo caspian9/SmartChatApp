@@ -106,6 +106,42 @@ final class EventInterpreter {
     /// full thinking across the run, similar to the assistant
     /// text path. Cleared on `lifecycle=end`.
     private var accumulatedThinkingTextByRun: [String: String] = [:]
+    /// Per-run `toolCallId → canonical id` alias map. The modern
+    /// `item phase=start` populates this when a tool call begins,
+    /// recording (a) the toolCallId's self-mapping to itself and
+    /// (b) the itemId's mapping to the toolCallId. The legacy
+    /// `stream: "tool"` path may emit the same logical tool under
+    /// a different toolCallId than the modern path's; this map
+    /// lets the legacy path resolve its toolCallId to the modern
+    /// canonical id before computing its bubble id and toolKey, so
+    /// the upsert collapses legacy + modern writes into a single
+    /// bubble. Without this alias, two failure modes surface:
+    ///
+    /// 1. Different toolCallIds across paths → two distinct
+    ///    `<runId>:toolResult:<...>` bubble ids → the user sees
+    ///    duplicate toolCall + toolResult bubbles for one logical
+    ///    tool call (user-reported 2026-07-02).
+    /// 2. Same toolCallId across paths → the legacy `tool (result)`
+    ///    handler's `toolStartedAtByCall.removeValue(forKey:)` at
+    ///    line ~904 wipes the entry before the modern
+    ///    `command_output (end)` reads it → modern toolResult
+    ///    ChatMessage carries `startedAt: nil` → bubble footer
+    ///    shows only the end time (user-reported 2026-07-02).
+    ///
+    /// Cleared on `lifecycle=end`.
+    private var toolCallIdAliasByRun: [String: [String: String]] = [:]
+    /// Per-run "most-recent tool-call canonical id" pointer. When
+    /// the modern `item phase=start` fires first with id `M` and
+    /// the legacy `tool phase=start` arrives later with id `L`
+    /// for the same logical tool, the alias map's key `L` is
+    /// unknown at lookup time. The latest-canonical pointer
+    /// captures the most recent canonical that any path
+    /// (modern or legacy) registered for this runId, so the
+    /// legacy can adopt it as its own canonical and the
+    /// upsert collapses both paths' writes. Bounded per run —
+    /// at most one canonical at a time because tools are
+    /// sequential within a run. Cleared on `lifecycle=end`.
+    private var toolLatestCanonicalByRun: [String: String] = [:]
 
     /// runIds whose `lifecycle=end` has already been processed for
     /// the current session. The transport (or upstream server) can
@@ -383,6 +419,8 @@ final class EventInterpreter {
                     assistantStartedAtByRun.removeValue(forKey: runId)
                     accumulatedThinkingTextByRun.removeValue(forKey: runId)
                     lastSeenSeqByRun.removeValue(forKey: runId)
+                    toolCallIdAliasByRun.removeValue(forKey: runId)
+                    toolLatestCanonicalByRun.removeValue(forKey: runId)
                     // Fragment counter — must be reset so the next
                     // run for this same runId (in the unusual case
                     // of a session resume or a re-spawn) starts from
@@ -793,10 +831,45 @@ final class EventInterpreter {
                     return
                 }
                 let toolName = data["name"]?.stringValue ?? ""
-                let toolKey = "\(runId):\(toolCallId)"
+                // Resolve the legacy toolCallId to the modern canonical id
+                // so both paths share the same `<runId>:toolCall:<canonical>`
+                // / `<runId>:toolResult:<canonical>` bubble id and the
+                // same `toolKey` for the per-call dicts. Without this
+                // alias resolution, two failure modes surface when the
+                // server emits both legacy and modern events for the same
+                // logical tool with different toolCallIds (or even with
+                // the same id, where the legacy cleanup race drops the
+                // modern entry's startedAt). See the doc comment on
+                // `toolCallIdAliasByRun` above for the full rationale.
+                //
+                // Three-tier resolution:
+                // 1. Exact alias hit — the modern path already
+                //    registered `<legacyId> → canonical`. Use it.
+                // 2. The legacy path fired BEFORE the modern path —
+                //    the legacy's own `phase=start` registered
+                //    `<legacyId> → legacyId`. Adopt that identity.
+                // 3. The modern path fired earlier with a
+                //    DIFFERENT canonical, and the alias map does
+                //    NOT have this legacyId — adopt the most
+                //    recently registered canonical for this runId.
+                //    Safe within a single run because tools are
+                //    sequential: at any moment at most one tool
+                //    call's `phase=start` has fired without its
+                //    matching result. We track the latest
+                //    canonical per run via `toolLatestCanonicalByRun`.
+                let resolvedCanonical: String = {
+                    if let hit = toolCallIdAliasByRun[runId]?[toolCallId] {
+                        return hit
+                    }
+                    if let latest = toolLatestCanonicalByRun[runId] {
+                        return latest
+                    }
+                    return toolCallId
+                }()
+                let toolKey = "\(runId):\(resolvedCanonical)"
                 if phase == "start" {
                     let text = MessageFormatters.formatToolCallBubbleText(name: toolName, arguments: data["args"])
-                    AppLogger.log("agent tool start - tool: \(toolName), callId: \(toolCallId)", category: .nativeChat)
+                    AppLogger.log("agent tool start - tool: \(toolName), callId: \(toolCallId), canonical: \(resolvedCanonical)", category: .nativeChat)
                     // Remember BOTH the server's start timestamp (for the
                     // `startedAt` display field — "HH:MM" label) and the
                     // local-received time (for the sort `timestamp` so
@@ -808,8 +881,30 @@ final class EventInterpreter {
                     // in reversed order.
                     toolStartedAtByCall[toolKey] = timestamp
                     toolReceivedAtByCall[toolKey] = Date()
+                    // Register the toolCallId → canonical alias and
+                    // record this canonical as the run's latest. The
+                    // modern path reads both: the alias map to
+                    // resolve when it fires later under a different
+                    // toolCallId, and `toolLatestCanonicalByRun` to
+                    // handle the case where the modern path fired
+                    // earlier (this canonical stays in the alias
+                    // map only if the modern path's toolCallId
+                    // matches ours; otherwise the modern path's own
+                    // canonical sits in the alias map and this
+                    // legacy start updates the "latest" pointer so
+                    // future legacy events for the SAME logical
+                    // tool resolve to the same canonical). One
+                    // legacy event per tool call typically — the
+                    // race that matters is "modern fires first
+                    // with id M, then legacy fires with id L for
+                    // the same tool" — covered by the legacy's
+                    // `toolLatestCanonicalByRun` lookup above.
+                    var perRunAlias = toolCallIdAliasByRun[runId] ?? [:]
+                    perRunAlias[toolCallId] = resolvedCanonical
+                    toolCallIdAliasByRun[runId] = perRunAlias
+                    toolLatestCanonicalByRun[runId] = resolvedCanonical
                     let message = ChatMessage(
-                        id: "\(runId):toolCall:\(toolCallId)",
+                        id: "\(runId):toolCall:\(resolvedCanonical)",
                         text: text,
                         timestamp: toolReceivedAtByCall[toolKey] ?? Date(),
                         role: "toolCall",
@@ -819,7 +914,7 @@ final class EventInterpreter {
                         startedAt: timestamp,
                         endedAt: nil,
                         livenessState: nil,
-                        toolCallId: toolCallId,
+                        toolCallId: resolvedCanonical,
                         toolName: toolName,
                         stopReason: nil,
                         isFresh: true
@@ -839,7 +934,7 @@ final class EventInterpreter {
                     AppLogger.log("agent tool update - tool: \(toolName), callId: \(toolCallId), text len: \(text.count)", category: .nativeChat)
                     let startedAt = toolStartedAtByCall[toolKey] ?? timestamp
                     let message = ChatMessage(
-                        id: "\(runId):toolCall:\(toolCallId)",
+                        id: "\(runId):toolCall:\(resolvedCanonical)",
                         text: text,
                         timestamp: toolReceivedAtByCall[toolKey] ?? Date(),
                         role: "toolCall",
@@ -849,7 +944,7 @@ final class EventInterpreter {
                         startedAt: startedAt,
                         endedAt: nil,
                         livenessState: nil,
-                        toolCallId: toolCallId,
+                        toolCallId: resolvedCanonical,
                         toolName: toolName,
                         stopReason: nil,
                         isFresh: true
@@ -859,15 +954,25 @@ final class EventInterpreter {
                     let resultValue = data["result"]?.value
                     let text = MessageFormatters.formatToolResultText(result: resultValue)
                     let isError = (data["isError"]?.value as? Bool) ?? false
-                    AppLogger.log("agent tool result - tool: \(toolName), callId: \(toolCallId), isError: \(isError), text len: \(text.count)", category: .nativeChat)
+                    AppLogger.log("agent tool result - tool: \(toolName), callId: \(toolCallId), canonical: \(resolvedCanonical), isError: \(isError), text len: \(text.count)", category: .nativeChat)
                     let startedAt = toolStartedAtByCall[toolKey]
                         ?? (startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : nil)
                     // toolResult id also unified to the same namespace so
                     // `command_output` / `item` (end) for the same call
                     // upsert into the same entry instead of producing
                     // separate bubbles.
+                    //
+                    // IMPORTANT: do NOT clear `toolStartedAtByCall[toolKey]`
+                    // here. The modern `command_output (end)` handler reads
+                    // the same entry to populate its own toolResult's
+                    // `startedAt`; clearing it here would race with the
+                    // modern path and silently drop the start time. The
+                    // modern path's `command_output (end)` handler clears
+                    // the entry itself at line ~1142 (after its own read),
+                    // so this legacy handler leaving the entry alone is
+                    // safe and prevents the startedAt-loss regression.
                     let message = ChatMessage(
-                        id: "\(runId):toolResult:\(toolCallId)",
+                        id: "\(runId):toolResult:\(resolvedCanonical)",
                         text: text,
                         // Local received time for sort — see the
                         // matching comment on `case "lifecycle"`
@@ -890,18 +995,19 @@ final class EventInterpreter {
                         isFresh: true
                     )
                     await viewModel?.receiveMessage(message)
-                    // Tool call is fully done — drop the start-timestamp
-                    // entry so memory doesn't grow across many tool
-                    // calls in one run. We deliberately do NOT clear
-                    // `toolReceivedAtByCall[toolKey]` here for the same
-                    // reason as the `command_output (end)` branch above:
-                    // the modern `item phase=end` branch consumes that
-                    // sort-key value (line 954), and for exec/bash tools
-                    // it may arrive AFTER the legacy `tool (result)`.
-                    // Clearing it here would regress the
-                    // "#11 toolCall appears below #12 toolResult"
-                    // sort order. The dict is bounded per run.
-                    toolStartedAtByCall.removeValue(forKey: toolKey)
+                    // Tool call is fully done — the modern
+                    // `command_output (end)` handler reads
+                    // `toolStartedAtByCall[toolKey]` to populate its
+                    // own toolResult ChatMessage's `startedAt`; if it
+                    // fires AFTER this legacy result, clearing the
+                    // entry here would race and drop the start time
+                    // (user-reported 2026-07-02 "toolResult has no
+                    // start time" regression). The modern path's
+                    // `command_output (end)` handler clears the
+                    // entry itself after its own read, so leaving the
+                    // entry alone here is the correct fix. Memory
+                    // growth is bounded per run (one entry per tool
+                    // call, reclaimed at app restart).
                 } else {
                     // Any phase other than "start" / "update" / "result"
                     // is a server shape we don't recognize. Log a
@@ -979,6 +1085,34 @@ final class EventInterpreter {
                     // `finalizeAssistantFragmentIfAny`, so subsequent
                     // deltas in the new segment go to `runId:assistant:<N+1>`.
                     await finalizeAssistantFragmentIfAny(runId)
+                    // Resolve to the canonical id used by any prior
+                    // legacy `tool phase=start` for the same runId.
+                    // If a legacy event fired earlier with a
+                    // different toolCallId and registered
+                    // `<runId>:legacyId → legacyId` in the alias
+                    // map, we want THIS modern event to share the
+                    // same canonical id so legacy + modern writes
+                    // collapse to one bubble. Scan the existing
+                    // alias map for any pre-registered entry that
+                    // already maps to a stable canonical (the
+                    // legacy path's `phase=start` registers
+                    // `toolCallId → toolCallId`); when the modern
+                    // path fires, it adopts that legacy canonical
+                    // as its own. The scan is bounded by the
+                    // number of tool calls in a single run (a
+                    // small handful).
+                    let resolvedCanonical: String = {
+                        for (aliasKey, aliasedValue) in toolCallIdAliasByRun[runId] ?? [:] {
+                            // Legacy registered `L → L`. If our
+                            // canonical (or itemId) matches the
+                            // legacy's value, that's the bridge.
+                            if aliasedValue == canonical || aliasedValue == itemId {
+                                return aliasKey
+                            }
+                        }
+                        return canonical
+                    }()
+                    let resolvedToolKey = "\(runId):\(resolvedCanonical)"
                     // Remember BOTH the server's start timestamp (for
                     // `startedAt` display — "HH:MM" label) and the
                     // local-received time (for the sort key so the
@@ -989,8 +1123,28 @@ final class EventInterpreter {
                     // push the response's sort key before the user
                     // message's `Date()`-based key. Mirrors the
                     // legacy `case "tool"` `phase: "start"` branch.
-                    toolStartedAtByCall[toolKey] = timestamp
-                    toolReceivedAtByCall[toolKey] = Date()
+                    toolStartedAtByCall[resolvedToolKey] = timestamp
+                    toolReceivedAtByCall[resolvedToolKey] = Date()
+                    // Register the toolCallId → canonical alias so
+                    // the legacy `stream: "tool"` path can resolve
+                    // its toolCallId to this canonical id and
+                    // share the same bubble id / toolKey. We map
+                    // both `toolCallId` → `canonical` (identity
+                    // case) and `itemId` → `canonical` (legacy may
+                    // surface the call under the itemId when the
+                    // server doesn't supply a toolCallId on the
+                    // legacy event). Cleared at `lifecycle=end`.
+                    var perRunAlias = toolCallIdAliasByRun[runId] ?? [:]
+                    perRunAlias[resolvedCanonical] = resolvedCanonical
+                    if resolvedCanonical != itemId {
+                        perRunAlias[itemId] = resolvedCanonical
+                    }
+                    toolCallIdAliasByRun[runId] = perRunAlias
+                    // Mirror the legacy path: record this canonical
+                    // as the run's latest so a later legacy event
+                    // for the SAME logical tool can adopt it via
+                    // `toolLatestCanonicalByRun`.
+                    toolLatestCanonicalByRun[runId] = resolvedCanonical
                 }
                 if itemPhase == "end" {
                     // End phase. If there's a summary (e.g., command output
