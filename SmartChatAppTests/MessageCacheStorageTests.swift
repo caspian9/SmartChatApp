@@ -610,6 +610,71 @@ final class MessageCacheStorageTests: XCTestCase {
         XCTAssertEqual(loaded.count, 1, "streamed + server thinking with same text must dedup")
     }
 
+    func test_append_dedupsByContent_streamedAssistantVsServerHistoryWithThinking_deduped() async {
+        // The duplicate-assistant-bubble scenario from the
+        // user-reported log captured 2026-07-03 (runId
+        // 6BB8B583-BE35-42F9-B380-7E7FE993048D):
+        //
+        //   CACHE[13] (streaming write)
+        //     role=assistant, text=<assistant body>,
+        //     thinking="" (no thinking block — EventInterpreter
+        //     flattens the assistant text into a single
+        //     `{type:"text", text:...}` content block)
+        //   CACHE[14] (server-history write via refresh)
+        //     role=assistant, text=<same assistant body>,
+        //     thinking=<reasoning> (the server's `chat.history`
+        //     payload carries the reasoning as a sibling
+        //     `{type:"thinking", thinking:...}` content block)
+        //
+        // Both are the SAME logical assistant turn. The
+        // streaming copy's `dedupKey` hashes roleForHash as
+        // "assistant" (no thinking block). The server copy's
+        // `dedupKey` previously hashed roleForHash as
+        // "thinking" (because `hasThinkingBlock` was true), so
+        // the two never matched — both landed in the cache and
+        // the user saw two assistant bubbles for one turn.
+        //
+        // The fix: `roleForHash = "thinking"` applies only to
+        // thinking-only sub-block messages (text empty,
+        // thinking non-empty). A full assistant turn that ALSO
+        // carries a thinking reasoning block hashes with the
+        // normalized role so it collides with the streaming
+        // copy of the same turn.
+        let key = "session-1"
+        let sharedBody = "Hello there. How can I help today?"
+        let streamed = OpenClawChatMessage(
+            id: UUID(), role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: sharedBody,
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1783048355210.0, toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        let serverHistory = OpenClawChatMessage(
+            id: UUID(), role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "text", text: sharedBody,
+                    thinking: nil, thinkingSignature: nil, mimeType: nil,
+                    fileName: nil, content: nil, id: nil, name: nil,
+                    arguments: nil),
+                OpenClawChatMessageContent(
+                    type: "thinking", text: nil,
+                    thinking: "The user is asking for help.",
+                    thinkingSignature: nil, mimeType: nil,
+                    fileName: nil, content: nil, id: nil, name: nil,
+                    arguments: nil),
+            ],
+            timestamp: 1783048355211.0, toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        await storage.append([streamed], for: key)
+        await storage.append([serverHistory], for: key)
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 1,
+            "streamed assistant + server history assistant (with sibling thinking block) for the same logical turn must dedup — got \(loaded.count) entries, ids=\(loaded.map { String($0.id.uuidString.prefix(8)) })")
+    }
+
     // MARK: - dedupKey: `usage` is NOT part of the signature
     //
     // Background: a duplicate assistant bubble was reported

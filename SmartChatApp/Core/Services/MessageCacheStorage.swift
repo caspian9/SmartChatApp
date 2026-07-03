@@ -606,11 +606,13 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     // `thinking` field when `text` is empty, and normalize the
     // role to its canonical client form so a server-side
     // `role: "tool"` (lowercase variant) hashes the same as the
-    // streaming-side `role: "toolCall"`. If the message carries
-    // a thinking block, we force the role to "thinking" so the
-    // server's `role: "assistant"` (typical shape for a
-    // thinking sub-block of the assistant turn) collides with
-    // the streaming-side `role: "thinking"`.
+    // streaming-side `role: "toolCall"`. If the message is a
+    // thinking-only sub-block (text empty, thinking non-empty),
+    // we force the role to "thinking" so the server's
+    // `role: "assistant"` (the typical shape for the thinking
+    // sub-block of an assistant turn — typed content with no
+    // sibling text block) collides with the streaming-side
+    // `role: "thinking"`.
     //
     // The dedup key is `role + text + tsBucket + usage`.
     // `tsBucket = Int64(ts / 10_000)` is a 10-second bucket
@@ -625,6 +627,20 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     // preserving user-distinct messages typed at different
     // times. See PR #49 + the revert log in PR #50 for the
     // failure analysis that motivated restoring the bucket.
+    //
+    // IMPORTANT: the "force to thinking" override applies ONLY
+    // to the thinking-only sub-block case (no text body). A
+    // full assistant turn that ALSO carries a sibling
+    // `{type:"thinking", thinking: "..."}` block (the server's
+    // history shape for an assistant message that produced
+    // reasoning alongside its final text) must hash under its
+    // normalized role so it collides with the streaming copy of
+    // the same turn (which has no thinking block). Forcing
+    // role="thinking" on the "text + thinking" case made
+    // streamed-vs-server copies of the same assistant turn
+    // hash to different keys and produced duplicate assistant
+    // bubbles after pull-to-refresh (logged 2026-07-03,
+    // runId 6BB8B583-BE35-42F9-B380-7E7FE993048D).
     private func dedupKey(for message: OpenClawChatMessage) -> String {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -641,8 +657,17 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
             textForHash = ""
         }
 
+        // Thinking-only sub-block: no text body, has a
+        // reasoning block. The server's `chat.history` shape
+        // for a "thinking" sub-block of an assistant turn is
+        // `{type:"thinking", thinking:"..."}` with no sibling
+        // text block; the streaming path produces
+        // `role:"thinking", text:"<thinking>"`. Forcing both
+        // shapes to roleForHash="thinking" makes them collide.
+        let isThinkingOnlySubBlock = rawText.isEmpty && !rawThinking.isEmpty
+
         let roleForHash: String
-        if hasThinkingBlock {
+        if isThinkingOnlySubBlock {
             roleForHash = "thinking"
         } else {
             roleForHash = MessageCacheStorage.normalizeRoleForDedup(message.role)
