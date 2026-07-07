@@ -97,6 +97,41 @@ final class EventInterpreter {
     /// toolResult's. See `case "item"` for the matching sort-time
     /// read.
     private var toolReceivedAtByCall: [String: Date] = [:]
+    /// Per-tool-call incremental-output accumulator, keyed by
+    /// `"<runId>:<canonical>"` (canonical = `toolCallId ?? itemId`).
+    /// The streaming `command_output` events arrive as
+    /// `phase: "delta"` chunks, then a final `phase: "end"`.
+    /// The end event's `output` field is *sometimes* the full
+    /// accumulated text (typical SDK) and *sometimes* just the
+    /// last chunk (server-side truncation / aggregator bug
+    /// reproduced on 2026-07-07: a toolResult bubble that
+    /// contained only the first ~30% of the tool's stdout, with
+    /// later output lost because the end event arrived with an
+    /// incremental `output` rather than the full text).
+    ///
+    /// Without this accumulator the bubble would show only the
+    /// latest delta — the user sees a truncated JSON body with
+    /// `(live output truncated)` mid-text and `exit=0
+    /// duration=Nms` at the end, while the server's
+    /// `chat.history` later returns the FULL text and dedup
+    /// replaces the bubble with the complete version.
+    ///
+    /// The accumulator strategy: on each `command_output`
+    /// event, append the event's `output` to the accumulator
+    /// (regardless of phase). On `phase: "end"`, use the
+    /// accumulator's length — if it's longer than the
+    /// end-event's `output` alone, the accumulator is more
+    /// complete and wins. The dedup-replace path against the
+    /// server's `chat.history` payload is unchanged; this
+    /// fix only affects the live streaming display (so the
+    /// user sees the full content without having to wait for
+    /// a refresh).
+    ///
+    /// Cleared on `phase: "end` after the bubble is written
+    /// (matches `toolStartedAtByCall`'s cleanup at line ~1326).
+    /// Also cleared on `lifecycle=end` so stale partial
+    /// accumulators don't leak across runs.
+    private var accumulatedToolOutputByCall: [String: String] = [:]
     /// Per-run thinking text accumulator. Mirrors
     /// `accumulatedAssistantTextByRun` for the thinking stream —
     /// without an accumulator, incremental deltas ("thinking
@@ -314,25 +349,52 @@ final class EventInterpreter {
                     if cacheRead == nil, let cr = data["cacheRead"]?.intValue { cacheRead = cr }
                     if cacheWrite == nil, let cw = data["cacheWrite"]?.intValue { cacheWrite = cw }
                     AppLogger.log("agent lifecycle end - tokens: input: \(inputTokens ?? -1), output: \(outputTokens ?? -1), cacheRead: \(cacheRead ?? -1), cacheWrite: \(cacheWrite ?? -1)", category: .nativeChat)
-                    // TEMP DIAG: confirm the cache-anchor
-                    // resolution picks `assistantStartedAtByRun[runId]`
-                    // (the lifecycle=start wall clock), which is the
-                    // same value the server's `chat.history` uses as
-                    // the message's `timestamp` field. Earlier
-                    // implementations of this logic got the priority
-                    // order wrong; the current order is `start` →
-                    // event-`startedAt` → event-`endedAt` → now().
-                    // Log both candidates so future regressions show
-                    // the split. The `timestamp: chosenAnchor` line
-                    // below uses the same value — sharing
-                    // `chosenAnchor` here so the log and the actual
-                    // cache write are guaranteed to match.
-                    let chosenAnchor = assistantStartedAtByRun[runId]
-                        ?? (startedAtMs > 0
-                            ? Date(timeIntervalSince1970: startedAtMs / 1000)
-                            : (endedAtMs > 0
-                                ? Date(timeIntervalSince1970: endedAtMs / 1000)
-                                : Date()))
+                    // Cache anchor for the final assistant bubble's
+                    // sort `timestamp`. Priority:
+                    //   1. event `endedAtMs` (the lifecycle=end
+                    //      payload's ms-since-epoch) — the most
+                    //      accurate "when did this run actually
+                    //      finish" timestamp, falls within the run's
+                    //      wall-clock window.
+                    //   2. `assistantStartedAtByRun[runId]` (the
+                    //      lifecycle=start wall clock) — only used
+                    //      when the server omits `endedAtMs`.
+                    //   3. event `startedAtMs` (often 0 on the end
+                    //      event).
+                    //   4. now() as a last resort.
+                    //
+                    // Rationale for preferring `endedAtMs` over the
+                    // old default (`assistantStartedAtByRun`): the
+                    // bubble's persisted `timestamp` doubles as the
+                    // cache-sort key for post-exit re-entry. After
+                    // `clearMemory(for:)` clears the VM's
+                    // `receivedAt` overlay, the view falls back to
+                    // `timestamp` for ordering. Using the run's
+                    // START time (the old behavior) sorts the
+                    // assistant final EARLIER than its own
+                    // toolCall/toolResult siblings (which were
+                    // written at `Date()` mid-run), making the
+                    // assistant bubble appear at the top of the
+                    // run's group instead of the bottom — the
+                    // user-reported ordering regression on
+                    // 2026-07-06.
+                    //
+                    // Dedup compatibility with the server's
+                    // `chat.history` copy is preserved by
+                    // `MessageCacheStorage.dedupKey`'s 60-second
+                    // `tsBucket`: stream end and server history
+                    // land in the same bucket as long as the
+                    // timestamps are within ~60s of each other
+                    // (always true for a single run; the server's
+                    // history copy uses its own end-time ts which
+                    // is within a few ms of the streaming
+                    // `endedAtMs`).
+                    let chosenAnchor: Date = {
+                        if endedAtMs > 0 { return Date(timeIntervalSince1970: endedAtMs / 1000) }
+                        if let start = assistantStartedAtByRun[runId] { return start }
+                        if startedAtMs > 0 { return Date(timeIntervalSince1970: startedAtMs / 1000) }
+                        return Date()
+                    }()
                     AppLogger.log("agent lifecycle end - cache anchor: startedAtRun=\(assistantStartedAtByRun[runId]?.timeIntervalSince1970 ?? -1) endedAtMs=\(endedAtMs) → chosen=\(chosenAnchor.timeIntervalSince1970)", category: .nativeChat)
                     // Authoritative source for the final bubble's text is
                     // `accumulatedAssistantTextByRun[runId]` (populated by
@@ -421,6 +483,15 @@ final class EventInterpreter {
                     lastSeenSeqByRun.removeValue(forKey: runId)
                     toolCallIdAliasByRun.removeValue(forKey: runId)
                     toolLatestCanonicalByRun.removeValue(forKey: runId)
+                    // BUG-8: clear any per-tool accumulated
+                    // output for this run (tools whose
+                    // `command_output (end)` never arrived —
+                    // e.g. run aborted — would otherwise leave
+                    // stale entries that could leak into the
+                    // next run via a toolKey collision).
+                    for (key, _) in accumulatedToolOutputByCall where key.hasPrefix("\(runId):") {
+                        accumulatedToolOutputByCall.removeValue(forKey: key)
+                    }
                     // Fragment counter — must be reset so the next
                     // run for this same runId (in the unusual case
                     // of a session resume or a re-spawn) starts from
@@ -1219,6 +1290,32 @@ final class EventInterpreter {
                 // `<runId>:toolResult:<canonical>` namespace (canonical =
                 // `toolCallId ?? itemId`) so it upserts into the same
                 // entry created by `item` (end) / legacy `tool` (result).
+                //
+                // BUG-8 (user-reported 2026-07-07): the streaming
+                // toolResult bubble showed only a partial chunk of the
+                // tool's stdout (cut off mid-JSON), even though the
+                // server's later `chat.history` returned the FULL
+                // text. Root cause: each `command_output (delta)` event
+                // upserted its `output` chunk into the cache (replace
+                // by id), overwriting the previous chunk. When the
+                // final `command_output (end)` arrived, its `output`
+                // field was either incremental (last chunk only) or
+                // short of the full accumulated body — leaving the
+                // bubble with only the last few lines of stdout and
+                // the `exit=0 duration=Nms` trailer appended.
+                //
+                // The fix: maintain a per-toolKey accumulator
+                // (`accumulatedToolOutputByCall`) that concatenates
+                // every event's `output` field across phases. On
+                // `phase: "end"`, use the accumulator's text as
+                // `resultText` (it's monotonically growing; the
+                // end event's own `output` is a strict subset if it's
+                // incremental, or equal if the SDK sends the full
+                // final text). Suffix-overlap dedup (same as the
+                // `accumulatedAssistantTextByRun` path) avoids
+                // doubling the boundary between an event's tail and
+                // the next event's head when the SDK sends a few
+                // bytes of overlap for safety.
                 guard let itemId = data["itemId"]?.stringValue else {
                     AppLogger.log("agent command_output missing itemId, skipping. keys: \(data.keys.map { $0 })", category: .nativeChat, level: .warning)
                     return
@@ -1232,7 +1329,44 @@ final class EventInterpreter {
                 let exitCode = data["exitCode"]?.intValue
                 let durationMs = data["durationMs"]?.intValue
                 AppLogger.log("agent command_output - phase: \(outputPhase ?? "nil"), itemId: \(itemId), output len: \(output.count), exitCode: \(exitCode.map(String.init) ?? "nil")", category: .nativeChat)
-                var resultText = output
+                // Accumulate `output` across phases. Suffix-overlap
+                // dedup mirrors `accumulatedAssistantTextByRun`'s
+                // pattern (the SDK occasionally sends a few bytes of
+                // overlap between adjacent chunks for safety; without
+                // dedup the boundary would be doubled).
+                if !output.isEmpty {
+                    let prev = accumulatedToolOutputByCall[toolKey] ?? ""
+                    if prev.isEmpty {
+                        accumulatedToolOutputByCall[toolKey] = output
+                    } else if output.hasPrefix(prev) {
+                        // Server sent the full final text on end —
+                        // accept it as the new accumulator value
+                        // (it includes any text the deltas may have
+                        // missed).
+                        accumulatedToolOutputByCall[toolKey] = output
+                    } else if prev.hasSuffix(output) {
+                        // Delta already accumulated; no-op.
+                    } else {
+                        // Find the longest suffix of `prev` that's a
+                        // prefix of `output`; concatenate without
+                        // the overlap. Common when both ends emit
+                        // partial chunks.
+                        var overlap = 0
+                        let maxOverlap = min(prev.count, output.count)
+                        if maxOverlap > 0 {
+                            for k in stride(from: maxOverlap, through: 1, by: -1) {
+                                let prevSuffix = prev.suffix(k)
+                                if output.hasPrefix(prevSuffix) {
+                                    overlap = k
+                                    break
+                                }
+                            }
+                        }
+                        accumulatedToolOutputByCall[toolKey] =
+                            prev + output.dropFirst(overlap)
+                    }
+                }
+                var resultText = accumulatedToolOutputByCall[toolKey] ?? output
                 if outputPhase == "end" {
                     // Append exit info so the bubble shows the command's
                     // disposition even if `output` is empty.
@@ -1292,8 +1426,16 @@ final class EventInterpreter {
                 // expected to grow unboundedly across runs in a single
                 // session because lifecycle=end typically follows the
                 // last tool's item (end) shortly after.
+                //
+                // BUG-8: also clear `accumulatedToolOutputByCall`
+                // on `phase: "end"` so the next tool call (with a
+                // different `toolKey`) starts fresh. Without this,
+                // a reuse of the same `toolKey` would inherit stale
+                // text — see also the lifecycle=end bulk cleanup
+                // below.
                 if outputPhase == "end" {
                     toolStartedAtByCall.removeValue(forKey: toolKey)
+                    accumulatedToolOutputByCall.removeValue(forKey: toolKey)
                 }
             default:
                 // plan, approval, patch, compaction, error — not yet surfaced.
