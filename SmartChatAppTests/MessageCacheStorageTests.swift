@@ -671,8 +671,27 @@ final class MessageCacheStorageTests: XCTestCase {
         await storage.append([streamed], for: key)
         await storage.append([serverHistory], for: key)
         let loaded = await storage.load(for: key)
-        XCTAssertEqual(loaded.count, 1,
-            "streamed assistant + server history assistant (with sibling thinking block) for the same logical turn must dedup — got \(loaded.count) entries, ids=\(loaded.map { String($0.id.uuidString.prefix(8)) })")
+        // After BUG-7's replace-on-match fix: the streaming
+        // entry is REPLACED with the server entry (streaming id
+        // preserved). The server's thinking block now lives
+        // INLINE in the assistant entry's content array
+        // (`{type:"thinking", thinking:"..."}` as a sibling of
+        // the text block). `ChatMessageConverter.toChatMessage`
+        // emits it as a separate `role:"thinking"` bubble from
+        // the inline block (via the `emitThinkingFirst` path),
+        // so the view still shows the reasoning — but the
+        // cache only has ONE assistant entry, no separate
+        // standalone `role:"thinking"` entry needed.
+        let assistantEntries = loaded.filter { $0.role == "assistant" }
+        let thinkingEntries = loaded.filter { $0.role == "thinking" }
+        XCTAssertEqual(assistantEntries.count, 1,
+            "streamed assistant bubble must be preserved as a single assistant entry after server-history dedup — got \(assistantEntries.count)")
+        XCTAssertEqual(thinkingEntries.count, 0,
+            "after replace-on-match, the server's thinking block lives INLINE on the assistant entry (no separate role:thinking entry needed) — got \(thinkingEntries.count), all=\(loaded.map { "\($0.role):\(String($0.id.uuidString.prefix(8)))" })")
+        let inlineThinking = assistantEntries.first?.content.first(where: { $0.thinking?.isEmpty == false })?.thinking
+        XCTAssertEqual(inlineThinking,
+            "The user is asking for help.",
+            "the server's reasoning text must survive the replace-on-match as an inline content block on the assistant entry")
     }
 
     // MARK: - dedupKey: `usage` is NOT part of the signature
@@ -1008,5 +1027,360 @@ final class MessageCacheStorageTests: XCTestCase {
         let onDisk = await storage2.load(for: key)
         XCTAssertEqual(onDisk.count, 0,
                        "cleared session must not resurrect its data via a debounced flush")
+    }
+
+    // MARK: - dedupKey: 60-second tsBucket + toolResult trailer strip
+    //
+    // Background: two failure logs (2026-07-06 device captures)
+    // showed duplicate bubbles that the previous dedup missed:
+    //
+    //   CACHE[11] vs CACHE[15] (assistant turn)
+    //     Stream wrote the assistant final at ts ~1783312535993
+    //     (run-start bucket); server's `chat.history` returned
+    //     the same turn at ts ~1783312544721 (run-end bucket).
+    //     ~8.7s apart — crosses the old 10-second tsBucket
+    //     boundary. Even with the `isThinkingOnlySubBlock`
+    //     fix from 42c868d, the two buckets hash to different
+    //     keys.
+    //
+    //   CACHE[14] vs CACHE[16] (toolResult)
+    //     Modern `command_output (end)` path appended
+    //     `exit=0 duration=2832ms` to the body; legacy
+    //     `item` (end) / `tool` (result) paths did not.
+    //     Same logical tool execution → different text bytes
+    //     → no dedup → duplicate bubble.
+    //
+    // Fixes:
+    //   - `tsBucket = Int64(ts / 60_000)` (60s window)
+    //   - strip trailing `exit=… duration=…ms` from text
+    //     before hashing.
+    //
+    // These tests pin both fixes. The "hi" twice two-hours-
+    // apart regression test from `b6171c8` is preserved by
+    // `test_append_dedupsByContent_userTextTwoHoursApart_kept`
+    // below.
+
+    func test_append_dedupsByContent_streamedVsServerAssistantEightSecondsApart_deduped() async {
+        // CACHE[11] vs CACHE[15]: same assistant text body,
+        // streamed-final ts ~8.7s before server-history ts.
+        // Old 10s bucket crossed the boundary (178331253 vs
+        // 178331254); new 60s bucket puts both in 178331254.
+        let key = "session-1"
+        let body = "**石景山当前天气** ☀️\n| 指标 | 数据 |\n|------|------|\n| 温度 | **30°C**（体感 29°C） |"
+        let streamed = OpenClawChatMessage(
+            id: UUID(), role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: body,
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1_783_312_535_993.0,
+            toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        let serverHistory = OpenClawChatMessage(
+            id: UUID(), role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "text", text: body,
+                    thinking: nil, thinkingSignature: nil, mimeType: nil,
+                    fileName: nil, content: nil, id: nil, name: nil,
+                    arguments: nil),
+                OpenClawChatMessageContent(
+                    type: "thinking", text: nil,
+                    thinking: "The user is asking about Shijingshan (石景山) weather.",
+                    thinkingSignature: nil, mimeType: nil,
+                    fileName: nil, content: nil, id: nil, name: nil,
+                    arguments: nil),
+            ],
+            timestamp: 1_783_312_544_721.0,
+            toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        await storage.append([streamed], for: key)
+        await storage.append([serverHistory], for: key)
+        let loaded = await storage.load(for: key)
+        // After BUG-7's replace-on-match: the streaming entry
+        // is replaced with the server entry (streaming id
+        // preserved), the server's thinking block lives
+        // INLINE on the assistant entry. Cache has exactly
+        // 1 assistant entry.
+        let assistantEntries = loaded.filter { $0.role == "assistant" }
+        let thinkingEntries = loaded.filter { $0.role == "thinking" }
+        XCTAssertEqual(assistantEntries.count, 1,
+            "streamed + server-history assistant turn ~8.7s apart must dedup to 1 assistant entry under 60s bucket — got \(assistantEntries.count) assistants")
+        XCTAssertEqual(thinkingEntries.count, 0,
+            "after replace-on-match, the server's thinking block lives INLINE on the assistant entry — got \(thinkingEntries.count) standalone thinking entries")
+        let inlineThinking = assistantEntries.first?.content.first(where: { $0.thinking?.isEmpty == false })?.thinking
+        XCTAssertEqual(inlineThinking, "The user is asking about Shijingshan (石景山) weather.",
+            "the server's reasoning text must survive as an inline content block on the assistant entry")
+    }
+
+    func test_append_dedupsByContent_toolResultBodyVsBodyWithTrailer_deduped() async {
+        // CACHE[14] vs CACHE[16]: same tool execution output,
+        // one write with the trailing `exit=… duration=…ms`
+        // (modern `command_output (end)`) and one without
+        // (legacy `item` (end) / `tool` (result)).
+        let key = "session-1"
+        let body = "温: 30°C 体感: 29°C\n湿: 55% 风: 4km/h SSW\n云: 25% 雨: 0.0mm\n能见: 10km UV: 7"
+        let withTrailer = body + "\nexit=0 duration=2832ms"
+        let streamed = OpenClawChatMessage(
+            id: UUID(), role: "toolResult",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: body,
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1_783_312_544_719.0,
+            toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        let withTrailerMsg = OpenClawChatMessage(
+            id: UUID(), role: "toolResult",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: withTrailer,
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1_783_312_545_134.259,
+            toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        await storage.append([streamed], for: key)
+        await storage.append([withTrailerMsg], for: key)
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 1,
+            "toolResult body vs body+exit/duration trailer must dedup — got \(loaded.count) entries")
+    }
+
+    // MARK: - toolResult: toolCallId-based dedup fallback (BUG-8 follow-up)
+    //
+    // When the streaming `command_output (end)` event's
+    // `output` field arrives with an *incremental* (truncated)
+    // body rather than the full accumulated stdout, the
+    // streaming toolResult's text is shorter than the
+    // server's `chat.history` full text. Strict content-dedup
+    // (role+text+tsBucket) hashes them differently because
+    // of the byte-length delta, and the role+text fuzzy
+    // fallback also misses because the texts aren't equal.
+    //
+    // The fix: when both sides are `role:"toolResult"` and
+    // their `toolCallId`+`toolName` match within a 60s
+    // bucket, treat as the same logical call. Server's text
+    // is always authoritative (it carries the full stdout
+    // accumulated by the gateway); replace-on-match fires
+    // because server text length > streaming text length by
+    // > 64 bytes (the threshold chosen so that legitimate
+    // whitespace/newline deltas between streaming and
+    // server text don't trigger a replace for non-toolResult
+    // roles).
+
+    func test_append_dedupsByToolCallId_streamingTruncatedVsServerFull_toolResultReplaced() async {
+        let key = "session-1"
+        let sharedToolCallId = "weather-tool-abc123"
+        let sharedToolName = "get_weather"
+        // Streaming-side wrote a truncated body (e.g., the
+        // gateway emitted `command_output (end)` with
+        // incremental `output` rather than full stdout).
+        let streamedTruncated = "...truncated weather data...\nexit=0 duration=644ms"
+        let streamed = OpenClawChatMessage(
+            id: UUID(), role: "toolResult",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: streamedTruncated,
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1_783_328_621_179.0,
+            toolCallId: sharedToolCallId, toolName: sharedToolName,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        await storage.append([streamed], for: key)
+        await storage.flushPendingWrites()
+
+        // Server returns the full body (no trailer — server
+        // doesn't add the exit/duration suffix).
+        let fullBody = String(repeating: "full weather data, lots of JSON content here, ", count: 20)
+        let server = OpenClawChatMessage(
+            id: UUID(), role: "toolResult",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: fullBody,
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            // Same 60s bucket as streaming
+            timestamp: 1_783_328_621_180.0,
+            toolCallId: sharedToolCallId, toolName: sharedToolName,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        await storage.append([server], for: key)
+
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 1,
+            "BUG-8 follow-up: toolCallId+toolName+tsBucket fallback must collapse streaming-truncated and server-full to a single entry — got \(loaded.count) entries")
+        XCTAssertEqual(loaded.first?.content.first?.text, fullBody,
+            "the surviving entry must be the server's full text (replace-on-match uses server's authoritative stdout)")
+        XCTAssertEqual(loaded.first?.toolCallId, sharedToolCallId,
+            "toolCallId must survive the replace")
+        XCTAssertEqual(loaded.first?.toolName, sharedToolName,
+            "toolName must survive the replace")
+    }
+
+    func test_append_dedupsByContent_userTextTwoHoursApart_kept() async {
+        // Regression guard for the `b6171c8` revert: widening
+        // the tsBucket to 60s must NOT collapse legitimate
+        // user retries separated by 2 hours (the case that
+        // motivated restoring the bucket after the PR #49
+        // first attempt dropped it entirely).
+        let key = "session-1"
+        let first = OpenClawChatMessage(
+            id: UUID(), role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: "hi",
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1_783_000_000_000.0,
+            toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        let twoHoursLater = OpenClawChatMessage(
+            id: UUID(), role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: "hi",
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1_783_007_200_500.0,
+            toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        await storage.append([first], for: key)
+        await storage.append([twoHoursLater], for: key)
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 2,
+            "user 'hi' typed twice 2 hours apart must NOT dedup under 60s bucket — got \(loaded.count) entries (regression: PR #49 first attempt dropped the bucket and merged these)")
+    }
+
+    func test_append_dedupsByContent_assistantTextEmojiVariationSelector_deduped() async {
+        // The duplicate-assistant-bubble scenario from
+        // user-reported log captured 2026-07-06T06:43
+        // (CACHE[30] vs CACHE[32]): the server's
+        // `chat.history` returned the same logical
+        // assistant turn TWICE for the same run, with the
+        // emoji variation selector differing in the title.
+        // One copy had `🌤️` (U+1F324 U+FE0F) and the other
+        // `🌤` (U+1F324). Same human-visible character, but
+        // different UTF-8 bytes — the byte-sensitive
+        // dedupKey hash split them into two entries.
+        //
+        // Fix: `normalizeTextForDedupHash` strips
+        // U+FE0E / U+FE0F (text/emoji presentation
+        // selectors) before hashing. The two copies now
+        // hash identically and dedup to a single entry.
+        let key = "session-1"
+        let bodyWithVS = "**张家口当前天气** 🌤️\n| 指标 | 数据 |\n|------|------|"
+        let bodyWithoutVS = "**张家口当前天气** 🌤\n| 指标 | 数据 |\n|------|------|"
+        let first = OpenClawChatMessage(
+            id: UUID(), role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: bodyWithVS,
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1_783_318_080_981.0,
+            toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        let second = OpenClawChatMessage(
+            id: UUID(), role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: bodyWithoutVS,
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1_783_318_085_324.0,
+            toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        await storage.append([first], for: key)
+        await storage.append([second], for: key)
+        let loaded = await storage.load(for: key)
+        XCTAssertEqual(loaded.count, 1,
+            "two assistant copies differing only by emoji variation selector must dedup — got \(loaded.count) entries")
+    }
+
+    // MARK: - thinking-splice idempotency across repeated fetches
+    //
+    // Background: every `fetchAndMergeFromNetwork` (initial
+    // session enter + every pull-to-refresh) appends the
+    // server's `chat.history` to the cache. The dedup
+    // branch splices a thinking entry when the existing
+    // entry is an assistant with no reasoning block and
+    // the server's copy has a sibling reasoning block.
+    // The first version of this code used a deterministic
+    // id `<existing.uuid>:thinking:<i>` for the spliced
+    // thinking to make the splice idempotent. But
+    // `OpenClawChatMessage.id` is a `UUID` and the
+    // `:thinking:<i>` suffix makes the string unparseable
+    // by `UUID(uuidString:)`, so the actual id was
+    // `UUID()` (a fresh random UUID) on every call. The
+    // id-based check then never matched across runs and
+    // each refresh added one more spliced thinking
+    // bubble (user-reported 2026-07-06T09:04, log showed
+    // 4 thinking entries with identical text after 4
+    // refreshes). The fix: content-based idempotency —
+    // skip if any existing entry already carries the
+    // same reasoning text. Reasoning text within a
+    // single run is unique, so this is safe.
+
+    func test_append_spliceThinking_isIdempotentAcrossRepeatedFetches() async {
+        // Simulates 4 sequential `fetchAndMergeFromNetwork`
+        // calls for the same session. Each call appends
+        // the server's history (with the assistant +
+        // thinking block). The cache should end with
+        // exactly ONE spliced thinking entry, not four.
+        let key = "session-1"
+        let body = "**北京海淀当前天气** ☀️\n| 指标 | 数据 |\n|------|------|"
+        let reasoning = "The user sent multiple messages - some f..."
+        // The streaming-side write: assistant body,
+        // no thinking block. Different id from the
+        // server's copy.
+        let streamed = OpenClawChatMessage(
+            id: UUID(), role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text", text: body,
+                thinking: nil, thinkingSignature: nil, mimeType: nil,
+                fileName: nil, content: nil, id: nil, name: nil,
+                arguments: nil)],
+            timestamp: 1_783_328_621_179.0,
+            toolCallId: nil, toolName: nil,
+            usage: nil, stopReason: nil, errorMessage: nil)
+        await storage.append([streamed], for: key)
+
+        // 4 server-history fetches. Each passes a fresh
+        // server-assigned id (matches dedupKey with the
+        // streamed entry, KEEP-on-match) and a sibling
+        // thinking block.
+        for _ in 0..<4 {
+            let serverCopy = OpenClawChatMessage(
+                id: UUID(), role: "assistant",
+                content: [
+                    OpenClawChatMessageContent(
+                        type: "text", text: body,
+                        thinking: nil, thinkingSignature: nil, mimeType: nil,
+                        fileName: nil, content: nil, id: nil, name: nil,
+                        arguments: nil),
+                    OpenClawChatMessageContent(
+                        type: "thinking", text: nil,
+                        thinking: reasoning,
+                        thinkingSignature: nil, mimeType: nil,
+                        fileName: nil, content: nil, id: nil, name: nil,
+                        arguments: nil),
+                ],
+                timestamp: 1_783_328_621_179.0,
+                toolCallId: nil, toolName: nil,
+                usage: nil, stopReason: nil, errorMessage: nil)
+            await storage.append([serverCopy], for: key)
+        }
+
+        let loaded = await storage.load(for: key)
+        let thinkingEntries = loaded.filter { $0.role.lowercased() == "thinking" }
+        XCTAssertEqual(loaded.count, 1,
+            "after 4 server fetches + 1 streaming write, replace-on-match should leave just 1 assistant entry (the streaming one, with server's content inline) — got \(loaded.count) entries: roles=\(loaded.map { $0.role })")
+        XCTAssertEqual(thinkingEntries.count, 0,
+            "after replace-on-match, the server's thinking block lives INLINE on the assistant entry — no separate thinking entry needed")
+        let inlineThinking = loaded.first?.content.first(where: { $0.thinking?.isEmpty == false })?.thinking
+        XCTAssertEqual(inlineThinking, reasoning,
+            "the inline thinking block must carry the server's reasoning text verbatim (and survive across repeated fetches)")
     }
 }
