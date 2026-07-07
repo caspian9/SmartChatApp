@@ -425,16 +425,29 @@ final class NativeChatViewModel {
 
     private func sortForDisplay(_ messages: [ChatMessage]) -> [ChatMessage] {
         return messages.sorted { a, b in
-            // Same non-nil runId → seq (server's monotonic order).
-            // Missing `seq` falls back to Int.max (i.e., sort last
-            // among the run's events), then to `receivedAt ?? timestamp`
-            // as the final tie-breaker. `receivedAt` (set by
-            // `recordStreamingMetadata` from `Date()`) is the
-            // wall-clock time of the most recent
-            // `receiveMessage` call for this id — using it as
-            // the tie-breaker puts the most recently active
-            // bubble at the bottom within a run.
+            // Same non-nil runId → sort by the server's
+            // event-time order. Priority:
+            //   1. `endedAt` — the server's `payload.endedAt` /
+            //      lifecycle=end / `command_output` (end) /
+            //      `item` (end) timestamp. Reflects WHEN THE
+            //      EVENT ACTUALLY HAPPENED on the server, not
+            //      when the client received it. This is the
+            //      correct sort key for inter-stream ordering
+            //      (e.g. toolResult BEFORE assistant final
+            //      when the server actually finished the tool
+            //      before emitting the lifecycle=end, even if
+            //      the wire order is reversed due to buffering
+            //      or socket flush timing).
+            //   2. `seq` — server's monotonic per-stream seq.
+            //      Tiebreaker for events within the SAME
+            //      stream that share an endedAt.
+            //   3. `receivedAt ?? timestamp` — last resort,
+            //      for events missing both `endedAt` and
+            //      `seq`.
             if let runA = a.runId, let runB = b.runId, runA == runB {
+                let endA = a.endedAt ?? Date.distantPast
+                let endB = b.endedAt ?? Date.distantPast
+                if endA != endB { return endA < endB }
                 let seqA = a.seq ?? Int.max
                 let seqB = b.seq ?? Int.max
                 if seqA != seqB { return seqA < seqB }

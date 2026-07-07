@@ -74,6 +74,15 @@ final class ChatMessageConverterTests: XCTestCase {
         // The view renders each as its own bubble, preserving the
         // pre-existing display logic (ThinkingCardView for
         // role:"thinking").
+        //
+        // Updated (2026-07-06): the user reported the order
+        // `[text, thinking]` showed the response ABOVE its
+        // reasoning, which is the opposite of the natural
+        // reasoning-then-response flow. The new heuristic emits
+        // the thinking block FIRST when the message has both
+        // a sibling thinking block AND a non-thinking main
+        // entry (text body or toolCall), regardless of the
+        // content-block order on the wire.
         let content: [OpenClawChatMessageContent] = [
             OpenClawChatMessageContent(
                 type: "text", text: "Hello!", thinking: nil,
@@ -88,10 +97,10 @@ final class ChatMessageConverterTests: XCTestCase {
             usage: nil, stopReason: nil, errorMessage: nil)
         let chats = ChatMessageConverter.toChatMessage(from: msg)
         XCTAssertEqual(chats.count, 2, "[text, thinking] bundle must emit both as separate ChatMessages")
-        XCTAssertEqual(chats[0].role, "assistant", "first entry is the text response")
-        XCTAssertEqual(chats[0].text, "Hello!")
-        XCTAssertEqual(chats[1].role, "thinking", "second entry is the thinking")
-        XCTAssertEqual(chats[1].text, "reasoning")
+        XCTAssertEqual(chats[0].role, "thinking", "thinking emits FIRST when assistant has a sibling thinking block")
+        XCTAssertEqual(chats[0].text, "reasoning")
+        XCTAssertEqual(chats[1].role, "assistant", "text response follows the thinking")
+        XCTAssertEqual(chats[1].text, "Hello!")
     }
 
     func testToChatMessage_thinkingThenText_emitThinkingFirst() {

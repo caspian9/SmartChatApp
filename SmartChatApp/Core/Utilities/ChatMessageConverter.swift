@@ -95,15 +95,31 @@ enum ChatMessageConverter {
         // collapsed a `[thinking, text]` content order (the model's
         // actual reasoning-then-response flow) into `[text,
         // thinking]`, showing the response above its reasoning.
+        //
         // The user reported the order looks wrong for history
-        // messages whose `role == "assistant"` carries a thinking
-        // block first; they expect the reasoning to lead the
-        // response. The new rule: when the FIRST non-empty content
-        // block is a thinking block, emit the thinking bubbles
-        // first, then the main text. When the first block is a
-        // text block, keep the previous [text, then thinking]
-        // order (the existing `testToChatMessage_textAndThinkingBundle_emitsBoth`
-        // contract).
+        // messages whose `role == "assistant"` carries a sibling
+        // thinking block: they expect the reasoning to lead the
+        // response in every case, not only when the server sent
+        // the thinking block first. So the new rule is: if the
+        // message has a sibling thinking block AND a non-thinking
+        // main entry (text or toolCall), emit the thinking bubbles
+        // first regardless of the content-block order. When the
+        // message has no thinking block, the previous [text, then
+        // thinking] / [text only] order is preserved.
+        //
+        // Two trigger conditions both result in `emitThinkingFirst
+        // == true`:
+        //   1. First non-empty content block is a thinking block
+        //      (the original `firstBlockIsThinking` check — covers
+        //      the `[thinking, text]` server shape).
+        //   2. The message has any sibling thinking block AND a
+        //      non-thinking main entry (text body or toolCall) —
+        //      covers the `[text, thinking]` server shape and the
+        //      spliced thinking case (the splice produces a
+        //      separate `role:"thinking"` entry which is
+        //      independent, so condition (1) doesn't fire on the
+        //      spliced entry; it fires here on the parent
+        //      assistant entry instead).
         var firstBlockIsThinking = false
         for contentItem in msg.content {
             if let t = contentItem.text, !t.isEmpty { break }
@@ -112,9 +128,7 @@ enum ChatMessageConverter {
                 break
             }
         }
-        let emitThinkingFirst = firstBlockIsThinking
-            && !mainIsThinking
-            && !allThinking.isEmpty
+        let hasSiblingThinking = !allThinking.isEmpty
         // ToolCall text (for inline merging with the main entry).
         // toolCall never gets its own bubble — it's always inline
         // with the text or the thinking, mirroring the previous
@@ -142,6 +156,10 @@ enum ChatMessageConverter {
         }
         let ts = msg.timestamp ?? 0
         let dateTimestamp = Date(timeIntervalSince1970: ts / 1000)
+        let hasNonThinkingMain = (mainText != nil) || hasToolCall
+        let emitThinkingFirst = hasSiblingThinking
+            && hasNonThinkingMain
+            && !mainIsThinking
         // History messages always render as `state: "final"` — the
         // SDK's `OpenClawChatMessage` does not carry streaming
         // state (no `state`/`seq`/`startedAt`/`endedAt` fields), and
