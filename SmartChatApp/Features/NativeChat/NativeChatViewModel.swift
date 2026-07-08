@@ -476,6 +476,23 @@ final class NativeChatViewModel {
             withMeta.startedAt = m.startedAt ?? msg.startedAt
             withMeta.endedAt = m.endedAt ?? msg.endedAt
             withMeta.receivedAt = m.receivedAt
+            // Restore `state` (issue #47 bug 2): the converter
+            // hardcodes `state = "final"` for every persisted
+            // message, so without this overlay a streaming
+            // placeholder reads as `"final"` to the view and the
+            // `TypingIndicatorView` branch never fires. Only
+            // overlay when the metadata has a non-nil state —
+            // `nil` means the helper has no record (e.g. the
+            // message predates this overlay's existence, or was
+            // written by a path that doesn't call
+            // `recordStreamingMetadata`); in that case trust the
+            // converter's `"final"` so we don't accidentally
+            // resurrect a finished bubble. The "streaming" value
+            // is only ever captured from a `receiveMessage` call
+            // that ran with `message.state == "streaming"`.
+            if let overlayState = m.state {
+                withMeta.state = overlayState
+            }
             return withMeta
         }
     }
@@ -679,6 +696,23 @@ final class NativeChatViewModel {
         /// the placeholder of a newer run — opposite of the user's
         /// "latest update at the bottom" expectation).
         let receivedAt: Date
+        /// Streaming state (`"streaming"` vs `"final"`) at the
+        /// last `receiveMessage` call. **Required** for the view's
+        /// `TypingIndicatorView` + `#\(seq)` footer + `→ HH:MM`
+        /// end-time footer to reflect "in-flight" vs "done": the
+        /// `ChatMessageConverter` hardcodes every persisted
+        /// message's `state` to `"final"` (the SDK's
+        /// `OpenClawChatMessage` has no `state` field, so the
+        /// round-trip collapses both streaming and final writes to
+        /// `state == "final"`). Without this overlay the view
+        /// sees a streaming placeholder as a finished bubble —
+        /// no typing dots, but `#\(seq)` / `HH:mm` still show
+        /// because those are overlaid separately. Captured here
+        /// and restored by `applyStreamingMetadata` so the bubble
+        /// re-acquires the in-flight state before render. Set to
+        /// `nil` when the helper has no record (treated as
+        /// "trust the converter's `final"`).
+        let state: String?
     }
 
     /// In-memory overlay for `seq` / `startedAt` / `endedAt`.
@@ -713,7 +747,16 @@ final class NativeChatViewModel {
             seq: message.seq,
             startedAt: message.startedAt,
             endedAt: message.endedAt,
-            receivedAt: Date()
+            receivedAt: Date(),
+            // Carry the in-flight flag through the store
+            // round-trip. The `ChatMessageConverter` hardcodes
+            // every persisted message's `state` to `"final"`
+            // (the SDK's `OpenClawChatMessage` has no `state`
+            // field); without this overlay the view sees a
+            // streaming placeholder as finished — no typing dots
+            // (issue #47 bug 2). See the `StreamingMetadata.state`
+            // doc for the full rationale.
+            state: message.state
         )
         var perSession = streamingMetadataBySession[sessionKey] ?? [:]
         perSession[normalizedId] = metadata
