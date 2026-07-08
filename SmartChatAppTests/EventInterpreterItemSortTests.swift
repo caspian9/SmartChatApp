@@ -45,12 +45,41 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // toolCall.start (T1) < command_output.end (T3) < item.end (T4),
         // so the toolCall SHOULD be the start time and the toolResult
         // the end time, with the toolCall sorting first.
+        //
+        // FIX-9 follow-up #3 (2026-07-08) test update: ts
+        // values must be in the same era as the local
+        // `Date()` the EventInterpreter stamps on
+        // `chatMessage.timestamp` for the toolCall
+        // (`toolReceivedAtByCall[toolKey]` is set to
+        // `Date()` at item phase=start arrival). Pre-fix
+        // the persisted `timestamp` for both toolCall and
+        // toolResult was the local `Date()`, so a small
+        // ts (e.g., 1000 ms = 1970) was comparable to the
+        // local Date. Post-fix, the toolResult's persisted
+        // `timestamp` is the server's `payload.ts` (set
+        // via `endedAt`), which is in the same era as the
+        // local Date. Using 1970-era ts for toolResult
+        // would put the persisted value at ~1.2 seconds
+        // since epoch — 12 orders of magnitude smaller
+        // than the 2026-era local Date — and the sort
+        // would render the toolResult (1970 ts) BEFORE
+        // the toolCall (2026 Date) in the store's
+        // timestamp-ascending sort. The view's
+        // `sortForDisplay` pair tie-breaker
+        // (FIX-9 follow-up) overrides this for the chat
+        // view, but the store's own sort would still
+        // surface toolResult first if read directly (as
+        // this test does). Using realistic 2026-era ts
+        // values keeps the test's intent intact.
         let runId = "r-item-1"
         let canonical = "tc-bash-1"
-        let t1: Int = 1_000  // item (start)
-        let t2: Int = 1_100  // command_output (delta)
-        let t3: Int = 1_200  // command_output (end)
-        let t4: Int = 1_300  // item (end)
+        // Anchor at "now" so the test runs in any era.
+        // Spacing matches the original (1s/100ms/200ms).
+        let baseTs: Int = Int(Date().timeIntervalSince1970 * 1000)
+        let t1: Int = baseTs              // item (start)
+        let t2: Int = baseTs + 100        // command_output (delta)
+        let t3: Int = baseTs + 200        // command_output (end)
+        let t4: Int = baseTs + 300        // item (end)
 
         await interpreter.handleTransportEvent(
             .agent(makeItemEvent(runId: runId, ts: t1, canonical: canonical, phase: "start", summary: nil)),
@@ -103,10 +132,17 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // to be correct, but was fragile). With the fix, the
         // toolCall's sort key is pinned to the start time so the
         // result is correct by construction.
+        //
+        // FIX-9 follow-up #3 (2026-07-08): see the
+        // `baseTs` rationale in the previous test —
+        // 2026-era ts values keep the sort comparable
+        // across the local Date() (toolCall) and the
+        // server ts (toolResult, post-fix).
         let runId = "r-item-2"
         let canonical = "tc-bash-2"
-        let t1: Int = 2_000
-        let t4: Int = 2_500  // item (end) carries the summary, this is also the toolResult's ts
+        let baseTs: Int = Int(Date().timeIntervalSince1970 * 1000)
+        let t1: Int = baseTs
+        let t4: Int = baseTs + 500  // item (end) carries the summary, this is also the toolResult's ts
 
         await interpreter.handleTransportEvent(
             .agent(makeItemEvent(runId: runId, ts: t1, canonical: canonical, phase: "start", summary: nil)),

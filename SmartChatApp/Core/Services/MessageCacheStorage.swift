@@ -262,15 +262,511 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
                 continue
             }
             let key = dedupKey(for: msg)
-            if allMessages.contains(where: { dedupKey(for: $0) == key }) {
+            // Strict content-dedup: same role + same text +
+            // same 60s timestamp bucket. Catches
+            // streaming-vs-server writes of the same logical
+            // message when both sides land within ~60s of
+            // each other (the typical case).
+            var existingIdx = allMessages.firstIndex(where: { dedupKey(for: $0) == key })
+            if existingIdx == nil {
+                // toolResult-specific fallback (BUG-8
+                // follow-up, user-reported 2026-07-07):
+                // when the streaming `command_output (end)`
+                // event's `output` is itself incremental
+                // rather than cumulative, the streaming
+                // toolResult's text ends mid-JSON — strictly
+                // shorter than the server's `chat.history`
+                // full text. The strict content-dedup hashes
+                // them differently (different byte lengths →
+                // different SHA256), and the role+text fuzzy
+                // fallback above also misses because the
+                // texts aren't equal.
+                //
+                // For toolResult the *correct* identity
+                // signal is `(toolCallId, toolName, tsBucket)`:
+                //   - toolCallId is the canonical call id
+                //     emitted by both the streaming path
+                //     (`<runId>:toolResult:<canonical>`) and
+                //     the server's `chat.history` payload
+                //     (stored verbatim in
+                //     `OpenClawChatMessage.toolCallId`).
+                //   - toolName ensures a sub-agent's
+                //     `get_weather` doesn't collide with the
+                //     root agent's `get_weather`.
+                //   - tsBucket keeps the window tight (60s)
+                //     so two unrelated tool calls within a
+                //     few minutes don't merge.
+                //
+                // Server's toolResult is always authoritative
+                // (it carries the full stdout accumulated by
+                // the gateway) — the replace-on-match path
+                // replaces the streaming entry with the
+                // server entry when it lands.
+                let msgRoleLower = MessageCacheStorage.normalizeRoleForDedup(msg.role)
+                if msgRoleLower == "toolResult",
+                   let msgToolCallId = msg.toolCallId, !msgToolCallId.isEmpty,
+                   let msgToolName = msg.toolName, !msgToolName.isEmpty {
+                    let msgTs = msg.timestamp ?? 0
+                    let msgBucket = Int64(msgTs / 60_000)
+                    existingIdx = allMessages.firstIndex(where: { other in
+                        let otherRole = MessageCacheStorage.normalizeRoleForDedup(other.role)
+                        guard otherRole == "toolResult" else { return false }
+                        guard other.toolCallId == msgToolCallId else { return false }
+                        guard other.toolName == msgToolName else { return false }
+                        guard let otherTs = other.timestamp else { return false }
+                        // Same 60s bucket — catches the
+                        // typical stream-vs-server pair
+                        // without merging two real distinct
+                        // tool calls in adjacent buckets.
+                        return Int64(otherTs / 60_000) == msgBucket
+                    })
+                    // I2 (audit 2026-07-07): log this
+                    // fallback path when it fires.
+                    // toolCallId reuse across runs is
+                    // rare but does happen (server
+                    // resets the call-id counter on a
+                    // fresh agent session that ends up
+                    // using the same tool name + same
+                    // upstream call id), and the
+                    // replace-on-match that follows
+                    // here can silently collapse
+                    // legitimate distinct calls if
+                    // the timestamps happen to land
+                    // in the same 60s bucket.
+                    // Logging at `.info` keeps it
+                    // greppable for on-call without
+                    // polluting the default
+                    // debug-noise level.
+                    if existingIdx != nil {
+                        AppLogger.log(
+                            "[MessageCacheStorage append] toolCallId fallback hit: sessionKey=\(String(sessionKey.prefix(8))) toolCallId=\(msgToolCallId) toolName=\(msgToolName) bucket=\(msgBucket)",
+                            category: .cache, level: .info)
+                    }
+                }
+            }
+            if existingIdx == nil {
+                // FUZZY FALLBACK (BUG-7, user-reported
+                // 2026-07-07): the strict bucket missed
+                // because the streaming entry's
+                // `OpenClawChatMessage.timestamp` and the
+                // server's `chat.history` timestamp land in
+                // different 60s buckets — usually because
+                // the streaming path's `chosenAnchor` falls
+                // back to `Date()` when the gateway's
+                // `endedAtMs` is 0, putting the streaming
+                // entry's ts well after the server's
+                // authoritative end-time. The fuzzy match
+                // requires:
+                //   - same role
+                //   - same text (post-normalization)
+                //   - timestamps within 3 minutes
+                //     (180_000 ms)
+                //
+                // C4 (audit 2026-07-07): the previous
+                // 5-minute window was too wide — a user
+                // could legitimately send the same short
+                // reply ("ok", "thanks", "yes") twice
+                // within 5 minutes and the second
+                // occurrence would silently merge into the
+                // first. The 3-minute window still covers
+                // the typical stream-vs-server drift
+                // (streaming anchor fallback puts the
+                // streaming ts at wall-clock-now, which
+                // for a normal run is well under 3
+                // minutes after the server's authoritative
+                // end-time) while making accidental
+                // user-text merges less likely. Test:
+                // `test_append_dedupsByFuzzy_userTextFourMinutesApart_kept`
+                // verifies the boundary.
+                //
+                // The fuzzy hit triggers the same
+                // replace-on-match path as a strict hit.
+                let msgTs = msg.timestamp ?? 0
+                existingIdx = allMessages.firstIndex(where: { other in
+                    guard dedupKeyRoleAndText(for: other) == dedupKeyRoleAndText(for: msg)
+                    else { return false }
+                    guard let otherTs = other.timestamp else { return false }
+                    return abs(otherTs - msgTs) < 180_000
+                })
+            }
+            if let existingIdx = existingIdx {
                 // Dedup hit: KEEP the existing entry. The existing message's
                 // `id` is preserved — important because consumers (e.g.
                 // `CollapseStateCache.expandedMessageIds` keyed on the
                 // streaming-time synthesized UUID) would otherwise lose
                 // their state on a server re-fetch that returns the same
-                // message with a server-assigned UUID. The content is
-                // identical (by dedup key), so dropping the new copy
-                // has no observable effect except id stability.
+                // message with a server-assigned UUID.
+                //
+                // Thinking-block splice: if the existing entry is an
+                // ASSISTANT bubble with no reasoning (streaming
+                // wrote the assistant body without the sibling
+                // thinking block; server's `chat.history` later
+                // returns the same turn WITH the reasoning), append
+                // each missing thinking block as a standalone
+                // `OpenClawChatMessage` with role `"thinking"`. The
+                // standalone shape survives the converter
+                // (`ChatMessageConverter.toChatMessage`), which
+                // already emits a `ChatMessage(role: "thinking")`
+                // for such entries — the `ThinkingCardView` then
+                // renders it.
+                //
+                // Skip the splice when the existing entry is
+                // already a thinking entry (`role == "thinking"`)
+                // OR has a sibling thinking block — both mean the
+                // streaming path already emitted the reasoning, so
+                // adding more would duplicate the thinking bubble.
+                // This covers the streaming-thinking-vs-server-
+                // history-thinking case where both sides agree on
+                // the reasoning but use different shapes
+                // (`role:"thinking", text:<reasoning>` vs
+                // `role:"assistant", thinking-only block`).
+                //
+                // Idempotency: this branch can fire MANY times
+                // across repeated `fetchAndMergeFromNetwork` calls
+                // (every pull-to-refresh, every session re-enter).
+                // The first version of this code used a
+                // deterministic id `<existing.uuid>:thinking:<i>`
+                // to make the check idempotent, but
+                // `OpenClawChatMessage.id` is a `UUID` and the
+                // deterministic string has a `:thinking:<i>`
+                // suffix that `UUID(uuidString:)` rejects, so the
+                // id fell back to `UUID()` — a fresh random UUID
+                // every call. The id-based check never matched
+                // across runs and one refresh added one spliced
+                // thinking bubble (user-reported 2026-07-06, log
+                // 09:04:53.151, CACHE[36/37/38/39]). The fix: check
+                // the cache for an existing thinking entry with
+                // the same reasoning text. Content-based dedup
+                // here is safe because reasoning text within a
+                // single run is unique (the model produces one
+                // chain of thought per assistant turn).
+                let existing = allMessages[existingIdx]
+                let existingHasThinkingBlock = existing.content.contains(where: { $0.thinking?.isEmpty == false })
+                let existingIsPureThinking = existing.role.lowercased() == "thinking"
+                let newThinkingBlocks: [String] = msg.content.compactMap { block in
+                    block.thinking?.trimmingCharacters(in: .whitespacesAndNewlines)
+                }.filter { !$0.isEmpty }
+                // REPLACE-ON-MATCH (user request 2026-07-07).
+                // The server's `chat.history` payload is the
+                // authoritative version of the same logical
+                // turn — it carries the sibling reasoning
+                // block, the full `usage` block, and the
+                // model's authoritative final text. The
+                // streaming-side entry is a *partial* view of
+                // the same turn: flat text without the
+                // thinking block, sometimes without usage
+                // (gateway may omit it on lifecycle=end),
+                // assembled via suffix-overlap collapse from
+                // the deltas. KEEP-on-match (the previous
+                // behavior) drops the server's copy and tries
+                // to re-attach the missing fields via
+                // usage-splice + thinking-splice. That works
+                // when the streaming entry is textually close
+                // to the server copy, but when the two texts
+                // differ enough that the dedup key STILL
+                // matches (which is the dedup's whole point)
+                // yet the splice's content-block walk misses
+                // something — or when the user clears their
+                // thinking display path and only the server
+                // has it — the cache ends up with two entries
+                // (one streaming-text, one server-text+usage)
+                // showing two assistant bubbles.
+                //
+                // The fix: when the dedup key matches, REPLACE
+                // the existing entry with the server's entry
+                // in place, KEEPING the existing entry's `id`.
+                // The id-preservation is critical because:
+                //   1. The view's `ForEach(messages, id: \.id)`
+                //      would otherwise re-create the bubble,
+                //      animating a fade-out + fade-in.
+                //   2. `CollapseStateCache.expandedMessageIds`
+                //      is keyed on the streaming-time
+                //      synthesized UUID — replacing the id
+                //      would silently lose the user's
+                //      expand/collapse state.
+                //
+                // The replacement entry carries the server's
+                // `content` (which may now include the sibling
+                // `{type:"thinking", ...}` block that the
+                // streaming path didn't capture), the
+                // server's `usage`, and the server's
+                // `timestamp` (the model's authoritative
+                // end-time, more accurate than the client's
+                // `endedAtMs`). The streaming entry's `id`,
+                // `toolCallId`, `toolName`, `stopReason`, and
+                // `errorMessage` carry over from the existing
+                // entry — these are streaming-side fields the
+                // server doesn't emit on `chat.history`.
+//
+// C3 (audit 2026-07-07): replace-on-match assumes
+// the server's payload is a strict superset of the
+// streaming entry's content. Any client-side content
+// blocks that the server doesn't re-emit on
+// `chat.history` will be silently dropped by this
+// branch (custom card payloads, transient
+// placeholders, future-shape streaming-only blocks).
+// The pre-replace code KEEP'd the streaming entry's
+// content and only spliced the missing usage /
+// thinking — that mode survives server omissions but
+// also fails to surface the server's fuller content.
+// If the server ever stops emitting a content type
+// that the streaming path produces, this branch will
+// need to fall back to a per-block merge that keeps
+// non-overlapping streaming blocks. Audit log: see
+// PR #49 review (caspian9, 2026-07-07).
+                //
+                // If the existing entry is a standalone
+                // `role:"thinking"` bubble (the streaming path
+                // emits those for inline reasoning deltas),
+                // the dedup hit is a streaming-thinking-vs-
+                // server-thinking collision. The role check
+                // is the same role, same text → both are
+                // thinking → the streaming entry is ALSO
+                // replaced with the server's. In that case,
+                // the server's entry is a more authoritative
+                // `role:"thinking"` (server's full reasoning
+                // chain) — replacing is also correct.
+                //
+                // Idempotent across repeated refreshes: the
+                // first replace establishes the server's
+                // shape; subsequent replaces are no-ops
+                // (server returns the same content).
+                let replacement: OpenClawChatMessage
+                // "Server is richer than streaming" is the
+                // signal to REPLACE. The streaming entry is a
+                // partial view of the same logical turn (text
+                // only, no sibling thinking block, possibly
+                // no usage); the server's `chat.history`
+                // payload is the authoritative version with
+                // the full content (text + thinking) and the
+                // token-usage block. Replacing when the
+                // server has more data fixes the "two
+                // assistant bubbles after stream+history
+                // merge" bug (user-reported 2026-07-07).
+                //
+                // BUG-8 follow-up: for `role: "toolResult"`
+                // specifically, "more data" also covers the
+                // case where the streaming accumulator
+                // produced a truncated body (server's
+                // `command_output (end)` arrived with
+                // incremental `output` rather than full text)
+                // and the server's later history fetch
+                // carries the full stdout. Without the
+                // text-length signal here, the streaming
+                // entry would survive the dedup and the user
+                // would see two toolResult bubbles — the
+                // truncated streaming one and the full
+                // history one.
+                //
+                // The text-length signal is scoped to
+                // toolResult because other roles (user,
+                // assistant, thinking) don't suffer from
+                // text-length drift in practice — the
+                // streaming text is the authoritative final
+                // for those (the model emits a single
+                // cumulative text and lifecycle=end captures
+                // it). Server's text for those roles is
+                // either equal to or a sibling-shape
+                // expansion of the streaming text.
+                //
+                // If neither side has an advantage (e.g.,
+                // user-vs-user within 60s with same text,
+                // or thinking-vs-thinking with same content)
+                // we KEEP the existing entry — preserves
+                // CollapseStateCache and avoids clobbering
+                // newer streaming-side data with stale
+                // server-side data when the server hasn't
+                // emitted anything newer.
+                let msgHasUsage = msg.usage != nil
+                let msgHasThinkingBlock = msg.content.contains(where: { $0.thinking?.isEmpty == false })
+                let msgHasMoreContentBlocks = msg.content.count > existing.content.count
+                let msgRoleLower = MessageCacheStorage.normalizeRoleForDedup(msg.role)
+                let existingRoleLower = MessageCacheStorage.normalizeRoleForDedup(existing.role)
+                let msgText = msg.content.compactMap { $0.text }.joined(separator: "\n")
+                let existingText = existing.content.compactMap { $0.text }.joined(separator: "\n")
+                let msgHasMoreText = msgText.count > existingText.count + 64
+                // FIX-9 (user-reported 2026-07-08, log
+                // 08:42:47.586Z): when the streaming
+                // `lifecycle=end` final and the server's
+                // `chat.history` final are textually
+                // identical (post-normalization), they are
+                // the SAME logical turn — the streaming copy
+                // just arrived first because the user's
+                // device was faster than the next pull-to-
+                // refresh round-trip. The previous
+                // `serverRicher` signal required the server
+                // copy to be structurally richer
+                // (usage/thinking/extra content blocks),
+                // which it isn't when the server returns a
+                // bare text-only assistant message (no usage
+                // block, no sibling thinking block, single
+                // content block — the most common case for a
+                // short assistant final). Without this
+                // `textEqual` short-circuit, the fuzzy
+                // fallback above (same role + same text +
+                // ts within 5min) hits but the REPLACE
+                // branch is skipped, the existing streaming
+                // entry is KEEP'd, and the user sees the
+                // same assistant bubble twice (CACHE[13]
+                // history + CACHE[15] stream in the
+                // 2026-07-08 log, both with id distinct).
+                //
+                // The `textEqual` signal is post-
+                // normalization (same invisible-character
+                // strip as `dedupKeyRoleAndText` uses) so
+                // tiny presentation-selector differences
+                // (U+FE0E/U+FE0F) don't break the short-
+                // circuit. It's a positive "definitely the
+                // same logical turn" signal — independent
+                // of which side is structurally richer —
+                // and only fires when the two writes are
+                // textually the same. For toolResult, the
+                // existing `msgHasMoreText` text-length
+                // signal is preferred (catches the
+                // truncated-streaming-body case where the
+                // server's full body is longer).
+                let msgTextNormalized = MessageCacheStorage.normalizeTextForDedupHash(msgText)
+                let existingTextNormalized = MessageCacheStorage.normalizeTextForDedupHash(existingText)
+                let textEqual = !msgTextNormalized.isEmpty
+                    && msgTextNormalized == existingTextNormalized
+                // toolResult text-length drift is the
+                // common case (truncated streaming body,
+                // full server body). For other roles, we
+                // only treat server as richer when the
+                // structural fields (usage/thinking/blocks)
+                // differ — text length alone is too noisy
+                // (legitimate streaming-vs-server text can
+                // differ by a few bytes without that
+                // meaning the streaming entry is
+                // incomplete).
+                let msgTextRichness = msgRoleLower == "toolResult" && msgHasMoreText
+                let serverRicher = msgHasUsage
+                    || msgHasThinkingBlock
+                    || msgHasMoreContentBlocks
+                    || msgTextRichness
+                    || textEqual
+                if existing.id == msg.id {
+                    // Defensive: this branch is unreachable in
+                    // practice (id-dedup runs at line 260 and
+                    // would have caught it), but if we ever
+                    // change the dedup order, fall back to a
+                    // straight assignment to avoid a
+                    // UUID-collision where the streaming id
+                    // and the server id happen to match.
+                    replacement = msg
+                } else if existingIsPureThinking || existingHasThinkingBlock {
+                    // Both sides are thinking-shape. Keep
+                    // the streaming entry's content as-is (it
+                    // already has the reasoning text); only
+                    // upgrade usage if missing.
+                    if existing.usage == nil, let newUsage = msg.usage {
+                        replacement = OpenClawChatMessage(
+                            id: existing.id,
+                            role: existing.role,
+                            content: existing.content,
+                            timestamp: existing.timestamp,
+                            toolCallId: existing.toolCallId,
+                            toolName: existing.toolName,
+                            usage: newUsage,
+                            stopReason: existing.stopReason,
+                            errorMessage: existing.errorMessage)
+                    } else {
+                        replacement = existing
+                    }
+                } else if serverRicher {
+                    // Streaming text-only (no thinking
+                    // block) vs. server text+thinking+usage.
+                    // Replace with the server's content,
+                    // keeping the streaming id. The server's
+                    // `content` array carries the sibling
+                    // thinking block; the server's `usage`
+                    // carries the token counts.
+                    replacement = OpenClawChatMessage(
+                        id: existing.id,
+                        role: msg.role,
+                        content: msg.content,
+                        timestamp: msg.timestamp ?? existing.timestamp,
+                        toolCallId: existing.toolCallId,
+                        toolName: existing.toolName,
+                        usage: msg.usage ?? existing.usage,
+                        stopReason: existing.stopReason,
+                        errorMessage: existing.errorMessage)
+                } else {
+                    // Server is not richer than streaming —
+                    // KEEP the existing entry. Preserves
+                    // CollapseStateCache keys and avoids
+                    // clobbering newer streaming data with
+                    // stale server data. No splice needed.
+                    replacement = existing
+                }
+                allMessages[existingIdx] = replacement
+                // Thinking splice — only needed when the
+                // REPLACEMENT entry still doesn't carry the
+                // thinking block (e.g., the dedup hit was
+                // streaming-thinking vs. server-thinking and
+                // we kept existing content above, OR the server
+                // payload had thinking blocks that the
+                // replacement's content didn't pick up — which
+                // shouldn't happen now that the `else` branch
+                // copies msg.content wholesale, but kept as a
+                // safety net for any future shape change).
+                let replacementHasThinking = replacement.content.contains(where: { $0.thinking?.isEmpty == false })
+                let replacementIsPureThinking = replacement.role.lowercased() == "thinking"
+                if !existingHasThinkingBlock && !existingIsPureThinking
+                    && !replacementHasThinking && !replacementIsPureThinking {
+                    for thinkingText in newThinkingBlocks {
+                        // Idempotent: skip if a thinking block
+                        // with this exact text already exists,
+                        // but ONLY within a tight ±60s window
+                        // of the existing entry's timestamp.
+                        // The whole-session walk previously
+                        // matched a same-text thinking entry
+                        // from any past run, which would
+                        // silently drop a legitimate thinking
+                        // bubble for the current run if the
+                        // model ever produced byte-identical
+                        // reasoning in two different turns
+                        // (rare but possible when the user
+                        // asks the same question twice).
+                        //
+                        // The 60s window matches the
+                        // dedupKey's `tsBucket` — both the
+                        // dedup hit and the just-spliced
+                        // thinking bubble live in the same
+                        // bucket, so we never miss a
+                        // same-run double-splice. Cross-run
+                        // identical-reasoning is now correctly
+                        // permitted to splice (the user gets
+                        // the thinking bubble for the
+                        // current turn even if a previous
+                        // turn had identical reasoning).
+                        let existingTs = existing.timestamp ?? 0
+                        let alreadySpliced = allMessages.contains(where: { other in
+                            guard let otherTs = other.timestamp else { return false }
+                            if abs(otherTs - existingTs) > 60_000 { return false }
+                            return other.content.contains(where: { block in
+                                block.thinking?.trimmingCharacters(in: .whitespacesAndNewlines) == thinkingText
+                            })
+                        })
+                        if alreadySpliced { continue }
+                        let thinkingMsg = OpenClawChatMessage(
+                            id: UUID(),
+                            role: "thinking",
+                            content: [OpenClawChatMessageContent(
+                                type: "thinking", text: nil,
+                                thinking: thinkingText,
+                                thinkingSignature: nil,
+                                mimeType: nil, fileName: nil,
+                                content: nil, id: nil, name: nil,
+                                arguments: nil)],
+                            timestamp: msg.timestamp,
+                            toolCallId: nil, toolName: nil,
+                            usage: nil, stopReason: nil,
+                            errorMessage: nil)
+                        allMessages.append(thinkingMsg)
+                        added += 1
+                    }
+                }
                 deduped += 1
             } else {
                 allMessages.append(msg)
@@ -606,42 +1102,195 @@ public actor MessageCacheStorage: MessageCacheStorageProtocol {
     // `thinking` field when `text` is empty, and normalize the
     // role to its canonical client form so a server-side
     // `role: "tool"` (lowercase variant) hashes the same as the
-    // streaming-side `role: "toolCall"`. If the message carries
-    // a thinking block, we force the role to "thinking" so the
-    // server's `role: "assistant"` (typical shape for a
-    // thinking sub-block of the assistant turn) collides with
-    // the streaming-side `role: "thinking"`.
-    private func dedupKey(for message: OpenClawChatMessage) -> String {
+    // streaming-side `role: "toolCall"`. If the message is a
+    // thinking-only sub-block (text empty, thinking non-empty),
+    // we force the role to "thinking" so the server's
+    // `role: "assistant"` (the typical shape for the thinking
+    // sub-block of an assistant turn — typed content with no
+    // sibling text block) collides with the streaming-side
+    // `role: "thinking"`.
+    //
+    // The dedup key is `role + text + tsBucket`. (The earlier
+    // design also included `usage`; removed — see the comment
+    // on the `data:` line below.)
+    //
+    // `tsBucket = Int64(ts / 60_000)` is a 60-second bucket.
+    // The intent: catch streamed-vs-server copies of the same
+    // logical message even when the two writes happen seconds
+    // apart (e.g. CACHE[11] stream bubble ts=`...5993`,
+    // CACHE[15] server version ts=`...4721` — a single run
+    // span of ~8.7s, on either side of the 10s boundary, log
+    // 2026-07-06). A 60s bucket covers the full streaming
+    // lifetime of a typical assistant turn (typing +
+    // tool execution + finalization) while keeping
+    // user-distinct messages partitioned.
+    //
+    // An earlier experiment dropped the bucket entirely and
+    // made the key `role + text` only; that broke the user
+    // bubble because two consecutive user messages with the
+    // same text ("hi" repeated) collapsed onto each other even
+    // when they were minutes apart in real time (PR #49 first
+    // attempt, reverted in `b6171c8`). The 60s bucket keeps
+    // near-in-time duplicates merged while preserving
+    // user-distinct messages typed at different times. The
+    // remaining edge case (user sends the same text twice
+    // within 60s) is now caught upstream by a
+    // duplicate-send confirmation in `NativeChatViewModel` —
+    // see the doc on `sendMessage`.
+    //
+    // Tool-result text normalization: `EventInterpreter`
+    // appends an `exit=<code> duration=<ms>ms` trailer to
+    // toolResult bodies on the modern `command_output (end)`
+    // path (line ~1242). The streaming toolResult written by
+    // the `item` (end) / `tool` (result) paths does NOT add
+    // the trailer. Same logical tool execution → two cache
+    // writes with different text bytes → no dedup → duplicate
+    // bubble (log 2026-07-06, CACHE[14] vs CACHE[16]). The
+    // fix: strip a trailing `exit=… duration=…ms` segment
+    // from the text BEFORE hashing. If the pattern doesn't
+    // match (e.g. server changes its trailer format), the
+    // strip is a no-op and dedup falls back to the unstripped
+    // text — no regression vs. the previous behavior.
+    //
+    // IMPORTANT: the "force to thinking" override applies ONLY
+    // to the thinking-only sub-block case (no text body). A
+    // full assistant turn that ALSO carries a sibling
+    // `{type:"thinking", thinking: "..."}` block (the server's
+    // history shape for an assistant message that produced
+    // reasoning alongside its final text) must hash under its
+    // normalized role so it collides with the streaming copy of
+    // the same turn (which has no thinking block). Forcing
+    // role="thinking" on the "text + thinking" case made
+    // streamed-vs-server copies of the same assistant turn
+    // hash to different keys and produced duplicate assistant
+    // bubbles after pull-to-refresh (logged 2026-07-03,
+    // runId 6BB8B583-BE35-42F9-B380-7E7FE993048D).
+    /// Returns the (role, text) pair used in both `dedupKey`
+    /// (strict, with tsBucket) and the BUG-7 fuzzy fallback
+    /// (no tsBucket, just role+text + a manual ts-range
+    /// check). Factored out so the two paths agree on what
+    /// "same logical message" means — both the text
+    /// normalization (`normalizeTextForDedupHash`) and the
+    /// trailer strip (`stripToolResultTrailer`) apply here.
+    /// See `dedupKey`'s doc for the normalization rationale.
+    private func dedupKeyRoleAndText(
+        for message: OpenClawChatMessage
+    ) -> (role: String, text: String) {
         let rawText = message.content.compactMap { $0.text }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let rawThinking = message.content.compactMap { $0.thinking }.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasThinkingBlock = message.content.contains(where: { $0.thinking?.isEmpty == false })
 
-        let textForHash: String
+        let baseTextForHash: String
         if !rawText.isEmpty {
-            textForHash = rawText
+            baseTextForHash = rawText
         } else if !rawThinking.isEmpty {
-            textForHash = rawThinking
+            baseTextForHash = rawThinking
         } else {
-            textForHash = ""
+            baseTextForHash = ""
         }
 
+        let normalizedText = MessageCacheStorage.normalizeTextForDedupHash(baseTextForHash)
+        let textForHash = MessageCacheStorage.stripToolResultTrailer(normalizedText)
+
+        // Thinking-only sub-block: force role to "thinking" so
+        // the server's `{type:"thinking", thinking:"..."}`
+        // shape collides with the streaming-side
+        // `role:"thinking"` standalone.
+        let isThinkingOnlySubBlock = rawText.isEmpty && !rawThinking.isEmpty
+
         let roleForHash: String
-        if hasThinkingBlock {
+        if isThinkingOnlySubBlock {
             roleForHash = "thinking"
         } else {
             roleForHash = MessageCacheStorage.normalizeRoleForDedup(message.role)
         }
 
+        return (roleForHash, textForHash)
+    }
+
+    private func dedupKey(for message: OpenClawChatMessage) -> String {
+        let (roleForHash, textForHash) = dedupKeyRoleAndText(for: message)
+
         let tsBucket: Int64 = {
             guard let ts = message.timestamp else { return -1 }
-            return Int64(ts / 10_000)
+            return Int64(ts / 60_000)
         }()
 
+        // `usage` deliberately does NOT contribute to the dedup
+        // key. The streaming `lifecycle=end` writes the
+        // `{input:-1, ...}` "no token data" sentinel and the
+        // server's `chat.history` returns `usage=nil` for the
+        // same logical message; the streaming copy has the real
+        // token values once the run finalizes with usage, while
+        // the server copy sometimes carries a real usage block
+        // (newer server versions) and sometimes `usage=nil`
+        // (older). Including `usage` in the fingerprint would
+        // make the streamed-vs-server pair split into two entries
+        // whenever the usage shapes differ. Streaming-time
+        // `usage` is preserved upstream by
+        // `HistoryLoader.applyUsagePreservation` which splices
+        // it into the server copy before `append` runs, so the
+        // dedup layer can stay usage-blind.
         let data = "\(roleForHash)|\(textForHash)|\(tsBucket)".data(using: .utf8) ?? Data()
         let hash = SHA256.hash(data: data)
         return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Normalizes text for the dedup hash only (view still sees
+    /// the original bytes). Strips characters that have no effect
+    /// on human-visible content but create byte-level differences
+    /// that defeat dedup:
+    ///
+    /// - U+FE0E / U+FE0F (text/emoji presentation selectors) — the
+    ///   same glyph can be rendered either as text or as an emoji;
+    ///   different server encoders can pick different selectors,
+    ///   producing two different byte sequences for the same
+    ///   visible character (user-reported 2026-07-06,
+    ///   CACHE[30] vs CACHE[32] in the device log: `🌤️` U+1F324
+    ///   U+FE0F vs `🌤` U+1F324).
+    /// - U+200D (zero-width joiner) and U+FEFF (BOM / zero-width
+    ///   no-break space) — invisible joiners that change the byte
+    ///   length of compound emoji sequences.
+    /// - U+2028 / U+2029 (LINE / PARAGRAPH SEPARATOR) — alternate
+    ///   newline forms that some emitters send instead of `\n`.
+    ///
+    /// The hash input is meant to answer "is this the same message
+    /// a human would consider the same?" — invisible variation
+    /// selectors don't change that answer. The view keeps the
+    /// original text (so the user sees exactly what the server
+    /// sent).
+    static func normalizeTextForDedupHash(_ text: String) -> String {
+        var result = text
+        for scalar in ["\u{FE0E}", "\u{FE0F}", "\u{200D}", "\u{FEFF}", "\u{2028}", "\u{2029}"] {
+            result = result.replacingOccurrences(of: scalar, with: "")
+        }
+        return result
+    }
+
+    /// Strips a trailing `exit=<code> duration=<ms>ms` (or either
+    /// half, in either order) from a toolResult body for dedup
+    /// hashing only. Idempotent: returns the input unchanged if
+    /// the pattern is not present.
+    ///
+    /// `EventInterpreter.command_output (end)` appends the trailer
+    /// at line ~1242 only on the modern path; the legacy
+    /// `item` (end) / `tool` (result) paths do NOT. Stripping
+    /// here means the two writes of the same logical tool
+    /// execution hash identically. See the method doc on
+    /// `dedupKey(for:)` for the failure log.
+    static func stripToolResultTrailer(_ text: String) -> String {
+        // Match `exit=<int>` and `duration=<int>ms` as optional
+        // standalone halves, in either order, at the end of the
+        // text after optional trailing whitespace/newlines.
+        let pattern = #"(?:\s+(?:exit=-?\d+|duration=\d+ms))+\s*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let stripped = regex.stringByReplacingMatches(
+            in: text, range: range, withTemplate: "")
+        return stripped
     }
 
     private static func normalizeRoleForDedup(_ role: String) -> String {

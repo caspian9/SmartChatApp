@@ -95,15 +95,31 @@ enum ChatMessageConverter {
         // collapsed a `[thinking, text]` content order (the model's
         // actual reasoning-then-response flow) into `[text,
         // thinking]`, showing the response above its reasoning.
+        //
         // The user reported the order looks wrong for history
-        // messages whose `role == "assistant"` carries a thinking
-        // block first; they expect the reasoning to lead the
-        // response. The new rule: when the FIRST non-empty content
-        // block is a thinking block, emit the thinking bubbles
-        // first, then the main text. When the first block is a
-        // text block, keep the previous [text, then thinking]
-        // order (the existing `testToChatMessage_textAndThinkingBundle_emitsBoth`
-        // contract).
+        // messages whose `role == "assistant"` carries a sibling
+        // thinking block: they expect the reasoning to lead the
+        // response in every case, not only when the server sent
+        // the thinking block first. So the new rule is: if the
+        // message has a sibling thinking block AND a non-thinking
+        // main entry (text or toolCall), emit the thinking bubbles
+        // first regardless of the content-block order. When the
+        // message has no thinking block, the previous [text, then
+        // thinking] / [text only] order is preserved.
+        //
+        // Two trigger conditions both result in `emitThinkingFirst
+        // == true`:
+        //   1. First non-empty content block is a thinking block
+        //      (the original `firstBlockIsThinking` check — covers
+        //      the `[thinking, text]` server shape).
+        //   2. The message has any sibling thinking block AND a
+        //      non-thinking main entry (text body or toolCall) —
+        //      covers the `[text, thinking]` server shape and the
+        //      spliced thinking case (the splice produces a
+        //      separate `role:"thinking"` entry which is
+        //      independent, so condition (1) doesn't fire on the
+        //      spliced entry; it fires here on the parent
+        //      assistant entry instead).
         var firstBlockIsThinking = false
         for contentItem in msg.content {
             if let t = contentItem.text, !t.isEmpty { break }
@@ -112,9 +128,7 @@ enum ChatMessageConverter {
                 break
             }
         }
-        let emitThinkingFirst = firstBlockIsThinking
-            && !mainIsThinking
-            && !allThinking.isEmpty
+        let hasSiblingThinking = !allThinking.isEmpty
         // ToolCall text (for inline merging with the main entry).
         // toolCall never gets its own bubble — it's always inline
         // with the text or the thinking, mirroring the previous
@@ -142,6 +156,10 @@ enum ChatMessageConverter {
         }
         let ts = msg.timestamp ?? 0
         let dateTimestamp = Date(timeIntervalSince1970: ts / 1000)
+        let hasNonThinkingMain = (mainText != nil) || hasToolCall
+        let emitThinkingFirst = hasSiblingThinking
+            && hasNonThinkingMain
+            && !mainIsThinking
         // History messages always render as `state: "final"` — the
         // SDK's `OpenClawChatMessage` does not carry streaming
         // state (no `state`/`seq`/`startedAt`/`endedAt` fields), and
@@ -379,7 +397,64 @@ enum ChatMessageConverter {
             // toolCall text into `chatMessage.text` for the tool bubble);
             // see `MessageFormatters.formatToolCallBubbleText`.
             content: [Self.contentItem(for: chatMessage)],
-            timestamp: chatMessage.timestamp.timeIntervalSince1970 * 1000,
+            // FIX-9 follow-up #2 (user-reported 2026-07-08,
+            // log 09:19:08.035Z CACHE[37-39]): persist
+            // server-anchored event time as the
+            // OpenClawChatMessage `timestamp` field. The
+            // `sortForDisplay` cross-run fallback uses
+            // `timestamp` as the last-resort sort key when
+            // neither `endedAt` (in-memory only, lost on
+            // app restart) nor `receivedAt` (also in-memory
+            // only) is available. For terminal streaming
+            // events (state == "final"), `chatMessage.endedAt`
+            // is the server's `payload.endedAt` /
+            // `command_output (end)` / lifecycle=end
+            // `endedAt` — wire order is guaranteed
+            // (tool finishes before lifecycle ends). For
+            // streaming deltas with no `endedAt` yet
+            // (state == "streaming"), fall back to the
+            // `chatMessage.timestamp` (local Date() at
+            // upsert time) — the bubble's state marker
+            // already signals "in-flight" to the user.
+            //
+            // Pre-fix: every persisted message used the
+            // local Date() as `timestamp`. On app restart,
+            // the in-memory StreamingMetadata (which would
+            // have provided the server-anchored `endedAt`)
+            // is empty, the sort falls to `timestamp`, and
+            // the user sees `toolCall → assistant →
+            // toolResult` instead of the correct `toolCall
+            // → toolResult → assistant`. This fix writes
+            // the server-anchored value to disk so the
+            // sort recovers after a restart.
+            //
+            // toolCall is the EXCEPTION: the
+            // `EventInterpreter` `case "item"` pins
+            // `chatMessage.timestamp` to the local
+            // `toolReceivedAtByCall[toolKey]` (i.e., the
+            // item phase=start arrival time) and then
+            // re-upserts on item phase=end with
+            // `endedAt = T4` (server's end ts). Using
+            // `endedAt` here would override the pinned
+            // start time and the toolCall would sort
+            // AFTER the toolResult (the
+            // `EventInterpreterItemSortTests` regression
+            // for "#11 toolCall appears below #12
+            // toolResult"). For toolCall, the sort key
+            // MUST be the start time, not the end time —
+            // so we always use `chatMessage.timestamp` for
+            // toolCall.
+            //
+            // Historical entries (decoded directly from
+            // the server's `chat.history` payload, NOT
+            // going through this converter) keep their
+            // server-anchored `timestamp` as-is — the
+            // history fetch path at `HistoryLoader.swift`
+            // line 289 decodes `OpenClawChatMessage`
+            // directly and never invokes this function.
+            timestamp: chatMessage.role == "toolCall"
+                ? chatMessage.timestamp.timeIntervalSince1970 * 1000
+                : (chatMessage.endedAt ?? chatMessage.timestamp).timeIntervalSince1970 * 1000,
             toolCallId: chatMessage.toolCallId,
             toolName: chatMessage.toolName,
             usage: usage,

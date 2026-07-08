@@ -251,11 +251,32 @@ final class EventInterpreterAssistantFragmentSplitTests: XCTestCase {
     }
 
     private func makeLifecycleEnd(runId: String, seq: Int, ts: Int) -> OpenClawAgentEventPayload {
-        makeAgentEvent(
+        // Use a wall-clock-realistic timestamp (year 2026) for the
+        // `endedAt` field so the lifecycle=end fragment sorts AFTER
+        // the inter-tool fragments in `sortForDisplay`'s endedAt
+        // priority. The three inter-tool fragments get
+        // `endedAt = Date()` (wall-clock-now) from
+        // `finalizeAssistantFragmentIfAny`; the lifecycle=end
+        // fragment here would otherwise inherit the tiny
+        // test-timestamp `ts` (e.g., 900 ms = 0.9 s since epoch,
+        // which sorts ~56 years BEFORE the other fragments).
+        //
+        // P1 FIX CONTEXT: before the runId-preservation overlay
+        // was wired up, `sortForDisplay`'s endedAt-priority branch
+        // was dead code (every persisted bubble had `runId == nil`
+        // and fell through to `receivedAt ?? timestamp`). This
+        // test's wire-order seq assertion was therefore incidentally
+        // correct — fragment 3's lifecycle=end ts happened to not
+        // matter. With runId now preserved, the endedAt ordering
+        // takes effect, and the test needs the lifecycle=end
+        // endedAt to reflect a realistic "post-everything" time
+        // so the final response sorts LAST as the test intended.
+        let realisticEndedAtMs: Int = 1_783_328_621_000  // ≈ 2026-07-07
+        return makeAgentEvent(
             runId: runId, seq: seq, stream: "lifecycle", ts: ts,
             data: [
                 "phase": AnyCodable("end"),
-                "endedAt": AnyCodable(Double(ts)),
+                "endedAt": AnyCodable(Double(realisticEndedAtMs)),
             ])
     }
 }

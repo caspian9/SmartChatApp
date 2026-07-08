@@ -77,6 +77,22 @@ final class EventInterpreter {
     /// reverse of the user's "preamble first, response last"
     /// expectation).
     private var lastAssistantSeqByRun: [String: Int] = [:]
+    /// Per-run timestamp of the LAST assistant delta we processed
+    /// (the server's `payload.ts`, ms since epoch). Used by
+    /// `finalizeAssistantFragmentIfAny` to populate the
+    /// fragment's `endedAt` with a server-time-anchored value
+    /// instead of wall-clock `Date()`. The previous
+    /// `Date()`-based endedAt was meaningless for
+    /// `sortForDisplay`'s endedAt-priority branch — every
+    /// fragment finalized in the same test run shared the
+    /// same wall-clock-now value, and the sort had no way to
+    /// distinguish "preamble first" from "response last".
+    /// With this tracker, the fragment's endedAt reflects the
+    /// last delta's server-side ts (a deterministic, ascending
+    /// value across fragments), so the sort puts earlier
+    /// fragments (smaller last-delta-ts) before later ones.
+    /// Cleared on `lifecycle=end` alongside `lastAssistantSeqByRun`.
+    private var lastAssistantTsByRun: [String: Double] = [:]
     /// Per-tool-call startedAt, keyed by "<runId>:<toolCallId>".
     /// The legacy `stream: "tool"` path fires `phase: "update"`
     /// events that wipe `startedAt` to nil on each call, which
@@ -97,6 +113,41 @@ final class EventInterpreter {
     /// toolResult's. See `case "item"` for the matching sort-time
     /// read.
     private var toolReceivedAtByCall: [String: Date] = [:]
+    /// Per-tool-call incremental-output accumulator, keyed by
+    /// `"<runId>:<canonical>"` (canonical = `toolCallId ?? itemId`).
+    /// The streaming `command_output` events arrive as
+    /// `phase: "delta"` chunks, then a final `phase: "end"`.
+    /// The end event's `output` field is *sometimes* the full
+    /// accumulated text (typical SDK) and *sometimes* just the
+    /// last chunk (server-side truncation / aggregator bug
+    /// reproduced on 2026-07-07: a toolResult bubble that
+    /// contained only the first ~30% of the tool's stdout, with
+    /// later output lost because the end event arrived with an
+    /// incremental `output` rather than the full text).
+    ///
+    /// Without this accumulator the bubble would show only the
+    /// latest delta — the user sees a truncated JSON body with
+    /// `(live output truncated)` mid-text and `exit=0
+    /// duration=Nms` at the end, while the server's
+    /// `chat.history` later returns the FULL text and dedup
+    /// replaces the bubble with the complete version.
+    ///
+    /// The accumulator strategy: on each `command_output`
+    /// event, append the event's `output` to the accumulator
+    /// (regardless of phase). On `phase: "end"`, use the
+    /// accumulator's length — if it's longer than the
+    /// end-event's `output` alone, the accumulator is more
+    /// complete and wins. The dedup-replace path against the
+    /// server's `chat.history` payload is unchanged; this
+    /// fix only affects the live streaming display (so the
+    /// user sees the full content without having to wait for
+    /// a refresh).
+    ///
+    /// Cleared on `phase: "end` after the bubble is written
+    /// (matches `toolStartedAtByCall`'s cleanup at line ~1326).
+    /// Also cleared on `lifecycle=end` so stale partial
+    /// accumulators don't leak across runs.
+    private var accumulatedToolOutputByCall: [String: String] = [:]
     /// Per-run thinking text accumulator. Mirrors
     /// `accumulatedAssistantTextByRun` for the thinking stream —
     /// without an accumulator, incremental deltas ("thinking
@@ -106,6 +157,42 @@ final class EventInterpreter {
     /// full thinking across the run, similar to the assistant
     /// text path. Cleared on `lifecycle=end`.
     private var accumulatedThinkingTextByRun: [String: String] = [:]
+    /// Per-run `toolCallId → canonical id` alias map. The modern
+    /// `item phase=start` populates this when a tool call begins,
+    /// recording (a) the toolCallId's self-mapping to itself and
+    /// (b) the itemId's mapping to the toolCallId. The legacy
+    /// `stream: "tool"` path may emit the same logical tool under
+    /// a different toolCallId than the modern path's; this map
+    /// lets the legacy path resolve its toolCallId to the modern
+    /// canonical id before computing its bubble id and toolKey, so
+    /// the upsert collapses legacy + modern writes into a single
+    /// bubble. Without this alias, two failure modes surface:
+    ///
+    /// 1. Different toolCallIds across paths → two distinct
+    ///    `<runId>:toolResult:<...>` bubble ids → the user sees
+    ///    duplicate toolCall + toolResult bubbles for one logical
+    ///    tool call (user-reported 2026-07-02).
+    /// 2. Same toolCallId across paths → the legacy `tool (result)`
+    ///    handler's `toolStartedAtByCall.removeValue(forKey:)` at
+    ///    line ~904 wipes the entry before the modern
+    ///    `command_output (end)` reads it → modern toolResult
+    ///    ChatMessage carries `startedAt: nil` → bubble footer
+    ///    shows only the end time (user-reported 2026-07-02).
+    ///
+    /// Cleared on `lifecycle=end`.
+    private var toolCallIdAliasByRun: [String: [String: String]] = [:]
+    /// Per-run "most-recent tool-call canonical id" pointer. When
+    /// the modern `item phase=start` fires first with id `M` and
+    /// the legacy `tool phase=start` arrives later with id `L`
+    /// for the same logical tool, the alias map's key `L` is
+    /// unknown at lookup time. The latest-canonical pointer
+    /// captures the most recent canonical that any path
+    /// (modern or legacy) registered for this runId, so the
+    /// legacy can adopt it as its own canonical and the
+    /// upsert collapses both paths' writes. Bounded per run —
+    /// at most one canonical at a time because tools are
+    /// sequential within a run. Cleared on `lifecycle=end`.
+    private var toolLatestCanonicalByRun: [String: String] = [:]
 
     /// runIds whose `lifecycle=end` has already been processed for
     /// the current session. The transport (or upstream server) can
@@ -278,25 +365,52 @@ final class EventInterpreter {
                     if cacheRead == nil, let cr = data["cacheRead"]?.intValue { cacheRead = cr }
                     if cacheWrite == nil, let cw = data["cacheWrite"]?.intValue { cacheWrite = cw }
                     AppLogger.log("agent lifecycle end - tokens: input: \(inputTokens ?? -1), output: \(outputTokens ?? -1), cacheRead: \(cacheRead ?? -1), cacheWrite: \(cacheWrite ?? -1)", category: .nativeChat)
-                    // TEMP DIAG: confirm the cache-anchor
-                    // resolution picks `assistantStartedAtByRun[runId]`
-                    // (the lifecycle=start wall clock), which is the
-                    // same value the server's `chat.history` uses as
-                    // the message's `timestamp` field. Earlier
-                    // implementations of this logic got the priority
-                    // order wrong; the current order is `start` →
-                    // event-`startedAt` → event-`endedAt` → now().
-                    // Log both candidates so future regressions show
-                    // the split. The `timestamp: chosenAnchor` line
-                    // below uses the same value — sharing
-                    // `chosenAnchor` here so the log and the actual
-                    // cache write are guaranteed to match.
-                    let chosenAnchor = assistantStartedAtByRun[runId]
-                        ?? (startedAtMs > 0
-                            ? Date(timeIntervalSince1970: startedAtMs / 1000)
-                            : (endedAtMs > 0
-                                ? Date(timeIntervalSince1970: endedAtMs / 1000)
-                                : Date()))
+                    // Cache anchor for the final assistant bubble's
+                    // sort `timestamp`. Priority:
+                    //   1. event `endedAtMs` (the lifecycle=end
+                    //      payload's ms-since-epoch) — the most
+                    //      accurate "when did this run actually
+                    //      finish" timestamp, falls within the run's
+                    //      wall-clock window.
+                    //   2. `assistantStartedAtByRun[runId]` (the
+                    //      lifecycle=start wall clock) — only used
+                    //      when the server omits `endedAtMs`.
+                    //   3. event `startedAtMs` (often 0 on the end
+                    //      event).
+                    //   4. now() as a last resort.
+                    //
+                    // Rationale for preferring `endedAtMs` over the
+                    // old default (`assistantStartedAtByRun`): the
+                    // bubble's persisted `timestamp` doubles as the
+                    // cache-sort key for post-exit re-entry. After
+                    // `clearMemory(for:)` clears the VM's
+                    // `receivedAt` overlay, the view falls back to
+                    // `timestamp` for ordering. Using the run's
+                    // START time (the old behavior) sorts the
+                    // assistant final EARLIER than its own
+                    // toolCall/toolResult siblings (which were
+                    // written at `Date()` mid-run), making the
+                    // assistant bubble appear at the top of the
+                    // run's group instead of the bottom — the
+                    // user-reported ordering regression on
+                    // 2026-07-06.
+                    //
+                    // Dedup compatibility with the server's
+                    // `chat.history` copy is preserved by
+                    // `MessageCacheStorage.dedupKey`'s 60-second
+                    // `tsBucket`: stream end and server history
+                    // land in the same bucket as long as the
+                    // timestamps are within ~60s of each other
+                    // (always true for a single run; the server's
+                    // history copy uses its own end-time ts which
+                    // is within a few ms of the streaming
+                    // `endedAtMs`).
+                    let chosenAnchor: Date = {
+                        if endedAtMs > 0 { return Date(timeIntervalSince1970: endedAtMs / 1000) }
+                        if let start = assistantStartedAtByRun[runId] { return start }
+                        if startedAtMs > 0 { return Date(timeIntervalSince1970: startedAtMs / 1000) }
+                        return Date()
+                    }()
                     AppLogger.log("agent lifecycle end - cache anchor: startedAtRun=\(assistantStartedAtByRun[runId]?.timeIntervalSince1970 ?? -1) endedAtMs=\(endedAtMs) → chosen=\(chosenAnchor.timeIntervalSince1970)", category: .nativeChat)
                     // Authoritative source for the final bubble's text is
                     // `accumulatedAssistantTextByRun[runId]` (populated by
@@ -383,6 +497,37 @@ final class EventInterpreter {
                     assistantStartedAtByRun.removeValue(forKey: runId)
                     accumulatedThinkingTextByRun.removeValue(forKey: runId)
                     lastSeenSeqByRun.removeValue(forKey: runId)
+                    toolCallIdAliasByRun.removeValue(forKey: runId)
+                    toolLatestCanonicalByRun.removeValue(forKey: runId)
+                    // BUG-8: clear any per-tool accumulated
+                    // output for this run (tools whose
+                    // `command_output (end)` never arrived —
+                    // e.g. run aborted — would otherwise leave
+                    // stale entries that could leak into the
+                    // next run via a toolKey collision).
+                    for (key, _) in accumulatedToolOutputByCall where key.hasPrefix("\(runId):") {
+                        accumulatedToolOutputByCall.removeValue(forKey: key)
+                    }
+                    // C2 (audit 2026-07-07): also clean up the
+                    // per-tool startedAt / receivedAt dicts.
+                    // The local cleanup inside
+                    // `command_output (end)` (line ~1437) only
+                    // fires when the end event actually arrives;
+                    // for runs that aborted or finished without
+                    // a matching `command_output (end)` — e.g.
+                    // a tool whose `item phase=end` carried
+                    // the summary directly — those entries
+                    // stayed forever. Long sessions with many
+                    // tool calls would grow the dicts
+                    // unboundedly. Both are keyed by
+                    // `runId:canonical` so the same
+                    // prefix-scan shape works.
+                    for (key, _) in toolStartedAtByCall where key.hasPrefix("\(runId):") {
+                        toolStartedAtByCall.removeValue(forKey: key)
+                    }
+                    for (key, _) in toolReceivedAtByCall where key.hasPrefix("\(runId):") {
+                        toolReceivedAtByCall.removeValue(forKey: key)
+                    }
                     // Fragment counter — must be reset so the next
                     // run for this same runId (in the unusual case
                     // of a session resume or a re-spawn) starts from
@@ -390,6 +535,7 @@ final class EventInterpreter {
                     // previous run's count.
                     assistantFragmentIdxByRun.removeValue(forKey: runId)
                     lastAssistantSeqByRun.removeValue(forKey: runId)
+                    lastAssistantTsByRun.removeValue(forKey: runId)
                     // Mark the runId as processed BEFORE returning so any
                     // racing re-delivery of the same `lifecycle=end` event
                     // short-circuits at the top of this branch. Inserting
@@ -579,6 +725,16 @@ final class EventInterpreter {
                 // `sortForDisplay` reads).
                 if let seq {
                     lastAssistantSeqByRun[runId] = seq
+                }
+                // Mirror `lastAssistantSeqByRun` for the per-delta
+                // `payload.ts` (ms since epoch). Used by
+                // `finalizeAssistantFragmentIfAny` to populate the
+                // fragment's `endedAt` with a server-time-anchored
+                // value. Stored as `Double` to match the
+                // `endedAtMs > 0 ? Date(timeIntervalSince1970: ts/1000)`
+                // conversion in the lifecycle=end path.
+                if ts > 0 {
+                    lastAssistantTsByRun[runId] = Double(ts)
                 }
                 // Re-stamp startedAt from the lifecycle=start record
                 // so the bubble's "HH:mm" prefix doesn't disappear
@@ -793,10 +949,80 @@ final class EventInterpreter {
                     return
                 }
                 let toolName = data["name"]?.stringValue ?? ""
-                let toolKey = "\(runId):\(toolCallId)"
+                // Resolve the legacy toolCallId to the modern canonical id
+                // so both paths share the same `<runId>:toolCall:<canonical>`
+                // / `<runId>:toolResult:<canonical>` bubble id and the
+                // same `toolKey` for the per-call dicts. Without this
+                // alias resolution, two failure modes surface when the
+                // server emits both legacy and modern events for the same
+                // logical tool with different toolCallIds (or even with
+                // the same id, where the legacy cleanup race drops the
+                // modern entry's startedAt). See the doc comment on
+                // `toolCallIdAliasByRun` above for the full rationale.
+                //
+                // Three-tier resolution:
+                // 1. Exact alias hit — the modern path already
+                //    registered `<legacyId> → canonical`. Use it.
+                // 2. The legacy path fired BEFORE the modern path —
+                //    the legacy's own `phase=start` registered
+                //    `<legacyId> → legacyId`. Adopt that identity.
+                // 3. The modern path fired earlier with a
+                //    DIFFERENT canonical, and the alias map does
+                //    NOT have this legacyId — adopt the most
+                //    recently registered canonical for this runId.
+                //    Safe within a single run because tools are
+                //    sequential: at any moment at most one tool
+                //    call's `phase=start` has fired without its
+                //    matching result. We track the latest
+                //    canonical per run via `toolLatestCanonicalByRun`.
+                let resolvedCanonical: String = {
+                    if let hit = toolCallIdAliasByRun[runId]?[toolCallId] {
+                        return hit
+                    }
+                    // I4 (audit 2026-07-07): tier-2
+                    // fallback adopts the run's
+                    // latest-registered canonical. This is
+                    // an optimistic timing assumption —
+                    // correct only when the tools within a
+                    // run are sequential, which is the
+                    // common case (one tool finishes
+                    // before the next starts). If the
+                    // server ever emits concurrent tool
+                    // starts within the same run, the
+                    // latest pointer would race and the
+                    // legacy path could adopt the wrong
+                    // sibling's canonical — silently
+                    // merging two distinct tool calls
+                    // into one bubble.
+                    //
+                    // The `#if DEBUG` assert below guards
+                    // against an obvious failure mode
+                    // (alias lookup with a non-empty key
+                    // that has no entry — i.e., the
+                    // server emitted a legacy start for a
+                    // tool whose modern `item phase=start`
+                    // was never sent). For the
+                    // sibling-race case the assert can't
+                    // fire at runtime (the race is timing
+                    // dependent) — on-call can grep for
+                    // "tier-2 adopted" when investigating
+                    // duplicate tool bubbles.
+                    if let latest = toolLatestCanonicalByRun[runId] {
+                        #if DEBUG
+                        if toolCallId != latest {
+                            AppLogger.log(
+                                "toolLatestCanonicalByRun tier-2 adopted: runId=\(runId) legacyToolCallId=\(toolCallId) adoptedCanonical=\(latest)",
+                                category: .nativeChat, level: .debug)
+                        }
+                        #endif
+                        return latest
+                    }
+                    return toolCallId
+                }()
+                let toolKey = "\(runId):\(resolvedCanonical)"
                 if phase == "start" {
                     let text = MessageFormatters.formatToolCallBubbleText(name: toolName, arguments: data["args"])
-                    AppLogger.log("agent tool start - tool: \(toolName), callId: \(toolCallId)", category: .nativeChat)
+                    AppLogger.log("agent tool start - tool: \(toolName), callId: \(toolCallId), canonical: \(resolvedCanonical)", category: .nativeChat)
                     // Remember BOTH the server's start timestamp (for the
                     // `startedAt` display field — "HH:MM" label) and the
                     // local-received time (for the sort `timestamp` so
@@ -808,8 +1034,30 @@ final class EventInterpreter {
                     // in reversed order.
                     toolStartedAtByCall[toolKey] = timestamp
                     toolReceivedAtByCall[toolKey] = Date()
+                    // Register the toolCallId → canonical alias and
+                    // record this canonical as the run's latest. The
+                    // modern path reads both: the alias map to
+                    // resolve when it fires later under a different
+                    // toolCallId, and `toolLatestCanonicalByRun` to
+                    // handle the case where the modern path fired
+                    // earlier (this canonical stays in the alias
+                    // map only if the modern path's toolCallId
+                    // matches ours; otherwise the modern path's own
+                    // canonical sits in the alias map and this
+                    // legacy start updates the "latest" pointer so
+                    // future legacy events for the SAME logical
+                    // tool resolve to the same canonical). One
+                    // legacy event per tool call typically — the
+                    // race that matters is "modern fires first
+                    // with id M, then legacy fires with id L for
+                    // the same tool" — covered by the legacy's
+                    // `toolLatestCanonicalByRun` lookup above.
+                    var perRunAlias = toolCallIdAliasByRun[runId] ?? [:]
+                    perRunAlias[toolCallId] = resolvedCanonical
+                    toolCallIdAliasByRun[runId] = perRunAlias
+                    toolLatestCanonicalByRun[runId] = resolvedCanonical
                     let message = ChatMessage(
-                        id: "\(runId):toolCall:\(toolCallId)",
+                        id: "\(runId):toolCall:\(resolvedCanonical)",
                         text: text,
                         timestamp: toolReceivedAtByCall[toolKey] ?? Date(),
                         role: "toolCall",
@@ -819,7 +1067,7 @@ final class EventInterpreter {
                         startedAt: timestamp,
                         endedAt: nil,
                         livenessState: nil,
-                        toolCallId: toolCallId,
+                        toolCallId: resolvedCanonical,
                         toolName: toolName,
                         stopReason: nil,
                         isFresh: true
@@ -839,7 +1087,7 @@ final class EventInterpreter {
                     AppLogger.log("agent tool update - tool: \(toolName), callId: \(toolCallId), text len: \(text.count)", category: .nativeChat)
                     let startedAt = toolStartedAtByCall[toolKey] ?? timestamp
                     let message = ChatMessage(
-                        id: "\(runId):toolCall:\(toolCallId)",
+                        id: "\(runId):toolCall:\(resolvedCanonical)",
                         text: text,
                         timestamp: toolReceivedAtByCall[toolKey] ?? Date(),
                         role: "toolCall",
@@ -849,7 +1097,7 @@ final class EventInterpreter {
                         startedAt: startedAt,
                         endedAt: nil,
                         livenessState: nil,
-                        toolCallId: toolCallId,
+                        toolCallId: resolvedCanonical,
                         toolName: toolName,
                         stopReason: nil,
                         isFresh: true
@@ -859,15 +1107,25 @@ final class EventInterpreter {
                     let resultValue = data["result"]?.value
                     let text = MessageFormatters.formatToolResultText(result: resultValue)
                     let isError = (data["isError"]?.value as? Bool) ?? false
-                    AppLogger.log("agent tool result - tool: \(toolName), callId: \(toolCallId), isError: \(isError), text len: \(text.count)", category: .nativeChat)
+                    AppLogger.log("agent tool result - tool: \(toolName), callId: \(toolCallId), canonical: \(resolvedCanonical), isError: \(isError), text len: \(text.count)", category: .nativeChat)
                     let startedAt = toolStartedAtByCall[toolKey]
                         ?? (startedAtMs > 0 ? Date(timeIntervalSince1970: startedAtMs / 1000) : nil)
                     // toolResult id also unified to the same namespace so
                     // `command_output` / `item` (end) for the same call
                     // upsert into the same entry instead of producing
                     // separate bubbles.
+                    //
+                    // IMPORTANT: do NOT clear `toolStartedAtByCall[toolKey]`
+                    // here. The modern `command_output (end)` handler reads
+                    // the same entry to populate its own toolResult's
+                    // `startedAt`; clearing it here would race with the
+                    // modern path and silently drop the start time. The
+                    // modern path's `command_output (end)` handler clears
+                    // the entry itself at line ~1142 (after its own read),
+                    // so this legacy handler leaving the entry alone is
+                    // safe and prevents the startedAt-loss regression.
                     let message = ChatMessage(
-                        id: "\(runId):toolResult:\(toolCallId)",
+                        id: "\(runId):toolResult:\(resolvedCanonical)",
                         text: text,
                         // Local received time for sort — see the
                         // matching comment on `case "lifecycle"`
@@ -890,18 +1148,19 @@ final class EventInterpreter {
                         isFresh: true
                     )
                     await viewModel?.receiveMessage(message)
-                    // Tool call is fully done — drop the start-timestamp
-                    // entry so memory doesn't grow across many tool
-                    // calls in one run. We deliberately do NOT clear
-                    // `toolReceivedAtByCall[toolKey]` here for the same
-                    // reason as the `command_output (end)` branch above:
-                    // the modern `item phase=end` branch consumes that
-                    // sort-key value (line 954), and for exec/bash tools
-                    // it may arrive AFTER the legacy `tool (result)`.
-                    // Clearing it here would regress the
-                    // "#11 toolCall appears below #12 toolResult"
-                    // sort order. The dict is bounded per run.
-                    toolStartedAtByCall.removeValue(forKey: toolKey)
+                    // Tool call is fully done — the modern
+                    // `command_output (end)` handler reads
+                    // `toolStartedAtByCall[toolKey]` to populate its
+                    // own toolResult ChatMessage's `startedAt`; if it
+                    // fires AFTER this legacy result, clearing the
+                    // entry here would race and drop the start time
+                    // (user-reported 2026-07-02 "toolResult has no
+                    // start time" regression). The modern path's
+                    // `command_output (end)` handler clears the
+                    // entry itself after its own read, so leaving the
+                    // entry alone here is the correct fix. Memory
+                    // growth is bounded per run (one entry per tool
+                    // call, reclaimed at app restart).
                 } else {
                     // Any phase other than "start" / "update" / "result"
                     // is a server shape we don't recognize. Log a
@@ -979,6 +1238,34 @@ final class EventInterpreter {
                     // `finalizeAssistantFragmentIfAny`, so subsequent
                     // deltas in the new segment go to `runId:assistant:<N+1>`.
                     await finalizeAssistantFragmentIfAny(runId)
+                    // Resolve to the canonical id used by any prior
+                    // legacy `tool phase=start` for the same runId.
+                    // If a legacy event fired earlier with a
+                    // different toolCallId and registered
+                    // `<runId>:legacyId → legacyId` in the alias
+                    // map, we want THIS modern event to share the
+                    // same canonical id so legacy + modern writes
+                    // collapse to one bubble. Scan the existing
+                    // alias map for any pre-registered entry that
+                    // already maps to a stable canonical (the
+                    // legacy path's `phase=start` registers
+                    // `toolCallId → toolCallId`); when the modern
+                    // path fires, it adopts that legacy canonical
+                    // as its own. The scan is bounded by the
+                    // number of tool calls in a single run (a
+                    // small handful).
+                    let resolvedCanonical: String = {
+                        for (aliasKey, aliasedValue) in toolCallIdAliasByRun[runId] ?? [:] {
+                            // Legacy registered `L → L`. If our
+                            // canonical (or itemId) matches the
+                            // legacy's value, that's the bridge.
+                            if aliasedValue == canonical || aliasedValue == itemId {
+                                return aliasKey
+                            }
+                        }
+                        return canonical
+                    }()
+                    let resolvedToolKey = "\(runId):\(resolvedCanonical)"
                     // Remember BOTH the server's start timestamp (for
                     // `startedAt` display — "HH:MM" label) and the
                     // local-received time (for the sort key so the
@@ -989,8 +1276,28 @@ final class EventInterpreter {
                     // push the response's sort key before the user
                     // message's `Date()`-based key. Mirrors the
                     // legacy `case "tool"` `phase: "start"` branch.
-                    toolStartedAtByCall[toolKey] = timestamp
-                    toolReceivedAtByCall[toolKey] = Date()
+                    toolStartedAtByCall[resolvedToolKey] = timestamp
+                    toolReceivedAtByCall[resolvedToolKey] = Date()
+                    // Register the toolCallId → canonical alias so
+                    // the legacy `stream: "tool"` path can resolve
+                    // its toolCallId to this canonical id and
+                    // share the same bubble id / toolKey. We map
+                    // both `toolCallId` → `canonical` (identity
+                    // case) and `itemId` → `canonical` (legacy may
+                    // surface the call under the itemId when the
+                    // server doesn't supply a toolCallId on the
+                    // legacy event). Cleared at `lifecycle=end`.
+                    var perRunAlias = toolCallIdAliasByRun[runId] ?? [:]
+                    perRunAlias[resolvedCanonical] = resolvedCanonical
+                    if resolvedCanonical != itemId {
+                        perRunAlias[itemId] = resolvedCanonical
+                    }
+                    toolCallIdAliasByRun[runId] = perRunAlias
+                    // Mirror the legacy path: record this canonical
+                    // as the run's latest so a later legacy event
+                    // for the SAME logical tool can adopt it via
+                    // `toolLatestCanonicalByRun`.
+                    toolLatestCanonicalByRun[runId] = resolvedCanonical
                 }
                 if itemPhase == "end" {
                     // End phase. If there's a summary (e.g., command output
@@ -1065,6 +1372,32 @@ final class EventInterpreter {
                 // `<runId>:toolResult:<canonical>` namespace (canonical =
                 // `toolCallId ?? itemId`) so it upserts into the same
                 // entry created by `item` (end) / legacy `tool` (result).
+                //
+                // BUG-8 (user-reported 2026-07-07): the streaming
+                // toolResult bubble showed only a partial chunk of the
+                // tool's stdout (cut off mid-JSON), even though the
+                // server's later `chat.history` returned the FULL
+                // text. Root cause: each `command_output (delta)` event
+                // upserted its `output` chunk into the cache (replace
+                // by id), overwriting the previous chunk. When the
+                // final `command_output (end)` arrived, its `output`
+                // field was either incremental (last chunk only) or
+                // short of the full accumulated body — leaving the
+                // bubble with only the last few lines of stdout and
+                // the `exit=0 duration=Nms` trailer appended.
+                //
+                // The fix: maintain a per-toolKey accumulator
+                // (`accumulatedToolOutputByCall`) that concatenates
+                // every event's `output` field across phases. On
+                // `phase: "end"`, use the accumulator's text as
+                // `resultText` (it's monotonically growing; the
+                // end event's own `output` is a strict subset if it's
+                // incremental, or equal if the SDK sends the full
+                // final text). Suffix-overlap dedup (same as the
+                // `accumulatedAssistantTextByRun` path) avoids
+                // doubling the boundary between an event's tail and
+                // the next event's head when the SDK sends a few
+                // bytes of overlap for safety.
                 guard let itemId = data["itemId"]?.stringValue else {
                     AppLogger.log("agent command_output missing itemId, skipping. keys: \(data.keys.map { $0 })", category: .nativeChat, level: .warning)
                     return
@@ -1078,7 +1411,44 @@ final class EventInterpreter {
                 let exitCode = data["exitCode"]?.intValue
                 let durationMs = data["durationMs"]?.intValue
                 AppLogger.log("agent command_output - phase: \(outputPhase ?? "nil"), itemId: \(itemId), output len: \(output.count), exitCode: \(exitCode.map(String.init) ?? "nil")", category: .nativeChat)
-                var resultText = output
+                // Accumulate `output` across phases. Suffix-overlap
+                // dedup mirrors `accumulatedAssistantTextByRun`'s
+                // pattern (the SDK occasionally sends a few bytes of
+                // overlap between adjacent chunks for safety; without
+                // dedup the boundary would be doubled).
+                if !output.isEmpty {
+                    let prev = accumulatedToolOutputByCall[toolKey] ?? ""
+                    if prev.isEmpty {
+                        accumulatedToolOutputByCall[toolKey] = output
+                    } else if output.hasPrefix(prev) {
+                        // Server sent the full final text on end —
+                        // accept it as the new accumulator value
+                        // (it includes any text the deltas may have
+                        // missed).
+                        accumulatedToolOutputByCall[toolKey] = output
+                    } else if prev.hasSuffix(output) {
+                        // Delta already accumulated; no-op.
+                    } else {
+                        // Find the longest suffix of `prev` that's a
+                        // prefix of `output`; concatenate without
+                        // the overlap. Common when both ends emit
+                        // partial chunks.
+                        var overlap = 0
+                        let maxOverlap = min(prev.count, output.count)
+                        if maxOverlap > 0 {
+                            for k in stride(from: maxOverlap, through: 1, by: -1) {
+                                let prevSuffix = prev.suffix(k)
+                                if output.hasPrefix(prevSuffix) {
+                                    overlap = k
+                                    break
+                                }
+                            }
+                        }
+                        accumulatedToolOutputByCall[toolKey] =
+                            prev + output.dropFirst(overlap)
+                    }
+                }
+                var resultText = accumulatedToolOutputByCall[toolKey] ?? output
                 if outputPhase == "end" {
                     // Append exit info so the bubble shows the command's
                     // disposition even if `output` is empty.
@@ -1110,7 +1480,46 @@ final class EventInterpreter {
                     runId: runId,
                     seq: seq,
                     startedAt: startedAt,
-                    endedAt: outputPhase == "end" ? timestamp : nil,
+                    // FIX-9 follow-up #2 (user-reported
+                    // 2026-07-08, log 09:13:01.104Z
+                    // CACHE[32-34]): set `endedAt` on EVERY
+                    // event — not just `phase=end`. The
+                    // `timestamp` local is the server's
+                    // `payload.ts` for the current event
+                    // (`Date(timeIntervalSince1970: Double(ts)
+                    // / 1000)` at line 237). The
+                    // `sortForDisplay` cross-run fallback
+                    // promotes `endedAt` to the primary sort
+                    // key (FIX-9 follow-up #2 in
+                    // `NativeChatViewModel`); the toolResult
+                    // must carry a server-anchored end time
+                    // even during streaming so the sort
+                    // recovers the correct semantic order
+                    // (tool finishes BEFORE lifecycle ends,
+                    // per wire order guarantee) regardless of
+                    // client arrival order.
+                    //
+                    // Pre-fix `nil`-on-delta path forced the
+                    // sort to fall through to `receivedAt`,
+                    // which is the local Date() and reflects
+                    // client arrival order. When the gateway
+                    // delivered `command_output (delta)`
+                    // AFTER `lifecycle=end` (network jitter),
+                    // the streaming toolResult's `receivedAt`
+                    // was later than the assistant's, the
+                    // sort put the toolResult below the
+                    // assistant, and the user saw `toolCall
+                    // → assistant → toolResult` instead of
+                    // `toolCall → toolResult → assistant`.
+                    //
+                    // The view's bubble footer renders
+                    // `endedAt` as the "→ HH:mm" end time.
+                    // For streaming bubbles, this is the
+                    // server's last-delta ts — close enough
+                    // to "the tool finished" to be useful
+                    // (the bubble's `state == "streaming"`
+                    // already marks it as in-flight).
+                    endedAt: timestamp,
                     livenessState: nil,
                     toolCallId: canonical,
                     toolName: toolName,
@@ -1138,8 +1547,16 @@ final class EventInterpreter {
                 // expected to grow unboundedly across runs in a single
                 // session because lifecycle=end typically follows the
                 // last tool's item (end) shortly after.
+                //
+                // BUG-8: also clear `accumulatedToolOutputByCall`
+                // on `phase: "end"` so the next tool call (with a
+                // different `toolKey`) starts fresh. Without this,
+                // a reuse of the same `toolKey` would inherit stale
+                // text — see also the lifecycle=end bulk cleanup
+                // below.
                 if outputPhase == "end" {
                     toolStartedAtByCall.removeValue(forKey: toolKey)
+                    accumulatedToolOutputByCall.removeValue(forKey: toolKey)
                 }
             default:
                 // plan, approval, patch, compaction, error — not yet surfaced.
@@ -1557,7 +1974,24 @@ final class EventInterpreter {
         let idx = assistantFragmentIdxByRun[runId, default: 0]
         let fragId = "\(runId):assistant:\(idx)"
         let resolvedStartedAt = assistantStartedAtByRun[runId]
-        let resolvedEndedAt = Date()
+        // Anchor endedAt to the LAST assistant delta's server-side
+        // `payload.ts` (tracked in `lastAssistantTsByRun`), not
+        // wall-clock `Date()`. The wall-clock value was meaningless
+        // for `sortForDisplay`'s endedAt-priority branch — every
+        // fragment finalized in the same process run shared the
+        // same wall-clock value, so the sort couldn't distinguish
+        // "preamble first" from "response last". With the
+        // server-time anchor, fragments sort by their actual
+        // delta end-time (ascending across fragments within a run).
+        // Falls back to `Date()` when the streaming path didn't
+        // record a ts (defensive — shouldn't happen for real
+        // assistant deltas, all of which carry `payload.ts`).
+        let resolvedEndedAt: Date = {
+            if let lastTs = lastAssistantTsByRun[runId], lastTs > 0 {
+                return Date(timeIntervalSince1970: lastTs / 1000)
+            }
+            return Date()
+        }()
         // Use the seq of the LAST streaming delta in this fragment
         // (recorded by `lastAssistantSeqByRun`) so the
         // streaming-metadata overlay carries the same seq the

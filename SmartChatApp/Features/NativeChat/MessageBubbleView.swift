@@ -726,7 +726,14 @@ struct ChatMessage: Identifiable, Equatable {
     let timestamp: Date
     let role: String
     var state: String
-    let runId: String?
+    // `var` so `applyStreamingMetadata` can overlay the runId
+    // from `StreamingMetadata` after the store round-trip drops
+    // it (`OpenClawChatMessage` has no `runId` field). Without
+    // the overlay, the sort's `if let runA == runB` guard is
+    // always false and the endedAt-priority branch is dead code.
+    // All in-app construction sites already set runId at
+    // creation; making it `var` only enables the overlay restore.
+    var runId: String?
     var seq: Int?
     var startedAt: Date?
     var endedAt: Date?

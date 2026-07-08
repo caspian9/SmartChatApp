@@ -133,6 +133,20 @@ final class NativeChatViewModel {
     /// `logsNativeChat` Settings toggle on.
     @ObservationIgnored
     private var chatMessagesDiagVersionBySession: [String: Int] = [:]
+    /// N5 (audit 2026-07-07): per-session flag for the
+    /// "old-format entries detected" migration log.
+    /// `sortForDisplay` switched to prioritize `endedAt`
+    /// within a run; entries persisted BEFORE that change
+    /// lack `endedAt` and would silently fall back to
+    /// `Date.distantPast` (placing them BEFORE newer
+    /// same-run entries). Log once per session per launch
+    /// so the user can recognize that an old session may
+    /// render with the wrong order until the entries are
+    /// re-saved with `endedAt` populated. Re-entering the
+    /// session on next launch will refresh the entries
+    /// (the `lifecycle=end` upsert carries `endedAt`).
+    @ObservationIgnored
+    private var endedAtMigrationLoggedSessions: Set<String> = []
     /// `pendingBySession` removed — streaming bubbles now go
     /// directly to `MessageCacheStore` via id-upsert (same path
     /// as final), see `MessageReceiver.receiveMessage`. The
@@ -333,6 +347,36 @@ final class NativeChatViewModel {
             chatMessagesCachedVersionBySession[sessionKey] = version
             chatMessagesDiagVersionBySession[sessionKey] = version
             cached = converted
+            // N5 (audit 2026-07-07): one-time per-session
+            // log when this session contains pre-sort-change
+            // entries. The signature: at least one converted
+            // entry carries a `runId` but no `endedAt`
+            // AND no `seq` — that combination only matches
+            // entries persisted before the
+            // sortForDisplay endedAt-priority change
+            // (2026-07-07), because post-change
+            // streaming entries always carry both. New
+            // entries written by `fetchAndMergeFromNetwork`
+            // also lack `endedAt` (the server's chat.history
+            // doesn't supply it), but those entries also
+            // lack a `runId` (they're keyed by server UUID,
+            // not the streaming runId) so they're
+            // excluded by the `runId != nil` filter.
+            //
+            // Logged at `.info` so it's visible by
+            // default but doesn't fire on every
+            // `chatMessages(for:)` call.
+            if !endedAtMigrationLoggedSessions.contains(sessionKey) {
+                let needsMigration = converted.contains(where: { msg in
+                    msg.runId != nil && msg.endedAt == nil && msg.seq == nil
+                })
+                if needsMigration {
+                    AppLogger.log(
+                        "[chatMessages] endedAt migration detected: session=\(String(sessionKey.prefix(8))) has entries with runId but no endedAt/seq — these are pre-2026-07-07 persisted entries; sortForDisplay will sort them with Date.distantPast until they're re-saved. Re-entering the session will refresh them on next streaming run.",
+                        category: .nativeChat, level: .info)
+                    endedAtMigrationLoggedSessions.insert(sessionKey)
+                }
+            }
         }
         // (No pending merge — streaming bubbles now go through
         // the store via id-upsert. See MessageReceiver.receiveMessage.)
@@ -415,6 +459,19 @@ final class NativeChatViewModel {
         return messages.map { msg in
             guard let m = metadata[msg.id] else { return msg }
             var withMeta = msg
+            // Restore `runId` so `sortForDisplay` can group
+            // same-run bubbles for the endedAt-priority branch.
+            // `OpenClawChatMessage` has no `runId` field, so the
+            // store round-trip drops it; without this overlay
+            // every persisted bubble has `runId == nil` and the
+            // sort always falls through to the cross-run branch.
+            // Only overlay when the metadata has a non-nil
+            // runId — a nil metadata runId (e.g. for a user
+            // message that doesn't belong to a run) must not
+            // overwrite a present `msg.runId`.
+            if let overlayRunId = m.runId {
+                withMeta.runId = overlayRunId
+            }
             withMeta.seq = m.seq ?? msg.seq
             withMeta.startedAt = m.startedAt ?? msg.startedAt
             withMeta.endedAt = m.endedAt ?? msg.endedAt
@@ -425,16 +482,80 @@ final class NativeChatViewModel {
 
     private func sortForDisplay(_ messages: [ChatMessage]) -> [ChatMessage] {
         return messages.sorted { a, b in
-            // Same non-nil runId → seq (server's monotonic order).
-            // Missing `seq` falls back to Int.max (i.e., sort last
-            // among the run's events), then to `receivedAt ?? timestamp`
-            // as the final tie-breaker. `receivedAt` (set by
-            // `recordStreamingMetadata` from `Date()`) is the
-            // wall-clock time of the most recent
-            // `receiveMessage` call for this id — using it as
-            // the tie-breaker puts the most recently active
-            // bubble at the bottom within a run.
+            // Paired toolCall / toolResult structural tie-breaker
+            // (FIX-9 follow-up, user-reported 2026-07-08, log
+            // 08:55:20.913Z). The toolCall and toolResult
+            // bubbles for a single execution share the same
+            // `toolCallId` (set by both `case "item"` line 1361
+            // and `case "command_output"` line 1485 in
+            // `EventInterpreter`). They form a semantic pair
+            // (call → result) and the call MUST appear before
+            // the result in the view, regardless of arrival
+            // order.
+            //
+            // Why this matters: when P1 fix (runId
+            // preservation) is in place, both bubbles share
+            // the same `runId` and the same-runId branch
+            // (line 504) sorts by `endedAt` — the toolCall
+            // has `endedAt == nil` → `Date.distantPast`, the
+            // toolResult has `endedAt` from the
+            // `command_output (end)` server ts, so the
+            // toolCall sorts first. With P1 fix stashed (this
+            // build), `runId` is nil and the sort falls
+            // through to the cross-run branch (line 523) which
+            // uses `receivedAt ?? timestamp` — and
+            // `receivedAt` reflects the local arrival order.
+            // When the gateway emits `command_output` events
+            // BEFORE the `item phase=start` event for the
+            // same tool (or the client processes them out of
+            // order), the toolResult's `receivedAt` ends up
+            // EARLIER than the toolCall's, and the cross-run
+            // sort puts the toolResult ABOVE the toolCall —
+            // exactly the user-reported display regression.
+            //
+            // The fix: detect a toolCall/toolResult pair by
+            // matching `toolCallId` + role, and force the
+            // call before the result. Symmetric for the
+            // reversed a/b order. Applied as the FIRST check
+            // in the closure so it overrides the timestamp-
+            // based fallback below.
+            if let tcA = a.toolCallId, !tcA.isEmpty,
+               let tcB = b.toolCallId, !tcB.isEmpty,
+               tcA == tcB {
+                let isCallA = a.role == "toolCall"
+                let isResultA = a.role == "toolResult"
+                let isCallB = b.role == "toolCall"
+                let isResultB = b.role == "toolResult"
+                if isCallA && isResultB { return true }
+                if isResultA && isCallB { return false }
+                // Same role + same toolCallId — fall through
+                // to the normal sort (rare: the streaming
+                // path normally produces exactly one of each
+                // per execution).
+            }
+            // Same non-nil runId → sort by the server's
+            // event-time order. Priority:
+            //   1. `endedAt` — the server's `payload.endedAt` /
+            //      lifecycle=end / `command_output` (end) /
+            //      `item` (end) timestamp. Reflects WHEN THE
+            //      EVENT ACTUALLY HAPPENED on the server, not
+            //      when the client received it. This is the
+            //      correct sort key for inter-stream ordering
+            //      (e.g. toolResult BEFORE assistant final
+            //      when the server actually finished the tool
+            //      before emitting the lifecycle=end, even if
+            //      the wire order is reversed due to buffering
+            //      or socket flush timing).
+            //   2. `seq` — server's monotonic per-stream seq.
+            //      Tiebreaker for events within the SAME
+            //      stream that share an endedAt.
+            //   3. `receivedAt ?? timestamp` — last resort,
+            //      for events missing both `endedAt` and
+            //      `seq`.
             if let runA = a.runId, let runB = b.runId, runA == runB {
+                let endA = a.endedAt ?? Date.distantPast
+                let endB = b.endedAt ?? Date.distantPast
+                if endA != endB { return endA < endB }
                 let seqA = a.seq ?? Int.max
                 let seqB = b.seq ?? Int.max
                 if seqA != seqB { return seqA < seqB }
@@ -442,16 +563,52 @@ final class NativeChatViewModel {
                 let timeB = b.receivedAt ?? b.timestamp
                 if timeA != timeB { return timeA < timeB }
             }
-            // Different runs (or either has nil runId) → use
-            // `receivedAt` for in-session streaming bubbles
-            // (the user expects the most recently updated
-            // streaming bubble at the bottom of the list) and
-            // fall back to `timestamp` for historical bubbles
-            // (no overlay, defaults to the persisted value,
-            // which is the run's start time as supplied by
-            // chat.history).
-            let timeA = a.receivedAt ?? a.timestamp
-            let timeB = b.receivedAt ?? b.timestamp
+            // Different runs (or either has nil runId) —
+            // server-side event time is the most accurate
+            // signal. `endedAt` is the server's
+            // `payload.endedAt` / lifecycle=end /
+            // `command_output (end)` / `item` (end) timestamp
+            // — it reflects WHEN THE EVENT ACTUALLY HAPPENED
+            // on the server, not when the client received it.
+            //
+            // FIX-9 follow-up #2 (user-reported 2026-07-08,
+            // log 09:01:58.618Z CACHE[27-29]): with P1 fix
+            // (runId preservation) STASHED, the cross-run
+            // fallback was `receivedAt ?? timestamp` —
+            // sorting by client arrival order. When the
+            // gateway's `command_output (end)` event
+            // arrives at the device AFTER the subsequent
+            // `lifecycle=end` (e.g., network jitter, gateway
+            // buffer flush), the toolResult's `receivedAt`
+            // is later than the assistant final's. The sort
+            // then puts the toolResult BELOW the assistant
+            // final — the user sees `toolCall → assistant →
+            // toolResult` instead of the semantically correct
+            // `toolCall → toolResult → assistant` (the tool
+            // result is the input to the assistant's
+            // response, so it must appear BEFORE the
+            // response).
+            //
+            // The wire/server event times have a guaranteed
+            // order: the tool finishes (`command_output end`)
+            // before the lifecycle ends (`lifecycle end`).
+            // Promoting `endedAt` to the primary cross-run
+            // key recovers that semantic order. The
+            // hierarchy:
+            //   1. `endedAt` — server event completion
+            //      time, when available.
+            //   2. `receivedAt` — local arrival time, for
+            //      streaming bubbles that haven't yet
+            //      received a terminal event (toolCall with
+            //      only `phase=start` so far — no `endedAt`
+            //      until `phase=end`).
+            //   3. `timestamp` — persisted field; for
+            //      historical entries that never went
+            //      through the streaming path (no metadata
+            //      overlay). Defaults to the run's start
+            //      time as supplied by `chat.history`.
+            let timeA = a.endedAt ?? a.receivedAt ?? a.timestamp
+            let timeB = b.endedAt ?? b.receivedAt ?? b.timestamp
             return timeA < timeB
         }
     }
@@ -499,6 +656,18 @@ final class NativeChatViewModel {
     /// historical and the view shows them without the
     /// seq/start/end footer anyway.
     struct StreamingMetadata {
+        /// The streaming run id (e.g. `<runId>:assistant:0` →
+        /// `<runId>` extracted, or whatever the streaming path
+        /// sets on `ChatMessage.runId`). Used by `sortForDisplay`
+        /// to group same-run bubbles for the endedAt-priority
+        /// branch — without this field, every persisted bubble
+        /// has `runId == nil` after the store round-trip
+        /// (`OpenClawChatMessage` has no `runId` field, so the
+        /// round-trip drops it) and the sort's
+        /// `if let runA = a.runId, runA == runB` guard is
+        /// always false. Captured here so `applyStreamingMetadata`
+        /// can restore it before sort.
+        let runId: String?
         let seq: Int?
         let startedAt: Date?
         let endedAt: Date?
@@ -540,6 +709,7 @@ final class NativeChatViewModel {
             normalizedId = ChatMessageConverter.deterministicUUID(from: message.id).uuidString
         }
         let metadata = StreamingMetadata(
+            runId: message.runId,
             seq: message.seq,
             startedAt: message.startedAt,
             endedAt: message.endedAt,
