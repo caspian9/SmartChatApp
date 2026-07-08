@@ -323,28 +323,45 @@ struct SettingsView: View {
     /// of `messageCacheStats` is required because
     /// `MessageCacheStore.clearAll()` is async on the storage
     /// actor — see the BUG FIX comment at the original button.
+    ///
+    /// Issue #48 (sub-item 4 of #36): the "fully empty cache"
+    /// contract after a clear is broader than just wiping
+    /// `MessageCacheStorage`. The view-layer caches
+    /// (`CollapseStateCache.expandedMessageIds`,
+    /// `shouldCollapseCache`, `safeHeightCache`; `MarkdownCache`)
+    /// are also keyed on the now-gone messages and would leave
+    /// orphaned entries — a user who manually expanded a bubble,
+    /// then cleared the cache, would otherwise carry the old
+    /// expanded-id set into the next session (those ids no longer
+    /// match anything in `MessageCacheStorage`; harmless today
+    /// because `MessageBubbleView.isUserExpanded` only checks
+    /// membership, but it's a latent correctness drift). Cleared
+    /// alongside the persistent storage on `.messageCache` and
+    /// `.allCaches` to honor the contract; `.sessionCache` only
+    /// touches session-list keys, not message data, so it does
+    /// NOT clear them.
     private func performClear(_ action: PendingClearAction) {
         switch action {
         case .sessionCache:
             SessionCache.clearAll()
             sessionCacheCount = 0
         case .messageCache:
-            Task {
+            Task { @MainActor in
+                CollapseStateCache.shared.clear()
+                MarkdownCache.shared.clear()
                 await MessageCacheStore.shared.clearAll()
                 let stats = await MessageCacheStore.shared.stats()
-                await MainActor.run {
-                    messageCacheStats = stats
-                }
+                messageCacheStats = stats
             }
         case .allCaches:
             SessionCache.clearAll()
             sessionCacheCount = 0
-            Task {
+            Task { @MainActor in
+                CollapseStateCache.shared.clear()
+                MarkdownCache.shared.clear()
                 await MessageCacheStore.shared.clearAll()
                 let stats = await MessageCacheStore.shared.stats()
-                await MainActor.run {
-                    messageCacheStats = stats
-                }
+                messageCacheStats = stats
             }
         case .logs:
             AppLogger.shared.clear()
