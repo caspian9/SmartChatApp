@@ -77,6 +77,22 @@ final class EventInterpreter {
     /// reverse of the user's "preamble first, response last"
     /// expectation).
     private var lastAssistantSeqByRun: [String: Int] = [:]
+    /// Per-run timestamp of the LAST assistant delta we processed
+    /// (the server's `payload.ts`, ms since epoch). Used by
+    /// `finalizeAssistantFragmentIfAny` to populate the
+    /// fragment's `endedAt` with a server-time-anchored value
+    /// instead of wall-clock `Date()`. The previous
+    /// `Date()`-based endedAt was meaningless for
+    /// `sortForDisplay`'s endedAt-priority branch — every
+    /// fragment finalized in the same test run shared the
+    /// same wall-clock-now value, and the sort had no way to
+    /// distinguish "preamble first" from "response last".
+    /// With this tracker, the fragment's endedAt reflects the
+    /// last delta's server-side ts (a deterministic, ascending
+    /// value across fragments), so the sort puts earlier
+    /// fragments (smaller last-delta-ts) before later ones.
+    /// Cleared on `lifecycle=end` alongside `lastAssistantSeqByRun`.
+    private var lastAssistantTsByRun: [String: Double] = [:]
     /// Per-tool-call startedAt, keyed by "<runId>:<toolCallId>".
     /// The legacy `stream: "tool"` path fires `phase: "update"`
     /// events that wipe `startedAt` to nil on each call, which
@@ -492,6 +508,26 @@ final class EventInterpreter {
                     for (key, _) in accumulatedToolOutputByCall where key.hasPrefix("\(runId):") {
                         accumulatedToolOutputByCall.removeValue(forKey: key)
                     }
+                    // C2 (audit 2026-07-07): also clean up the
+                    // per-tool startedAt / receivedAt dicts.
+                    // The local cleanup inside
+                    // `command_output (end)` (line ~1437) only
+                    // fires when the end event actually arrives;
+                    // for runs that aborted or finished without
+                    // a matching `command_output (end)` — e.g.
+                    // a tool whose `item phase=end` carried
+                    // the summary directly — those entries
+                    // stayed forever. Long sessions with many
+                    // tool calls would grow the dicts
+                    // unboundedly. Both are keyed by
+                    // `runId:canonical` so the same
+                    // prefix-scan shape works.
+                    for (key, _) in toolStartedAtByCall where key.hasPrefix("\(runId):") {
+                        toolStartedAtByCall.removeValue(forKey: key)
+                    }
+                    for (key, _) in toolReceivedAtByCall where key.hasPrefix("\(runId):") {
+                        toolReceivedAtByCall.removeValue(forKey: key)
+                    }
                     // Fragment counter — must be reset so the next
                     // run for this same runId (in the unusual case
                     // of a session resume or a re-spawn) starts from
@@ -499,6 +535,7 @@ final class EventInterpreter {
                     // previous run's count.
                     assistantFragmentIdxByRun.removeValue(forKey: runId)
                     lastAssistantSeqByRun.removeValue(forKey: runId)
+                    lastAssistantTsByRun.removeValue(forKey: runId)
                     // Mark the runId as processed BEFORE returning so any
                     // racing re-delivery of the same `lifecycle=end` event
                     // short-circuits at the top of this branch. Inserting
@@ -688,6 +725,16 @@ final class EventInterpreter {
                 // `sortForDisplay` reads).
                 if let seq {
                     lastAssistantSeqByRun[runId] = seq
+                }
+                // Mirror `lastAssistantSeqByRun` for the per-delta
+                // `payload.ts` (ms since epoch). Used by
+                // `finalizeAssistantFragmentIfAny` to populate the
+                // fragment's `endedAt` with a server-time-anchored
+                // value. Stored as `Double` to match the
+                // `endedAtMs > 0 ? Date(timeIntervalSince1970: ts/1000)`
+                // conversion in the lifecycle=end path.
+                if ts > 0 {
+                    lastAssistantTsByRun[runId] = Double(ts)
                 }
                 // Re-stamp startedAt from the lifecycle=start record
                 // so the bubble's "HH:mm" prefix doesn't disappear
@@ -932,7 +979,42 @@ final class EventInterpreter {
                     if let hit = toolCallIdAliasByRun[runId]?[toolCallId] {
                         return hit
                     }
+                    // I4 (audit 2026-07-07): tier-2
+                    // fallback adopts the run's
+                    // latest-registered canonical. This is
+                    // an optimistic timing assumption —
+                    // correct only when the tools within a
+                    // run are sequential, which is the
+                    // common case (one tool finishes
+                    // before the next starts). If the
+                    // server ever emits concurrent tool
+                    // starts within the same run, the
+                    // latest pointer would race and the
+                    // legacy path could adopt the wrong
+                    // sibling's canonical — silently
+                    // merging two distinct tool calls
+                    // into one bubble.
+                    //
+                    // The `#if DEBUG` assert below guards
+                    // against an obvious failure mode
+                    // (alias lookup with a non-empty key
+                    // that has no entry — i.e., the
+                    // server emitted a legacy start for a
+                    // tool whose modern `item phase=start`
+                    // was never sent). For the
+                    // sibling-race case the assert can't
+                    // fire at runtime (the race is timing
+                    // dependent) — on-call can grep for
+                    // "tier-2 adopted" when investigating
+                    // duplicate tool bubbles.
                     if let latest = toolLatestCanonicalByRun[runId] {
+                        #if DEBUG
+                        if toolCallId != latest {
+                            AppLogger.log(
+                                "toolLatestCanonicalByRun tier-2 adopted: runId=\(runId) legacyToolCallId=\(toolCallId) adoptedCanonical=\(latest)",
+                                category: .nativeChat, level: .debug)
+                        }
+                        #endif
                         return latest
                     }
                     return toolCallId
@@ -1398,7 +1480,46 @@ final class EventInterpreter {
                     runId: runId,
                     seq: seq,
                     startedAt: startedAt,
-                    endedAt: outputPhase == "end" ? timestamp : nil,
+                    // FIX-9 follow-up #2 (user-reported
+                    // 2026-07-08, log 09:13:01.104Z
+                    // CACHE[32-34]): set `endedAt` on EVERY
+                    // event — not just `phase=end`. The
+                    // `timestamp` local is the server's
+                    // `payload.ts` for the current event
+                    // (`Date(timeIntervalSince1970: Double(ts)
+                    // / 1000)` at line 237). The
+                    // `sortForDisplay` cross-run fallback
+                    // promotes `endedAt` to the primary sort
+                    // key (FIX-9 follow-up #2 in
+                    // `NativeChatViewModel`); the toolResult
+                    // must carry a server-anchored end time
+                    // even during streaming so the sort
+                    // recovers the correct semantic order
+                    // (tool finishes BEFORE lifecycle ends,
+                    // per wire order guarantee) regardless of
+                    // client arrival order.
+                    //
+                    // Pre-fix `nil`-on-delta path forced the
+                    // sort to fall through to `receivedAt`,
+                    // which is the local Date() and reflects
+                    // client arrival order. When the gateway
+                    // delivered `command_output (delta)`
+                    // AFTER `lifecycle=end` (network jitter),
+                    // the streaming toolResult's `receivedAt`
+                    // was later than the assistant's, the
+                    // sort put the toolResult below the
+                    // assistant, and the user saw `toolCall
+                    // → assistant → toolResult` instead of
+                    // `toolCall → toolResult → assistant`.
+                    //
+                    // The view's bubble footer renders
+                    // `endedAt` as the "→ HH:mm" end time.
+                    // For streaming bubbles, this is the
+                    // server's last-delta ts — close enough
+                    // to "the tool finished" to be useful
+                    // (the bubble's `state == "streaming"`
+                    // already marks it as in-flight).
+                    endedAt: timestamp,
                     livenessState: nil,
                     toolCallId: canonical,
                     toolName: toolName,
@@ -1853,7 +1974,24 @@ final class EventInterpreter {
         let idx = assistantFragmentIdxByRun[runId, default: 0]
         let fragId = "\(runId):assistant:\(idx)"
         let resolvedStartedAt = assistantStartedAtByRun[runId]
-        let resolvedEndedAt = Date()
+        // Anchor endedAt to the LAST assistant delta's server-side
+        // `payload.ts` (tracked in `lastAssistantTsByRun`), not
+        // wall-clock `Date()`. The wall-clock value was meaningless
+        // for `sortForDisplay`'s endedAt-priority branch — every
+        // fragment finalized in the same process run shared the
+        // same wall-clock value, so the sort couldn't distinguish
+        // "preamble first" from "response last". With the
+        // server-time anchor, fragments sort by their actual
+        // delta end-time (ascending across fragments within a run).
+        // Falls back to `Date()` when the streaming path didn't
+        // record a ts (defensive — shouldn't happen for real
+        // assistant deltas, all of which carry `payload.ts`).
+        let resolvedEndedAt: Date = {
+            if let lastTs = lastAssistantTsByRun[runId], lastTs > 0 {
+                return Date(timeIntervalSince1970: lastTs / 1000)
+            }
+            return Date()
+        }()
         // Use the seq of the LAST streaming delta in this fragment
         // (recorded by `lastAssistantSeqByRun`) so the
         // streaming-metadata overlay carries the same seq the

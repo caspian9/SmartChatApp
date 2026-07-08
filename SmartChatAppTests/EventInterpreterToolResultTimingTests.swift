@@ -114,6 +114,82 @@ final class EventInterpreterToolResultTimingTests: XCTestCase {
         }
     }
 
+    /// G3 (audit 2026-07-07): `command_output (end)` must
+    /// clear `accumulatedToolOutputByCall[toolKey]` so a
+    /// subsequent call reusing the same `toolKey` (the
+    /// upstream call id is the same; the server resets
+    /// its counter on a fresh agent session) starts with
+    /// an empty accumulator instead of inheriting the
+    /// previous call's text.
+    ///
+    /// Without this, two distinct tool invocations could
+    /// appear to share a single bubble — the second's
+    /// `command_output (delta)` would append to the first's
+    /// accumulated text, and the user would see both
+    /// invocations' output in one bubble.
+    func test_commandOutputAccumulatorReusedAfterPhaseEnd_startsFresh() async throws {
+        let runId = "r-tr-reuse"
+        let canonical = "call_00_reuse"
+
+        // Lifecycle start.
+        await interpreter.handleTransportEvent(
+            .agent(makeAgentEvent(
+                runId: runId, seq: 1, stream: "lifecycle", ts: 1_000,
+                data: ["phase": AnyCodable("start"),
+                       "startedAt": AnyCodable(Double(1_000))])),
+            sessionKey: "session-1")
+
+        // First call: completes normally. End phase should
+        // clear the accumulator.
+        await sendItemStart(runId: runId, ts: 1_500, canonical: canonical, kind: "tool")
+        await sendItemStart(runId: runId, ts: 1_501, canonical: canonical, kind: "command")
+        await sendCommandOutput(runId: runId, ts: 1_600, canonical: canonical,
+                                phase: "delta", output: "FIRST: chunk-1\n")
+        await sendCommandOutput(runId: runId, ts: 1_650, canonical: canonical,
+                                phase: "delta", output: "FIRST: chunk-2\n")
+        await sendCommandOutput(runId: runId, ts: 1_700, canonical: canonical,
+                                phase: "end",
+                                output: "FIRST: full body\n")
+
+        // Capture the first call's toolResult. The accumulated
+        // body is "FIRST: chunk-1\nFIRST: chunk-2\nFIRST: full
+        // body\n" (plus the exit/duration trailer appended at
+        // line 1378 of EventInterpreter).
+        let firstResults = vm.chatMessages(for: "session-1")
+            .filter { $0.role == "toolResult" }
+        XCTAssertGreaterThanOrEqual(firstResults.count, 1,
+            "first call must produce at least one toolResult bubble")
+        let firstText = firstResults.last?.text ?? ""
+        XCTAssertTrue(firstText.contains("FIRST:"),
+            "first toolResult must contain the FIRST: marker — got: \(String(firstText.prefix(120)))")
+
+        // Second call reusing the same toolKey/canonical.
+        // If `command_output (end)` did NOT clear the
+        // accumulator (regression), the next delta would
+        // append to the FIRST's accumulated text and the
+        // bubble would contain "FIRST: ... SECOND: ...".
+        await sendItemStart(runId: runId, ts: 3_000, canonical: canonical, kind: "tool")
+        await sendItemStart(runId: runId, ts: 3_001, canonical: canonical, kind: "command")
+        await sendCommandOutput(runId: runId, ts: 3_100, canonical: canonical,
+                                phase: "delta", output: "SECOND: chunk-1\n")
+        await sendCommandOutput(runId: runId, ts: 3_150, canonical: canonical,
+                                phase: "delta", output: "SECOND: chunk-2\n")
+        await sendCommandOutput(runId: runId, ts: 3_200, canonical: canonical,
+                                phase: "end",
+                                output: "SECOND: full body\n")
+
+        // The latest toolResult (the second call's) must NOT
+        // contain the FIRST call's text. If it does, the
+        // accumulator wasn't reset on phase=end.
+        let allResults = vm.chatMessages(for: "session-1")
+            .filter { $0.role == "toolResult" }
+        let latest = allResults.last?.text ?? ""
+        XCTAssertFalse(latest.contains("FIRST:"),
+            "G3: latest toolResult leaked FIRST call's text into the SECOND call's bubble — accumulator was not cleared on phase=end. Latest text: \(String(latest.prefix(200)))")
+        XCTAssertTrue(latest.contains("SECOND:"),
+            "G3: latest toolResult must contain the SECOND: marker — got: \(String(latest.prefix(120)))")
+    }
+
     private func sendItemStart(runId: String, ts: Int, canonical: String, kind: String) async {
         await interpreter.handleTransportEvent(
             .agent(makeItemEvent(

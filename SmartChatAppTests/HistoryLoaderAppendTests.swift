@@ -320,7 +320,7 @@ final class HistoryLoaderAppendTests: XCTestCase {
         let streamedAssistant = OpenClawChatMessage(
             id: streamedAssistantId, role: "assistant",
             content: [OpenClawChatMessageContent(
-                type: "text", text: "**北京海淀当前天气** ☀️",
+                type: "text", text: "**Region E current weather** ☀️",
                 thinking: nil, thinkingSignature: nil, mimeType: nil,
                 fileName: nil, content: nil, id: nil, name: nil,
                 arguments: nil)],
@@ -352,7 +352,7 @@ final class HistoryLoaderAppendTests: XCTestCase {
             id: UUID(), role: "assistant",
             content: [
                 OpenClawChatMessageContent(
-                    type: "text", text: "**北京海淀当前天气** ☀️",
+                    type: "text", text: "**Region E current weather** ☀️",
                     thinking: nil, thinkingSignature: nil, mimeType: nil,
                     fileName: nil, content: nil, id: nil, name: nil,
                     arguments: nil),
@@ -448,7 +448,7 @@ final class HistoryLoaderAppendTests: XCTestCase {
         let streamedAssistant = OpenClawChatMessage(
             id: streamedAssistantId, role: "assistant",
             content: [OpenClawChatMessageContent(
-                type: "text", text: "**北京海淀当前天气** ☀️",
+                type: "text", text: "**Region E current weather** ☀️",
                 thinking: nil, thinkingSignature: nil, mimeType: nil,
                 fileName: nil, content: nil, id: nil, name: nil,
                 arguments: nil)],
@@ -465,7 +465,7 @@ final class HistoryLoaderAppendTests: XCTestCase {
         let serverAssistant = OpenClawChatMessage(
             id: UUID(), role: "assistant",
             content: [OpenClawChatMessageContent(
-                type: "text", text: "**北京海淀当前天气** ☀️",
+                type: "text", text: "**Region E current weather** ☀️",
                 thinking: nil, thinkingSignature: nil, mimeType: nil,
                 fileName: nil, content: nil, id: nil, name: nil,
                 arguments: nil)],
@@ -539,7 +539,7 @@ final class HistoryLoaderAppendTests: XCTestCase {
         let streamedAssistant = OpenClawChatMessage(
             id: streamedAssistantId, role: "assistant",
             content: [OpenClawChatMessageContent(
-                type: "text", text: "**北京海淀当前天气** ☀️",
+                type: "text", text: "**Region E current weather** ☀️",
                 thinking: nil, thinkingSignature: nil, mimeType: nil,
                 fileName: nil, content: nil, id: nil, name: nil,
                 arguments: nil)],
@@ -563,7 +563,7 @@ final class HistoryLoaderAppendTests: XCTestCase {
             id: UUID(), role: "assistant",
             content: [
                 OpenClawChatMessageContent(
-                    type: "text", text: "**北京海淀当前天气** ☀️",
+                    type: "text", text: "**Region E current weather** ☀️",
                     thinking: nil, thinkingSignature: nil, mimeType: nil,
                     fileName: nil, content: nil, id: nil, name: nil,
                     arguments: nil),
