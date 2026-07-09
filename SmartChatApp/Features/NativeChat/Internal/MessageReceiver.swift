@@ -30,7 +30,26 @@ final class MessageReceiver {
     /// a natural in-place replacement, not a nuke-and-rebuild.
     func receiveMessage(_ message: ChatMessage) async {
         guard let store = store else { return }
-        guard let sessionKey = viewModel?.selectedSession?.key else { return }
+
+        // Issue #34 routing gate: ask the VM which session this
+        // runId belongs to (via the runId → sessionKey map
+        // populated in `handleTransportEvent`). If the resolved
+        // target session ≠ the currently-selected session, the
+        // event is from a nested agent run on a DIFFERENT
+        // session and must not be upserted into the user's view.
+        // Reject with a debug log so on-call can grep for the
+        // cause if a leak resurfaces.
+        guard let targetSessionKey = viewModel?.route(for: message.runId) else {
+            return
+        }
+        guard targetSessionKey == viewModel?.selectedSession?.key else {
+            AppLogger.log(
+                "nested-run rejected: runId=\(message.runId ?? "nil") target=\(targetSessionKey) selected=\(viewModel?.selectedSession?.key ?? "nil") role=\(message.role)",
+                category: .nativeChat, level: .debug)
+            return
+        }
+
+        let sessionKey = targetSessionKey
 
         // 1. ChatMessage → OpenClawChatMessage
         guard let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: message) else {

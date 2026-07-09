@@ -628,6 +628,10 @@ final class NativeChatViewModel {
         chatMessagesBySession[sessionKey] = nil
         chatMessagesCachedVersionBySession[sessionKey] = nil
         streamingMetadataBySession[sessionKey] = nil
+        // Drop the runId → sessionKey entries for the session
+        // being cleared — stale entries would pin a runId to a
+        // session the user navigated away from.
+        runSessionKeyByRunId = runSessionKeyByRunId.filter { $0.value != sessionKey }
     }
 
     /// Drops the cached `ChatMessage` array for `sessionKey` so
@@ -638,6 +642,36 @@ final class NativeChatViewModel {
     func invalidateChatMessagesCache(for sessionKey: String) {
         chatMessagesBySession[sessionKey] = nil
         chatMessagesCachedVersionBySession[sessionKey] = nil
+    }
+
+    // MARK: - Nested-run routing (issue #34)
+
+    /// In-memory runId → sessionKey routing table. Not persisted;
+    /// first event after app restart re-establishes via
+    /// first-event-wins. `@ObservationIgnored` — internal bookkeeping,
+    /// never read by views. Never call from a SwiftUI view `body` —
+    /// non-observed property.
+    @ObservationIgnored
+    private var runSessionKeyByRunId: [String: String] = [:]
+
+    /// Returns the session key the given `runId` belongs to.
+    /// Falls through to `selectedSession?.key` for nil or
+    /// unmapped runIds — staging the user's current view is
+    /// safer than guessing for new runIds.
+    func route(for runId: String?) -> String? {
+        if let runId, let target = runSessionKeyByRunId[runId] {
+            return target
+        }
+        return selectedSession?.key
+    }
+
+    /// Records the session key for an incoming runId.
+    /// `overwriteIfExisting == true` overwrites — used for
+    /// SDK-declared `.chat.sessionKey`; otherwise first-event-wins.
+    func recordRunSession(_ sessionKey: String?, for runId: String, overwriteIfExisting: Bool = false) {
+        if overwriteIfExisting || runSessionKeyByRunId[runId] == nil {
+            runSessionKeyByRunId[runId] = sessionKey
+        }
     }
 
     // MARK: - Streaming metadata overlay
@@ -1096,6 +1130,36 @@ AppLogger.log(
     // MARK: - Transport event handling
 
     private func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String) async {
+        // Record the runId → sessionKey mapping BEFORE
+        // dispatching to EventInterpreter. The
+        // `MessageReceiver.receiveMessage` gate (issue #34)
+        // consults this map to reject events whose target
+        // session ≠ the currently-selected session.
+        //
+        // Two sources of truth:
+        //   - `.chat`: SDK-provided `chat.sessionKey` is
+        //     authoritative — overwrites any prior guess.
+        //   - `.agent`: first-event-wins — record the
+        //     currently-selected session; subsequent events
+        //     for the same runId do NOT overwrite (so the
+        //     mapping stays stable across session switches).
+        switch event {
+        case .chat(let chat):
+            if let runId = chat.runId, let chatSessionKey = chat.sessionKey {
+                recordRunSession(chatSessionKey, for: runId, overwriteIfExisting: true)
+            }
+        case .agent(let payload):
+            // OpenClawAgentEventPayload.runId is non-Optional
+            // String (see EventInterpreter.swift:235 `let runId =
+            // payload.runId`); an empty string has no usable
+            // identity, so skip recording.
+            if !payload.runId.isEmpty {
+                recordRunSession(selectedSession?.key, for: payload.runId)
+            }
+        default:
+            break
+        }
+
         await eventInterpreter.handleTransportEvent(event, sessionKey: sessionKey)
     }
 
