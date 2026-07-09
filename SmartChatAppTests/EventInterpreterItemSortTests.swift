@@ -72,6 +72,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // this test does). Using realistic 2026-era ts
         // values keeps the test's intent intact.
         let runId = "r-item-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let canonical = "tc-bash-1"
         // Anchor at "now" so the test runs in any era.
         // Spacing matches the original (1s/100ms/200ms).
@@ -139,6 +142,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // across the local Date() (toolCall) and the
         // server ts (toolResult, post-fix).
         let runId = "r-item-2"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let canonical = "tc-bash-2"
         let baseTs: Int = Int(Date().timeIntervalSince1970 * 1000)
         let t1: Int = baseTs
@@ -182,6 +188,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // creation entirely. After the fix we read `thinking` first,
         // fall back to `text` for older servers.
         let runId = "r-thinking-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let thinkingText = "The user is asking about Hebei province weather."
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_000, data: ["thinking": thinkingText])),
@@ -198,6 +207,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // thinking payload. The handler must still pick it up so we
         // don't regress the existing data path.
         let runId = "r-thinking-2"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let text = "Reasoning about the request."
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_100, data: ["text": text])),
@@ -215,6 +227,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // accumulator pattern — the same `accumulated*TextByRun`
         // machinery is needed for the thinking stream.
         let runId = "r-thinking-3"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_200, data: ["thinking": "Part 1. "], seq: 1)),
             sessionKey: "session-1")
@@ -239,6 +254,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // should detect `text.hasPrefix(prev)` and use the new delta
         // as-is rather than appending (which would double-count).
         let runId = "r-thinking-4"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_500, data: ["thinking": "Part 1"], seq: 1)),
             sessionKey: "session-1")
@@ -259,6 +277,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // of the current accumulator (we've already moved past this
         // state). The handler must NOT regress the visible text.
         let runId = "r-thinking-5"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 3_800, data: ["thinking": "Part 1 Part 2 Part 3"], seq: 1)),
             sessionKey: "session-1")
@@ -291,6 +312,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // `viewModel?.receiveMessage` path so the bubble reaches
         // the store.
         let runId = "r-chat-thinking-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let thinkingText = "The user is asking from the iOS webchat channel about Hebei province weather."
         let chatEvent = makeChatEvent(runId: runId, state: "final", contentBlocks: [
             ["type": "text", "text": "Short response."],
@@ -322,6 +346,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // (one or the other, not duplicated) and we must not see
         // two thinking entries.
         let runId = "r-chat-thinking-2"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let agentText = "Part 1."
         let chatText = "Part 1. Part 2."
         await interpreter.handleTransportEvent(
@@ -422,6 +449,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // case). The chat event's role here is just to deliver the
         // final text; the seq-driven sort handles the order.
         let runId = "r-runphase-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         // Assistant delta first to seed the accumulated text — the
         // lifecycle=end ChatMessage's text comes from this
         // accumulator. Without it, the response has empty text
@@ -476,6 +506,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // The user's bug was the chat-event case; this test
         // locks in the agent-event case which the seq sort fixes.
         let runId = "r-runseq-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         // First, an assistant delta to set up the accumulated
         // text. The EventInterpreter's `case "assistant"` reads
         // `data["text"]` and accumulates it under runId; the
@@ -597,6 +630,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
         // response always lands after.
         let key = "session-1"
         let runId = "r-skew-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         // 1. Simulate the user-send side: append a user bubble
         //    directly to the store with the local send time.
         let userSendTime = Date()
@@ -833,6 +869,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// processed; skip subsequent arrivals.
     func test_repeatedLifecycleEnd_keepsAccumulatorTextInStore() async throws {
         let runId = "r-replay-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let responseText = "Hi! 👋 Greeting from iOS received. How can I help?"
         // Seed the accumulator via the assistant-delta path.
         await interpreter.handleTransportEvent(
@@ -880,6 +919,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// text.
     func test_assistantDelta_partialOverlap_replacesFromAlignmentPoint() async throws {
         let runId = "r-po-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "this is **ok", seq: 1)),
             sessionKey: "session-1")
@@ -895,6 +937,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// Two deltas with no shared prefix must still concatenate.
     func test_assistantDelta_noOverlap_concatenates() async throws {
         let runId = "r-po-2"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "hello ", seq: 1)),
             sessionKey: "session-1")
@@ -923,6 +968,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// 2-char alignment and trims before append.
     func test_assistantDelta_shortOverlapBelowThreshold_withSuffixOverlap_trimsUnique() async throws {
         let runId = "r-po-3"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "abc看看", seq: 1)),
             sessionKey: "session-1")
@@ -940,6 +988,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// regress the no-overlap case.
     func test_assistantDelta_noPrefixNoSuffixOverlap_concatenates() async throws {
         let runId = "r-po-3b"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "abc", seq: 1)),
             sessionKey: "session-1")
@@ -960,6 +1011,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// identical text).
     func test_assistantDelta_textAlreadyInAccumulatorSuffix_isDropped() async throws {
         let runId = "r-po-3c"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeAssistantDeltaEvent(runId: runId, ts: 100, text: "abcdef", seq: 1)),
             sessionKey: "session-1")
@@ -980,6 +1034,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// path covered explicitly.
     func test_assistantDelta_seqReplay_secondIsDropped() async throws {
         let runId = "r-po-4"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeAssistantDeltaEventWithSeq(runId: runId, seq: 5, ts: 100, text: "hello")),
             sessionKey: "session-1")
@@ -1000,6 +1057,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// "step 1: parse inputstep 1: parsed input and continue".
     func test_thinkingDelta_partialOverlap_replacesFromAlignmentPoint() async throws {
         let runId = "r-tpo-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 100, data: ["thinking": "step 1: parse input"], seq: 1)),
             sessionKey: "session-1")
@@ -1020,6 +1080,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// for the LCP<8 case.
     func test_thinkingDelta_shortSuffixOverlap_trimsUniqueTail() async throws {
         let runId = "r-tpo-2"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
             .agent(makeThinkingEvent(runId: runId, ts: 100, data: ["thinking": "abc看看"], seq: 1)),
             sessionKey: "session-1")
@@ -1053,6 +1116,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// regression guard for the recovery logic itself.
     func test_chatEvent_stateFinal_assistantText_correctsAccumulator() async throws {
         let runId = "r-chat-final-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let authoritativeText = "this is **flowed ok"
 
         // First, an assistant delta so the accumulator has text.
@@ -1081,6 +1147,9 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// would risk regressing streaming progress.
     func test_chatEvent_stateDelta_assistantText_doesNotRecover() async throws {
         let runId = "r-chat-state-delta-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let streamingText = "intermediate"
 
         await interpreter.handleTransportEvent(
@@ -1105,8 +1174,14 @@ final class EventInterpreterItemSortTests: XCTestCase {
     /// (matches the existing thinking-block skip path's logic).
     /// No stable runId namespace to match against.
     func test_chatEvent_nilRunId_assistantText_doesNotRecover() async throws {
+        // Issue #34 strict gate: register the runId with the test
+        // session before driving events (mirrors the chat-event
+        // path that production uses to populate the runId →
+        // sessionKey map).
+        let activeRunId = "r-active-1"
+        vm.recordRunSession("session-1", for: activeRunId, overwriteIfExisting: true)
         await interpreter.handleTransportEvent(
-            .agent(makeAssistantDeltaEvent(runId: "r-active-1", ts: 100, text: "streaming")),
+            .agent(makeAssistantDeltaEvent(runId: activeRunId, ts: 100, text: "streaming")),
             sessionKey: "session-1")
         let chatEvent = makeChatEvent(
             runId: nil,

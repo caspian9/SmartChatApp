@@ -2,13 +2,22 @@ import XCTest
 import OpenClawChatUI
 @testable import SmartChatApp
 
-/// Routing gate tests for issue #34: nested agent-run events
-/// whose runId doesn't belong to the currently-selected session
-/// must be rejected by `MessageReceiver.receiveMessage`. The
-/// VM owns the runId → sessionKey map (populated in
-/// `handleTransportEvent` before dispatching to
-/// `EventInterpreter`); the gate consults it via
-/// `viewModel.route(for:)` and rejects mismatches.
+/// Routing gate tests for issue #34 (strict-policy variant):
+/// nested agent-run events whose runId doesn't belong to the
+/// currently-selected session must not be upserted into the
+/// user's view. The VM owns the runId → sessionKey map; only
+/// the chat event's `chat.sessionKey` is authoritative
+/// (overwriteIfExisting: true). Agent events alone do NOT
+/// pre-claim the runId — they are buffered in
+/// `pendingAgentBuffer` until a chat event confirms the
+/// sessionKey (flush) or the timeout fallback fires
+/// (assume selectedSession).
+///
+/// The `MessageReceiver.receiveMessage` gate consults
+/// `viewModel.route(for:)` and either:
+///   1. accepts (map hit matches selectedSession, OR runId is nil)
+///   2. buffers (unmapped non-final runId)
+///   3. rejects (map hit ≠ selectedSession, OR unmapped final)
 @MainActor
 final class MessageReceiverRoutingTests: XCTestCase {
     private var receiver: MessageReceiver!
@@ -43,14 +52,17 @@ final class MessageReceiverRoutingTests: XCTestCase {
         XCTAssertEqual(target, "session-A")
     }
 
-    func test_route_unmappedRunId_fallsThroughToSelectedSession() {
-        // First time we see a runId, no mapping exists yet →
-        // fall through to the currently-selected session. The
-        // first-event-wins path in `handleTransportEvent` will
-        // populate the map for subsequent events.
+    func test_route_unmappedRunId_returnsNil_strictGate() {
+        // Strict gate (replaces first-event-wins): an unmapped
+        // runId must NOT be silently routed to the currently-
+        // selected session. Doing so would leak nested agent
+        // runs into the parent session's view. Instead, return
+        // nil so `MessageReceiver` can buffer the message in
+        // `pendingAgentBuffer` until a chat event confirms the
+        // true sessionKey.
         let target = vm.route(for: "fresh-runId")
-        XCTAssertEqual(target, "session-A",
-                       "unmapped runId must fall through to selectedSession")
+        XCTAssertNil(target,
+                     "unmapped runId must return nil under strict gate; the receiver buffers instead of routing")
     }
 
     func test_route_mappedRunId_returnsMappedSession() {
@@ -181,6 +193,155 @@ final class MessageReceiverRoutingTests: XCTestCase {
 
         let messages = store.messages(for: "session-A", since: nil)
         XCTAssertEqual(messages.count, 1, "runId=nil messages must be accepted")
+    }
+
+    // MARK: - Pending buffer (strict gate)
+
+    func test_gate_unmappedNonFinalMessage_isBufferedNotUpserted() async {
+        // Strict gate: an agent event for an unmapped runId must
+        // NOT be written to the cache. It's buffered in
+        // `pendingAgentBuffer` until a chat event confirms the
+        // sessionKey. This is the leak fix — pre-fix code would
+        // auto-claim the runId for the selected session and write
+        // the bubble to the wrong cache.
+        let streamingMsg = ChatMessage(
+            id: "stream-1", text: "ha",
+            timestamp: Date(),
+            role: "assistant", state: "streaming",
+            runId: "fresh-runId", seq: 1,
+            startedAt: Date(), endedAt: nil,
+            livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil)
+
+        await receiver.receiveMessage(streamingMsg)
+
+        // Cache MUST be empty — strict gate rejected the write.
+        let aMessages = store.messages(for: "session-A", since: nil)
+        XCTAssertTrue(aMessages.isEmpty,
+                      "unmapped runId streaming message must not leak into the selected session's cache")
+    }
+
+    func test_gate_unmappedFinalMessage_isRejectedNotBuffered() async {
+        // Final messages from unconfirmed runs are rejected
+        // outright (not buffered). Buffering a final message
+        // would let it land in the cache once the chat event
+        // arrives, but the streaming path's
+        // `id = "<runId>:assistant:N"` namespace can collide
+        // with the buffered final's id. The chat event will
+        // bring its own complete message, and `chat.history`
+        // will repopulate any historical run on the right
+        // session anyway. Buffering non-final only is the safe
+        // choice.
+        let finalMsg = ChatMessage(
+            id: "final-1", text: "complete",
+            timestamp: Date(),
+            role: "assistant", state: "final",
+            runId: "fresh-runId", seq: 1,
+            startedAt: Date(), endedAt: Date(),
+            livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil)
+
+        await receiver.receiveMessage(finalMsg)
+
+        let aMessages = store.messages(for: "session-A", since: nil)
+        XCTAssertTrue(aMessages.isEmpty,
+                      "unmapped runId final message must be rejected; chat.history is the source of truth")
+    }
+
+    func test_buffer_flush_routesBufferedMessagesToCorrectSession() async {
+        // Simulate the protocol: agent event for an unmapped
+        // runId arrives first (buffered). Then a chat event
+        // arrives with `chat.sessionKey = B`, confirming the
+        // run is for session B. The buffer must flush through
+        // `receiveMessage` and the bubble must land in B's
+        // cache (not A's, which the user is currently viewing).
+        let streamingMsg = ChatMessage(
+            id: "stream-1", text: "ha",
+            timestamp: Date(),
+            role: "assistant", state: "streaming",
+            runId: "nested-runId", seq: 1,
+            startedAt: Date(), endedAt: nil,
+            livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil)
+        await receiver.receiveMessage(streamingMsg)
+
+        // Simulate the chat event handler: record runId → B
+        // and flush the buffer.
+        vm.recordRunSession("session-B", for: "nested-runId", overwriteIfExisting: true)
+        await vm.flushPending(for: "nested-runId")
+
+        // User is still in A; the bubble for runId=nested-runId
+        // must NOT land in A's cache. The MessageReceiver gate
+        // rejects because route(for: nested-runId) = B ≠ A.
+        let aMessages = store.messages(for: "session-A", since: nil)
+        XCTAssertTrue(aMessages.isEmpty,
+                      "buffered message flushed to wrong session: nested run bubbled into parent's view (issue #34 root cause)")
+
+        // Switch to B; the message must now be visible.
+        vm.selectedSession = makeTestSession(key: "session-B")
+        let bMessages = store.messages(for: "session-B", since: nil)
+        XCTAssertEqual(bMessages.count, 1, "buffered message must land in the confirmed session's cache")
+    }
+
+    func test_buffer_flush_routesOwnSessionRunAfterClaim() async {
+        // Normal case: user in A sends a message. The agent
+        // event arrives with a new runId (unmapped). Strict
+        // gate buffers it. The chat event then arrives with
+        // `chat.sessionKey = A`, recording runId → A and
+        // flushing. The message must land in A's cache.
+        let streamingMsg = ChatMessage(
+            id: "stream-1", text: "ha",
+            timestamp: Date(),
+            role: "assistant", state: "streaming",
+            runId: "own-runId", seq: 1,
+            startedAt: Date(), endedAt: nil,
+            livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil)
+        await receiver.receiveMessage(streamingMsg)
+
+        // Before chat event: cache is empty (buffered).
+        let beforeClaim = store.messages(for: "session-A", since: nil)
+        XCTAssertTrue(beforeClaim.isEmpty, "before chat event claim, buffered message must not be in cache")
+
+        // Chat event claims the runId for A and flushes.
+        vm.recordRunSession("session-A", for: "own-runId", overwriteIfExisting: true)
+        await vm.flushPending(for: "own-runId")
+
+        let afterClaim = store.messages(for: "session-A", since: nil)
+        XCTAssertEqual(afterClaim.count, 1, "after chat event claim, buffered message must land in the confirmed session's cache")
+    }
+
+    func test_buffer_dropPending_removesBufferEntry() async {
+        // `dropPending(for:)` is called from `clearMemory(for:)`
+        // so a stale buffer for a different session doesn't
+        // re-route after the user navigates back. Verify the
+        // buffer is cleared.
+        let msg = ChatMessage(
+            id: "stream-1", text: "ha",
+            timestamp: Date(),
+            role: "assistant", state: "streaming",
+            runId: "drop-runId", seq: 1,
+            startedAt: Date(), endedAt: nil,
+            livenessState: nil,
+            inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
+            toolCallId: nil, toolName: nil, stopReason: nil)
+        await receiver.receiveMessage(msg)
+
+        // Before drop: buffer holds the message; if we now
+        // record a different session for the runId, the flush
+        // would land the message in that session. After drop,
+        // the flush is a no-op.
+        vm.dropPending(for: "drop-runId")
+        vm.recordRunSession("session-C", for: "drop-runId", overwriteIfExisting: true)
+        await vm.flushPending(for: "drop-runId")
+
+        let cMessages = store.messages(for: "session-C", since: nil)
+        XCTAssertTrue(cMessages.isEmpty,
+                      "dropPending must remove the buffer entry; subsequent flush is a no-op")
     }
 
     // MARK: - Helpers

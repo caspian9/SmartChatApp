@@ -70,6 +70,9 @@ final class EventInterpreterLegacyModernToolRaceTests: XCTestCase {
     /// arrives last and replaces by id).
     func test_legacyAndModernShareToolCallId_modernToolResultCarriesStartedAt() async throws {
         let runId = "r-race-share"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let sharedId = "tc_shared_1"
         let t0: Int = 1_000
 
@@ -136,6 +139,9 @@ final class EventInterpreterLegacyModernToolRaceTests: XCTestCase {
     /// the cache layer is the last line of defense.
     func test_legacyAndModernDifferInToolCallId_onlyOneToolResultBubble() async throws {
         let runId = "r-race-diff"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let modernId = "tc_modern_1"
         let legacyId = "tc_legacy_1"
         let t0: Int = 2_000
@@ -183,6 +189,9 @@ final class EventInterpreterLegacyModernToolRaceTests: XCTestCase {
     /// "toolCall duplicates".
     func test_legacyAndModernDifferInToolCallId_onlyOneToolCallBubble() async throws {
         let runId = "r-race-tc"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let modernId = "tc_modern_tc"
         let legacyId = "tc_legacy_tc"
         let t0: Int = 3_000

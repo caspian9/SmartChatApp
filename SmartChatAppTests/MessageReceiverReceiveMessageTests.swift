@@ -116,6 +116,9 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         let runId = "r-meta-1"
         let streamingStart = Date(timeIntervalSince1970: 1_700_000_001)
         let streamingEnd = Date(timeIntervalSince1970: 1_700_000_005)
+        // Issue #34 strict gate: register the runId with the test
+        // session (mirrors the chat-event path in production).
+        vm.recordRunSession(key, for: runId, overwriteIfExisting: true)
         let placeholder = ChatMessage(
             id: runId, text: "", timestamp: Date(),
             role: "assistant", state: "streaming", runId: runId, seq: 7,
@@ -170,6 +173,9 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         let newKey = "new-session"
         vm.selectedSession = makeTestSession(key: oldKey)
         let runId = "r-clear-1"
+        // Issue #34 strict gate: register the runId with the test
+        // session (mirrors the chat-event path in production).
+        vm.recordRunSession(oldKey, for: runId, overwriteIfExisting: true)
         await receiver.receiveMessage(ChatMessage(
             id: runId, text: "x", timestamp: Date(),
             role: "assistant", state: "final", runId: runId, seq: 99,
@@ -244,10 +250,23 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
     }
 
     private func makeChat(id: String = "msg-1", text: String = "x",
-                          state: String = "streaming") -> ChatMessage {
-        ChatMessage(
+                          state: String = "streaming",
+                          runId: String = "run-1") -> ChatMessage {
+        // Issue #34 strict gate: tests that drive
+        // `receiver.receiveMessage` directly must mirror the
+        // production flow — the chat event's `chat.sessionKey`
+        // is the only thing that registers a runId → session
+        // mapping. Mirror that by pre-registering the runId
+        // for the test's `selectedSession` here. Tests that
+        // explicitly want to exercise the buffered/rejected
+        // paths use a separate `makeUnmappedChat` helper (see
+        // `MessageReceiverRoutingTests`).
+        if let sessionKey = vm.selectedSession?.key {
+            vm.recordRunSession(sessionKey, for: runId, overwriteIfExisting: true)
+        }
+        return ChatMessage(
             id: id, text: text, timestamp: Date(),
-            role: "assistant", state: state, runId: "run-1", seq: nil,
+            role: "assistant", state: state, runId: runId, seq: nil,
             startedAt: Date(), endedAt: state == "final" ? Date() : nil,
             livenessState: state == "streaming" ? "working" : nil,
             inputTokens: nil, outputTokens: nil, cacheRead: nil, cacheWrite: nil,
@@ -276,6 +295,10 @@ final class MessageReceiverReceiveMessageTests: XCTestCase {
         // which would require a second lookup key here).
         let runAId = UUID().uuidString
         let runBId = UUID().uuidString
+        // Issue #34 strict gate: register both runIds with the test
+        // session (mirrors the chat-event path in production).
+        vm.recordRunSession(key, for: runAId, overwriteIfExisting: true)
+        vm.recordRunSession(key, for: runBId, overwriteIfExisting: true)
 
         // Call order: B placeholder first, then A placeholder,
         // then A delta. So A is the MOST RECENT receiveMessage

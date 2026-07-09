@@ -19,9 +19,15 @@ final class MessageReceiver {
     /// streaming placeholder with the final version (state=
     /// "final", full text).
     ///
+    /// Issue #34 strict gate (issue #34 leak fix): the gate
+    /// consults `viewModel.route(for:)` and either:
+    ///   1. accepts (map hit matches selectedSession, OR runId is nil)
+    ///   2. buffers (unmapped non-final runId)
+    ///   3. rejects (map hit ≠ selectedSession, OR unmapped final)
+    ///
     /// Why not gate by state (the old "persist gate"): the
-    /// streaming placeholder and the final share the same
-    /// id, so the gate's "ephemeral vs persistent" split was
+    /// streaming placeholder and the final share the same id,
+    /// so the gate's "ephemeral vs persistent" split was
     /// unnecessary indirection. It also caused "bubbles
     /// disappear on completion" because the lifecycle=end
     /// path nixed the entire pending list (including any
@@ -31,15 +37,24 @@ final class MessageReceiver {
     func receiveMessage(_ message: ChatMessage) async {
         guard let store = store else { return }
 
-        // Issue #34 routing gate: ask the VM which session this
-        // runId belongs to (via the runId → sessionKey map
-        // populated in `handleTransportEvent`). If the resolved
-        // target session ≠ the currently-selected session, the
-        // event is from a nested agent run on a DIFFERENT
-        // session and must not be upserted into the user's view.
-        // Reject with a debug log so on-call can grep for the
-        // cause if a leak resurfaces.
+        // Issue #34 routing gate (strict policy): see docstring
+        // above. The gate consults the VM's `runSessionKeyByRunId`
+        // map (populated by `chat.sessionKey` in
+        // `handleTransportEvent`) and:
+        //   - accepts the message if the runId maps to the
+        //     currently-selected session (or runId is nil);
+        //   - buffers it in `pendingAgentBuffer` if the runId
+        //     is unmapped AND non-final (will be flushed when
+        //     the chat event confirms the sessionKey);
+        //   - rejects it otherwise.
         guard let targetSessionKey = viewModel?.route(for: message.runId) else {
+            if let runId = message.runId, message.state != "final" {
+                viewModel?.bufferPendingAgent(message, for: runId)
+            } else if let runId = message.runId {
+                AppLogger.log(
+                    "nested-run rejected (final, unmapped): runId=\(runId) role=\(message.role) state=\(message.state)",
+                    category: .nativeChat, level: .debug)
+            }
             return
         }
         guard targetSessionKey == viewModel?.selectedSession?.key else {
@@ -72,7 +87,7 @@ final class MessageReceiver {
         // collapse and final replaces placeholder in place.
         await store.upsert([openclaw], for: sessionKey)
 
-        // 3. Trigger scrollRequest
+        // 4. Trigger scrollRequest
         let currentToken = viewModel?.scrollRequest.token ?? 0
         let isInFlight = viewModel?.isSending ?? false
         viewModel?.scrollRequest = NativeChatScrollRequest(
@@ -81,10 +96,42 @@ final class MessageReceiver {
             forceScroll: isInFlight
         )
 
-        // 4. Mark final messages as user-expanded so the bubble
+        // 5. Mark final messages as user-expanded so the bubble
         // opens to its full content by default. Streaming
         // bubbles (state != "final") keep their default
         // collapse state.
+        if message.state == "final" {
+            CollapseStateCache.shared.setExpanded(message.id, true)
+        }
+    }
+
+    /// Force-routes a buffered message to a specific sessionKey,
+    /// bypassing the gate's session-mismatch check. Called from
+    /// `VM.flushPending(for:)` after a chat event has confirmed
+    /// the runId → sessionKey mapping. The buffer flush MUST NOT
+    /// go through `receiveMessage(_:)` because the user is
+    /// typically still viewing a DIFFERENT session while a
+    /// nested run's chat event arrives; the gate would reject
+    /// the message and the buffer would be discarded.
+    ///
+    /// The sessionKey passed in is the one the chat event
+    /// declared — it's authoritative and trumps the gate. Once
+    /// the user navigates to that session, the buffered bubble
+    /// (or its final replacement) will be visible.
+    func flushToSession(_ message: ChatMessage, sessionKey: String) async {
+        guard let store = store else { return }
+        guard let openclaw = ChatMessageConverter.toOpenClawChatMessage(from: message) else {
+            return
+        }
+        viewModel?.recordStreamingMetadata(for: message)
+        await store.upsert([openclaw], for: sessionKey)
+        let currentToken = viewModel?.scrollRequest.token ?? 0
+        let isInFlight = viewModel?.isSending ?? false
+        viewModel?.scrollRequest = NativeChatScrollRequest(
+            token: currentToken &+ 1,
+            kind: .newMessage,
+            forceScroll: isInFlight
+        )
         if message.state == "final" {
             CollapseStateCache.shared.setExpanded(message.id, true)
         }
