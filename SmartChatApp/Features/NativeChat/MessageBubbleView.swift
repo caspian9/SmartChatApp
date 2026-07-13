@@ -42,6 +42,30 @@ struct MessageBubbleView: View {
     /// resets when the view's `message.id` changes (different
     /// message in the same bubble slot).
     @State private var displayedText: String = ""
+    /// Markdown-rendered companion of `displayedText`. Updated in
+    /// lockstep with `displayedText` (every typewriter tick + on
+    /// the streaming→final snap). The view renders
+    /// `Text(streamingAttributedString)` instead of `Text(displayedText)`
+    /// during streaming so the user sees live markdown formatting
+    /// (bold, lists, code, links) as the assistant delta arrives —
+    /// not just raw `**hello**` markup markers. Replaced on each
+    /// tick to avoid re-parsing the CommonMark AST on every body
+    /// re-render (the typewriter runs at ~60fps; a fresh full
+    /// `Text(AttributedString)` per body re-eval would re-walk
+    /// the partial text on every parent state change).
+    ///
+    /// The previous design (Build 7525 era) intentionally skipped
+    /// live markdown during streaming — the prior
+    /// `StreamingMarkdownCardView → MarkdownViewTextKit` path
+    /// re-rendered on each delta and produced visible `**`
+    /// markers in the partial text (rebuilt the AST on every
+    /// increment). With the third-party markdown lib removed and
+    /// `swift-markdown` + a single-pass `AttributedString` build
+    /// in place, live streaming markdown is cheap enough to do on
+    /// every tick. Issue #47 follow-up — restores the
+    /// "live markdown during streaming" UX the user reported as
+    /// missing once the typing-indicator fix landed.
+    @State private var streamingAttributedString: AttributedString = AttributedString("")
     /// The currently-running typewriter Task, if any. Cancelled and
     /// replaced on each new delta so only the latest target is
     /// chased; also cancelled on `state == "final"`.
@@ -204,16 +228,29 @@ struct MessageBubbleView: View {
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 messageText
-                // Trailing typing dots for non-assistant, non-user streaming
-                // roles (thinking, toolCall, toolResult). Only emitted while
-                // `state == "streaming"` — when the message reaches `final`,
-                // we drop the slot entirely so the bubble collapses to its
-                // real height instead of leaving a 10pt blank row under the
-                // text. The 10pt height jump is intentional: it's a clear
-                // visual signal that the message is done, and the next user
-                // gesture (tap to focus input, scroll) immediately anchors
-                // the viewport to the new bottom via scrollTo.
-                if !message.isOutgoing && message.role != "assistant" && message.state == "streaming" {
+                // Trailing typing dots for any non-user streaming bubble
+                // (assistant, thinking, toolCall, toolResult). Only emitted
+                // while `state == "streaming"` — when the message reaches
+                // `final`, we drop the slot entirely so the bubble collapses
+                // to its real height instead of leaving a 10pt blank row
+                // under the text. The 10pt height jump is intentional: it's
+                // a clear visual signal that the message is done, and the
+                // next user gesture (tap to focus input, scroll) immediately
+                // anchors the viewport to the new bottom via scrollTo.
+                //
+                // Issue #47 (bug 2): the previous condition excluded
+                // `role == "assistant"`, leaving the streaming assistant
+                // bubble without a typing indicator once the first delta
+                // lands. The empty-text branch (above) only fires while
+                // `message.text.isEmpty` — fast networks or no
+                // `lifecycle=start` event cause the placeholder to be
+                // replaced by a non-empty first delta before SwiftUI's
+                // first render, so the empty branch never fires on the
+                // device. Dropping the `role != "assistant"` exclusion
+                // makes the trailing dots fire for every streaming
+                // incoming bubble regardless of how quickly the first
+                // delta lands.
+                if !message.isOutgoing && message.state == "streaming" {
                     TypingIndicatorView()
                 }
             }
@@ -265,7 +302,7 @@ struct MessageBubbleView: View {
                 // `message.text` is the authoritative full text; we
                 // render a substring that's been chased up to the
                 // current target.
-                Text(displayedText)
+                Text(streamingAttributedString)
                     .font(.body)
                     .foregroundColor(message.isOutgoing ? .white : theme.textPrimary)
             } else {
@@ -475,9 +512,18 @@ struct MessageBubbleView: View {
             if newState != "streaming" {
                 // Snap to full on lifecycle=end so the bubble
                 // doesn't sit at 80% reveal when the response is
-                // actually complete.
+                // actually complete. Use the helper so the
+                // companion `streamingAttributedString` is also
+                // populated — without it, the snap-to-full text
+                // would render raw (the body still has
+                // `isAssistantStreaming == false`, so the
+                // MarkdownCardView branch wins and re-parses
+                // anyway, but keeping the companion up to date
+                // avoids a one-frame flash of plain `Text` in
+                // edge cases where the body recomputes before
+                // the state change propagates).
                 revealTask?.cancel()
-                displayedText = message.text
+                revealedTextSetter(message.text)
             }
         }
         // Defensive `.id()` keyed on the streaming-vs-final branch.
@@ -580,6 +626,14 @@ struct MessageBubbleView: View {
     /// property-wrapper access dance.
     private func revealedTextSetter(_ newValue: String) {
         displayedText = newValue
+        // Re-render markdown on every tick so the bubble shows live
+        // formatting as the partial text grows. The parser is
+        // bounded by the typewriter's current target length (a
+        // partial stream typically <5 KB), and the per-tick cost
+        // is well below the 15ms tick interval. Not memoized —
+        // each tick's `displayedText` differs by 2 chars, so a
+        // memoization lookup would miss every time.
+        streamingAttributedString = MarkdownToAttributedString.render(newValue, theme: theme)
     }
 
     /// Streaming assistant message: route to real streaming markdown view.
