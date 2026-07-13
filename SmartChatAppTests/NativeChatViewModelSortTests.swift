@@ -462,6 +462,11 @@ final class NativeChatViewModelSortTests: XCTestCase {
         startedAt: Date?,
         endedAt: Date?
     ) async {
+        // Issue #34 strict gate: register the runId with the test
+        // session (mirrors the chat-event path that production
+        // uses to populate the runId → sessionKey map). The
+        // selectedSession is "session-1" (set in setUp).
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let message = ChatMessage(
             id: id,
             text: text,

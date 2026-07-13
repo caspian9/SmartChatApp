@@ -645,6 +645,18 @@ final class NativeChatViewModel {
         chatMessagesBySession[sessionKey] = nil
         chatMessagesCachedVersionBySession[sessionKey] = nil
         streamingMetadataBySession[sessionKey] = nil
+        // Drop the runId → sessionKey entries for the session
+        // being cleared — stale entries would pin a runId to a
+        // session the user navigated away from.
+        runSessionKeyByRunId = runSessionKeyByRunId.filter { $0.value != sessionKey }
+        // Drop pending buffer entries mapped to the cleared
+        // session — they belong to runs that were confirmed for
+        // this session, no point holding them across a switch.
+        for (runId, _) in pendingAgentBuffer {
+            if runSessionKeyByRunId[runId] == sessionKey {
+                dropPending(for: runId)
+            }
+        }
     }
 
     /// Drops the cached `ChatMessage` array for `sessionKey` so
@@ -655,6 +667,148 @@ final class NativeChatViewModel {
     func invalidateChatMessagesCache(for sessionKey: String) {
         chatMessagesBySession[sessionKey] = nil
         chatMessagesCachedVersionBySession[sessionKey] = nil
+    }
+
+    // MARK: - Nested-run routing (issue #34)
+
+    /// In-memory runId → sessionKey routing table. Not persisted;
+    /// rebuilt on every chat event via `chat.sessionKey`. Strict
+    /// policy: a runId only enters the map once a chat event with
+    /// a non-nil `chat.sessionKey` confirms the run's true session.
+    /// Agent events alone are NOT authoritative — they can fire for
+    /// nested runs on OTHER sessions while the user is viewing the
+    /// parent session, so pre-claiming them as "current session"
+    /// would leak bubbles into the wrong view.
+    /// `@ObservationIgnored` — internal bookkeeping, never read by
+    /// views. Never call from a SwiftUI view `body` — non-observed
+    /// property.
+    @ObservationIgnored
+    private var runSessionKeyByRunId: [String: String] = [:]
+
+    /// In-memory buffer of ChatMessages whose runId is not yet
+    /// confirmed (no chat event with `sessionKey` has arrived).
+    /// Keyed by runId. Capacity-capped per runId (`pendingMaxPerRun`,
+    /// default 50) to bound memory under pathological streams.
+    /// Entries are flushed to the cache via `flushPending(for:)`
+    /// once the runId's session is confirmed (chat event) or after
+    /// `pendingTimeout` elapses (assume it was the current session).
+    /// `@ObservationIgnored` — internal bookkeeping.
+    @ObservationIgnored
+    private var pendingAgentBuffer: [String: [ChatMessage]] = [:]
+
+    /// Per-runId timeout tasks. Cancelled when the runId's session
+    /// is confirmed before the timeout fires.
+    @ObservationIgnored
+    private var pendingFlushTasks: [String: Task<Void, Never>] = [:]
+
+    /// Per-runId cap for `pendingAgentBuffer` to prevent unbounded
+    /// growth in pathological cases (e.g., a nested run that never
+    /// emits a chat event). When exceeded, the OLDEST buffered
+    /// message is evicted (FIFO).
+    private let pendingMaxPerRun: Int = 50
+
+    /// How long to wait before flushing a runId's pending buffer to
+    /// the currently-selected session. Long enough to cover a normal
+    /// chat event's round-trip (a few hundred ms server-side); short
+    /// enough that a user won't perceive a multi-second delay on
+    /// the placeholder bubble.
+    private let pendingTimeout: TimeInterval = 5.0
+
+    /// Returns the session key the given `runId` belongs to.
+    /// Returns nil for unmapped runIds — strict gate forces the
+    /// caller to defer the message until a chat event confirms the
+    /// session. `nil` runId (user-sent, slash echoes) falls through
+    /// to `selectedSession?.key` — those messages are always
+    /// local-to-session.
+    func route(for runId: String?) -> String? {
+        if let runId, let target = runSessionKeyByRunId[runId] {
+            return target
+        }
+        if runId == nil { return selectedSession?.key }
+        return nil
+    }
+
+    /// Records the session key for an incoming runId.
+    /// `overwriteIfExisting == true` overwrites — used for
+    /// SDK-declared `.chat.sessionKey` (the authoritative source).
+    /// Without that flag, the FIRST recorded session wins; the
+    /// recording is sticky across session switches (a run that
+    /// started in A stays mapped to A even if the user navigates
+    /// to B).
+    func recordRunSession(_ sessionKey: String?, for runId: String, overwriteIfExisting: Bool = false) {
+        if overwriteIfExisting || runSessionKeyByRunId[runId] == nil {
+            runSessionKeyByRunId[runId] = sessionKey
+        }
+    }
+
+    /// Buffers a ChatMessage whose runId is not yet confirmed.
+    /// Called from `MessageReceiver.receiveMessage` when the gate
+    /// rejects due to an unmapped runId. Caps the per-runId buffer
+    /// at `pendingMaxPerRun` (FIFO eviction) and arms a flush
+    /// timeout if one isn't already armed for this runId.
+    func bufferPendingAgent(_ message: ChatMessage, for runId: String) {
+        var buffer = pendingAgentBuffer[runId] ?? []
+        if buffer.count >= pendingMaxPerRun {
+            buffer.removeFirst(buffer.count - pendingMaxPerRun + 1)
+        }
+        buffer.append(message)
+        pendingAgentBuffer[runId] = buffer
+        // Arm the timeout only on the first message for a runId.
+        if pendingFlushTasks[runId] == nil {
+            pendingFlushTasks[runId] = Task { [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(for: .seconds(self.pendingTimeout))
+                if !Task.isCancelled {
+                    await self.flushPendingAsTimeout(forRunId: runId)
+                }
+            }
+        }
+    }
+
+    /// Flushes buffered messages for a runId once its session is
+    /// confirmed by a chat event. Routes each buffered message
+    /// directly to the runId's mapped sessionKey via
+    /// `MessageReceiver.flushToSession` — bypassing the gate,
+    /// because the user is typically still viewing a different
+    /// session while a nested run's chat event arrives. The
+    /// chat-event-declared sessionKey is authoritative; the gate
+    /// would otherwise reject the buffered message and discard
+    /// it. Cancels the runId's timeout task.
+    func flushPending(for runId: String) async {
+        pendingFlushTasks[runId]?.cancel()
+        pendingFlushTasks[runId] = nil
+        guard let buffered = pendingAgentBuffer[runId], !buffered.isEmpty else {
+            pendingAgentBuffer[runId] = nil
+            return
+        }
+        pendingAgentBuffer[runId] = nil
+        let targetSessionKey = runSessionKeyByRunId[runId] ?? selectedSession?.key
+        guard let targetSessionKey else { return }
+        for message in buffered {
+            await messageReceiver.flushToSession(message, sessionKey: targetSessionKey)
+        }
+    }
+
+    /// Flushes buffered messages for a runId as a timeout fallback —
+    /// assume the run was for the currently-selected session. Called
+    /// when the chat event never arrived within `pendingTimeout`.
+    /// Records the runId against the selected session first, so the
+    /// gate's `route(for:)` returns the right target.
+    private func flushPendingAsTimeout(forRunId runId: String) async {
+        let target = selectedSession?.key
+        if let target {
+            recordRunSession(target, for: runId)
+        }
+        await flushPending(for: runId)
+    }
+
+    /// Drops any pending buffer entries for a runId. Used when a
+    /// session is cleared (`clearMemory(for:)`) to prevent stale
+    /// buffers from re-routing after the user navigates back.
+    func dropPending(for runId: String) {
+        pendingFlushTasks[runId]?.cancel()
+        pendingFlushTasks[runId] = nil
+        pendingAgentBuffer[runId] = nil
     }
 
     // MARK: - Streaming metadata overlay
@@ -1139,6 +1293,41 @@ AppLogger.log(
     // MARK: - Transport event handling
 
     private func handleTransportEvent(_ event: OpenClawChatTransportEvent, sessionKey: String) async {
+        // Record the runId → sessionKey mapping BEFORE
+        // dispatching to EventInterpreter. The
+        // `MessageReceiver.receiveMessage` gate (issue #34)
+        // consults this map to reject events whose target
+        // session ≠ the currently-selected session.
+        //
+        // Strict policy (replaces the first-event-wins version):
+        //   - `.chat`: SDK-provided `chat.sessionKey` is the
+        //     ONLY authoritative source. Record with
+        //     `overwriteIfExisting: true` and flush any pending
+        //     agent events buffered for this runId.
+        //   - `.agent`: do NOT pre-claim the runId. The agent
+        //     stream can fire for nested runs on OTHER sessions
+        //     while the user is viewing the parent; claiming
+        //     based on `selectedSession` would leak. The agent
+        //     event's `runId` is held in `MessageReceiver`'s
+        //     pending buffer until the chat event confirms.
+        switch event {
+        case .chat(let chat):
+            if let runId = chat.runId, let chatSessionKey = chat.sessionKey {
+                recordRunSession(chatSessionKey, for: runId, overwriteIfExisting: true)
+                // Flush any agent events buffered for this runId;
+                // the gate now passes because the map is set.
+                await flushPending(for: runId)
+            }
+        case .agent:
+            // No recording. The agent event's runId will be
+            // resolved later, either by a chat event for the
+            // same runId (flush) or by the timeout fallback
+            // (assume selected session).
+            break
+        default:
+            break
+        }
+
         await eventInterpreter.handleTransportEvent(event, sessionKey: sessionKey)
     }
 

@@ -58,6 +58,9 @@ final class EventInterpreterToolResultTimingTests: XCTestCase {
     /// carry `startedAt` after the streaming-metadata overlay.
     func test_twoSequentialTools_bothToolResultsCarryStartedAt() async throws {
         let runId = "r-tr-timing-2"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
 
         // Tool A canonical.
         let toolA = "call_00_A"
@@ -129,6 +132,9 @@ final class EventInterpreterToolResultTimingTests: XCTestCase {
     /// invocations' output in one bubble.
     func test_commandOutputAccumulatorReusedAfterPhaseEnd_startsFresh() async throws {
         let runId = "r-tr-reuse"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let canonical = "call_00_reuse"
 
         // Lifecycle start.

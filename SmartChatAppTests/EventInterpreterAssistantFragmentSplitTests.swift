@@ -51,6 +51,9 @@ final class EventInterpreterAssistantFragmentSplitTests: XCTestCase {
     /// keeps each fragment as a separate cache entry.
     func test_fourFragmentsBetweenToolBoundaries_eachIsItsOwnBubble() async throws {
         let runId = "r-frag-1"
+        // Issue #34 strict gate: register the runId with the test session
+        // (mirrors the chat-event path that production uses to populate the runId → sessionKey map)
+        vm.recordRunSession("session-1", for: runId, overwriteIfExisting: true)
         let canonicalA = "tc-A"
         let canonicalB = "tc-B"
         let canonicalC = "tc-C"
