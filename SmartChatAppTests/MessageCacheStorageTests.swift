@@ -369,6 +369,80 @@ final class MessageCacheStorageTests: XCTestCase {
         XCTAssertEqual(s2.count, 0)
     }
 
+    // MARK: - clearAll empty-state contract (issue #48)
+    //
+    // The Settings page's "fully empty cache" row reads
+    // `MessageCacheStorage.stats()` after a clear. The contract
+    // (issue #48 acceptance criteria):
+    //   - `stats()` returns `(0, 0, nil, nil)` — zero sessions,
+    //     zero messages, no oldest/newest span.
+    //   - `defaults.dictionaryRepresentation()` carries no
+    //     `openclaw_messages_*` keys — the UserDefaults disk
+    //     shape is byte-identical to a fresh suite.
+    //   - A subsequent `loadSync(for:)` on any session key
+    //     returns `[]` — both the actor's in-memory cache AND
+    //     disk are empty.
+    // The three tests below pin all three.
+
+    func test_clearAll_statsReturnsZeroZeroNilNil() async {
+        await storage.append([makeMsg(timestamp: 1000)], for: "session-1")
+        await storage.append([makeMsg(timestamp: 2000)], for: "session-2")
+        // Flush so the disk-truth stats read sees both sessions.
+        await storage.flushPendingWrites()
+        let pre = await storage.stats()
+        XCTAssertEqual(pre.sessionCount, 2)
+        XCTAssertEqual(pre.messageCount, 2)
+        XCTAssertEqual(pre.oldestTimestamp, 1000)
+        XCTAssertEqual(pre.newestTimestamp, 2000)
+
+        await storage.clearAll()
+        let post = await storage.stats()
+        XCTAssertEqual(post.sessionCount, 0)
+        XCTAssertEqual(post.messageCount, 0)
+        XCTAssertNil(post.oldestTimestamp)
+        XCTAssertNil(post.newestTimestamp)
+    }
+
+    func test_clearAll_removesAllOpenClawMessagesKeysFromDefaults() async {
+        await storage.append([makeMsg()], for: "session-1")
+        await storage.append([makeMsg()], for: "session-2")
+        await storage.flushPendingWrites()
+        // Sanity: the keys exist pre-clear.
+        let pre = defaults.dictionaryRepresentation().keys.filter {
+            $0.hasPrefix("openclaw_messages_")
+        }
+        XCTAssertEqual(Set(pre), Set(["openclaw_messages_session-1", "openclaw_messages_session-2"]))
+
+        await storage.clearAll()
+        let post = defaults.dictionaryRepresentation().keys.filter {
+            $0.hasPrefix("openclaw_messages_")
+        }
+        XCTAssertEqual(post.count, 0, "no openclaw_messages_* keys may remain after clearAll: \(post)")
+    }
+
+    func test_clearAll_loadSyncReturnsEmptyAfterClear() async {
+        await storage.append([makeMsg()], for: "session-1")
+        await storage.flushPendingWrites()
+        // Pre-clear: loadSync sees the entry on disk.
+        let before = storage.loadSync(for: "session-1")
+        XCTAssertEqual(before.count, 1)
+
+        await storage.clearAll()
+        // Post-clear via the SYNC path (the @MainActor store uses
+        // this entry point to bypass the actor hop on session
+        // entry; it reads directly from UserDefaults). After
+        // clearAll, both the actor's in-memory cache and the disk
+        // must be empty — the fresh-instance loadSync branch
+        // shouldn't return any residue.
+        let after = storage.loadSync(for: "session-1")
+        XCTAssertEqual(after.count, 0)
+        // Read via a brand-new actor instance too — this is what
+        // a subsequent app launch would see.
+        let storage2 = MessageCacheStorage(defaults: defaults)
+        let crossRestart = await storage2.load(for: "session-1")
+        XCTAssertEqual(crossRestart.count, 0)
+    }
+
     func test_maxTimestamp_returnsHighestTimestamp() async {
         let key = "session-1"
         await storage.append(
