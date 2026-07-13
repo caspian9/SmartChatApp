@@ -4,6 +4,13 @@ import OpenClawKit
 
 struct SettingsView: View {
     @Environment(\.theme) private var theme
+    /// Custom back-button pop. The system-supplied back button is
+    /// hidden and replaced with a custom button in the toolbar
+    /// (see `.toolbar { ... }` below) so we can dim it while the
+    /// destructive confirmation dialog is up — keeping the chevron
+    /// visible avoids the "button disappears and reappears" jolt
+    /// of `navigationBarBackButtonHidden(pendingClear != nil)`.
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var config = ConfigurationManager.shared
     @State private var editingProfile: GatewayProfile?
     @State private var isCreatingNew = false
@@ -228,6 +235,44 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .toolbar {
+            // Custom back button (issue #40 follow-up). The system
+            // back button is hidden (`.navigationBarBackButtonHidden`
+            // below) and replaced with a custom button in the
+            // leading slot — so we can dim it via foreground color
+            // and disable it while the destructive confirmation
+            // dialog is up, instead of hiding it entirely. The
+            // visual avoids the "button disappears and reappears"
+            // jolt of toggling `.navigationBarBackButtonHidden` on
+            // every `pendingClear` flip. `dismiss()` is provided by
+            // the `@Environment(\.dismiss)` declared above; called
+            // from a NavigationStack-pushed view it pops the
+            // navigation stack (same effect as the system back
+            // button).
+            //
+            // **Visual treatment while disabled.** Foreground color
+            // swaps from `.tint` to `Color.secondary`, not
+            // `.opacity(...)`. The opacity-fade approach grays the
+            // chevron by alpha-blending it with the background (the
+            // glyph becomes semi-transparent → it appears faded
+            // and "washed out" against the navigation bar). The
+            // color-swap keeps the glyph at full opacity and just
+            // shifts its base hue from accent blue to system
+            // secondary, which is a medium gray that adapts to
+            // light/dark mode — the chevron stays visually present
+            // (no jump) and clearly inactive. `Color.secondary` is
+            // the iOS-native dimmed control color and is the same
+            // shade SwiftUI uses for disabled toolbar buttons by
+            // default.
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(pendingClear != nil)
+                .foregroundStyle(pendingClear != nil ? Color.secondary : Color.accentColor)
+            }
+
             // Persistent connection indicator (issue #35 follow-up).
             // The spinner lives in the navigation toolbar so it is
             // never destroyed by the Form/List row recycling — it is
@@ -249,6 +294,11 @@ struct SettingsView: View {
                 }
             }
         }
+        // Always hide the system back button — the leading
+        // `ToolbarItem` above is the only back affordance on this
+        // view, so we control its enabled/disabled state on
+        // `pendingClear` flips (see the toolbar block).
+        .navigationBarBackButtonHidden(true)
         .sheet(isPresented: $showProfileSheet) {
             EditProfileSheet(profile: editingProfile) { name, colorTag, host, port, token, tlsEnabled, role, enabledCaps in
                 if let profile = editingProfile {
@@ -298,23 +348,60 @@ struct SettingsView: View {
         .onAppear {
             Task { await loadCacheStats() }
         }
-        // Destructive-action confirmation (issue #30). One alert
-        // handles all four destructive buttons; the `item:` binding
-        // drives presentation off `pendingClear?.id` (Identifiable
-        // conformance from `PendingClearAction`). The `Bool`-bound
-        // `.alert` form would need a manual isPresented/presenting
-        // pair; `alert(item:)` is the cleaner choice when one
-        // alert covers multiple triggers.
-        .alert(item: $pendingClear) { action in
-            Alert(
-                title: Text(action.title),
-                message: Text(action.message),
-                primaryButton: .destructive(Text("Clear")) {
-                    performClear(action)
-                },
-                secondaryButton: .cancel()
-            )
+        // Destructive-action confirmation (issue #30 / #40).
+        //
+        // Replaced the system `.alert(item:)` with a custom
+        // `ConfirmationDialog` overlay (issue #40). SwiftUI's
+        // system alert is presented in a separate UIWindow above
+        // the app's view hierarchy; on iOS 17/18 the hit-test
+        // handoff after Cancel/Clear introduces a perceptible
+        // scroll/pan lock on the Settings form. The
+        // in-hierarchy overlay dismisses into the same hit-test
+        // tree, so the form is ready for gestures immediately.
+        //
+        // The dialog source-of-truth is still `PendingClearAction`
+        // — title and message come from the enum's computed
+        // properties, so the existing 6 `PendingClearActionTests`
+        // continue to pin the destructive-action copy. The
+        // `.animation(_:value:)` drives only the card's
+        // `.scale.combined(with: .opacity)` transition — the scrim
+        // has no transition (intentional, see
+        // `ConfirmationDialog.swift`) so it disappears on the next
+        // frame after `pendingClear` flips to `nil`, leaving the
+        // Settings form immediately ready for scroll/pan gestures.
+        .overlay {
+            if let action = pendingClear {
+                ConfirmationDialog(
+                    title: action.title,
+                    message: action.message,
+                    destructiveTitle: "Clear",
+                    onConfirm: {
+                        performClear(action)
+                        pendingClear = nil
+                    },
+                    onCancel: {
+                        pendingClear = nil
+                    }
+                )
+            }
         }
+        .animation(.easeInOut(duration: 0.18), value: pendingClear != nil)
+        // Strict-modal guard for issue #40 follow-up: the only
+        // clickable area while the destructive confirmation is up
+        // is Cancel and Clear inside the dialog. Two layers cover
+        // the rest:
+        //   1. Custom back button (in `.toolbar` above) is
+        //      `.disabled(pendingClear != nil)` and visually
+        //      greyed (opacity 0.35) so the chevron stays in
+        //      place — no "blink out / blink in" jolt when the
+        //      dialog opens or closes.
+        //   2. Scrim inside `ConfirmationDialog` (with
+        //      `.contentShape(Rectangle())` and no
+        //      `.onTapGesture`) absorbs taps on every other part
+        //      of the screen — form rows, the rest of the screen.
+        //
+        // `pendingClear = nil` → button enables + opacity 1.0
+        // + scrim removed → form is immediately interactive.
     }
 
     /// Executes the destructive action the user just confirmed.
