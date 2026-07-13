@@ -13,6 +13,16 @@ on:
     # "run on every push" path) — only schedule-triggered runs
     # check the 24h window.
     - cron: "0 6 * * *"
+  # Manual re-run path. Matches the ci.yml convention (see
+  # ci.yml `on:` block). Useful for: (a) verifying the SDK
+  # pin's analyze step is green before merging the PR that
+  # introduced the pin, without needing a real push to main;
+  # (b) re-running after an intermittent CodeQL failure that
+  # was actually a runner flake (the `should-scan` dedup
+  # gate treats schedule+push identically — only manual
+  # runs are also forwarded unconditionally, since the
+  # human pressing the button has already opted in).
+  workflow_dispatch:
 
 permissions:
   # CodeQL needs read-only access to the repo for checkout +
