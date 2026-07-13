@@ -128,13 +128,42 @@ jobs:
     # runs are 5-10 min total.
     timeout-minutes: 60
 
-    # OPENCLAW_REPO is "owner/name" of the OpenClawKit fork to
-    # clone as a sibling before xcodegen runs. Re-pointable via
-    # repo or org variable (Settings → Secrets and variables →
-    # Actions → Variables); defaults to the upstream fork so
-    # existing behavior is preserved. Mirrors ci.yml.
+    # OPENCLAW_REPO is "owner/name" of the OpenClawKit repo to
+    # clone as a sibling before xcodegen runs. OPENCLAW_REF pins
+    # the git ref (tag / branch / SHA) to check out — both default
+    # to upstream values so the workflow doesn't drift with fork
+    # activity. Both are re-pointable via repo or org variables
+    # (Settings → Secrets and variables → Actions → Variables).
+    #
+    # Why pin to upstream `openclaw/openclaw@v2026.5.28` (instead
+    # of the fork's `main` HEAD, as we did before):
+    #   - The fork's `main` HEAD on 2026-07-09 introduced an actor-
+    #     isolation pattern in ChatTranscriptCache.swift (lines
+    #     1032 & 1050 — `defer { ... self.execute(db, ...) }`)
+    #     that Xcode 26.3's strict-concurrency checker flags as
+    #     `sending 'db' risks causing data races`. The app does not
+    #     call this class (we use MessageCacheStore), but `swiftc`
+    #     type-checks every file in the SDK module, so a single
+    #     bad file fails the whole build. This caused the 2026-07-13
+    #     CodeQL failure on the `fix(settings): replace system
+    #     .alert with in-hierarchy overlay` push (run #29225367286,
+    #     exit 65 from Build step).
+    #   - v2026.5.28 (commit e932160, 2026-05-30) is the same SDK
+    #     that builds locally — verified via `git describe --tags`
+    #     on /Users/hai/Code/openclaw. Upstream's tag dereferences
+    #     to e932160, identical to the fork's HEAD on 2026-05-30.
+    #   - Local builds (with stable Xcode) succeed on either ref;
+    #     only the GitHub Actions runner (Xcode 26.3) trips the
+    #     check. The local-vs-CI divergence is the whole reason
+    #     this pin exists. Mirrors the ci.yml pin from PR #58.
+    #
+    # When the SDK's concurrency issue is fixed upstream (or in
+    # the fork's `main`), delete the OPENCLAW_REF variable (or set
+    # it to `main`) and revert OPENCLAW_REPO to `caspian9/openclaw`
+    # to resume tracking the fork.
     env:
-      OPENCLAW_REPO: ${{ vars.OPENCLAW_REPO || 'caspian9/openclaw' }}
+      OPENCLAW_REPO: ${{ vars.OPENCLAW_REPO || 'openclaw/openclaw' }}
+      OPENCLAW_REF: ${{ vars.OPENCLAW_REF || 'v2026.5.28' }}
 
     steps:
       - name: Checkout
@@ -144,10 +173,17 @@ jobs:
       # ../openclaw/apps/shared/OpenClawKit, and xcodegen
       # validation runs in the very next step. Without this
       # clone, xcodegen fails with "Invalid local package
-      # 'OpenClawKit'". Same step as ci.yml.
+      # 'OpenClawKit'". Owner + ref are parameterized via
+      # OPENCLAW_REPO and OPENCLAW_REF env (defaults: upstream
+      # openclaw/openclaw @ v2026.5.28). `--depth 1` keeps the
+      # clone fast; we only need the resolved tree at
+      # OPENCLAW_REF, not history. `--branch` accepts a tag /
+      # branch / full SHA. Same step as ci.yml.
       - name: Clone OpenClaw sibling
         run: |
           git clone \
+            --branch "${OPENCLAW_REF}" \
+            --depth 1 \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${OPENCLAW_REPO}.git" \
             ../openclaw
 
